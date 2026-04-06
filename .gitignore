@@ -1,0 +1,16 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+xcuserdata/
+DerivedData/
+*.xcworkspace/xcuserdata/
+Package.resolved
+CLAUDE.md
+AGENTS.md
+
+# Compiled binaries
+test
+sk2test
+sk2txnprops
+sk2txnprops3

@@ -1,0 +1,47 @@
+{
+  "activeEntitlementKeys" : [
+    "premium"
+  ],
+  "appUserId" : "app_user_test_123",
+  "entitlements" : {
+    "premium" : {
+      "id" : "premium",
+      "isActive" : true,
+      "ownershipType" : "purchased",
+      "periodType" : "annual",
+      "productID" : "com.app.annual",
+      "store" : "app_store",
+      "willRenew" : true
+    }
+  },
+  "firstSeen" : "2023-11-14T00:00:00Z",
+  "isComputedOffline" : false,
+  "lastSeen" : "2024-01-15T10:30:00Z",
+  "nonSubscriptions" : {
+    "com.app.gems_100" : [
+      {
+        "isConsumable" : true,
+        "isRefund" : false,
+        "isSandbox" : false,
+        "productIdentifier" : "com.app.gems_100",
+        "purchaseDate" : "2023-11-14T00:00:00Z",
+        "store" : "app_store"
+      }
+    ]
+  },
+  "requestDate" : "2024-01-15T10:30:00Z",
+  "snapshotDate" : 721692800,
+  "subscriptions" : {
+    "com.app.annual" : {
+      "autoRenew" : true,
+      "expiresDate" : "2024-11-14T00:00:00Z",
+      "isActive" : true,
+      "periodType" : "annual",
+      "productIdentifier" : "com.app.annual",
+      "purchaseDate" : "2023-11-14T00:00:00Z",
+      "status" : "active",
+      "store" : "app_store",
+      "subscriptionKey" : "com.app.annual"
+    }
+  }
+}

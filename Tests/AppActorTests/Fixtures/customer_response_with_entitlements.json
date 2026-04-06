@@ -1,0 +1,35 @@
+{
+  "requestDate": "2026-02-14T22:45:00.000Z",
+  "requestDateMs": 1771109100000,
+  "requestId": "req_abc123",
+  "customer": {
+    "managementUrl": "https://apps.apple.com/account/subscriptions",
+    "firstSeen": "2026-01-01T00:00:00.000Z",
+    "lastSeen": "2026-02-14T22:45:00.000Z",
+    "entitlements": {
+      "premium": {
+        "isActive": true,
+        "productId": "com.app.monthly",
+        "expiresAt": "2026-03-14T22:45:00.000Z",
+        "purchaseDate": "2026-02-14T22:45:00.000Z"
+      },
+      "pro_features": {
+        "isActive": false,
+        "productId": "com.app.pro",
+        "expiresAt": "2026-01-14T22:45:00.000Z",
+        "purchaseDate": "2025-12-14T22:45:00.000Z"
+      }
+    },
+    "subscriptions": {
+      "com.app.monthly": {
+        "productId": "com.app.monthly",
+        "isActive": true,
+        "expiresAt": "2026-03-14T22:45:00.000Z",
+        "purchaseDate": "2026-02-14T22:45:00.000Z",
+        "periodType": "normal",
+        "store": "app_store"
+      }
+    },
+    "nonSubscriptions": {}
+  }
+}

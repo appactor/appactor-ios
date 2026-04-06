@@ -1,0 +1,54 @@
+{
+  "activeEntitlementKeys" : [
+    "premium"
+  ],
+  "appUserId" : "user_roundtrip_001",
+  "entitlements" : {
+    "premium" : {
+      "expirationDate" : 753228800,
+      "id" : "premium",
+      "isActive" : true,
+      "isSandbox" : false,
+      "originalPurchaseDate" : 721692800,
+      "ownershipType" : "purchased",
+      "periodType" : "annual",
+      "productID" : "com.app.annual",
+      "renewedAt" : 721692800,
+      "store" : "app_store",
+      "subscriptionStatus" : "active",
+      "willRenew" : true
+    }
+  },
+  "firstSeen" : "2023-11-01T00:00:00Z",
+  "isComputedOffline" : false,
+  "lastSeen" : "2023-11-14T00:00:00Z",
+  "managementUrl" : "https:\/\/apps.apple.com\/account\/subscriptions",
+  "nonSubscriptions" : {
+    "com.app.gems_100" : [
+      {
+        "isConsumable" : true,
+        "isRefund" : false,
+        "isSandbox" : false,
+        "productIdentifier" : "com.app.gems_100",
+        "purchaseDate" : "2023-11-14T00:00:00Z",
+        "store" : "app_store"
+      }
+    ]
+  },
+  "requestDate" : "2023-11-14T00:00:00Z",
+  "snapshotDate" : 721692800,
+  "subscriptions" : {
+    "com.app.annual" : {
+      "autoRenew" : true,
+      "expiresDate" : "2024-11-14T00:00:00Z",
+      "isActive" : true,
+      "isSandbox" : false,
+      "periodType" : "annual",
+      "productIdentifier" : "com.app.annual",
+      "purchaseDate" : "2023-11-14T00:00:00Z",
+      "status" : "active",
+      "store" : "app_store",
+      "subscriptionKey" : "com.app.annual"
+    }
+  }
+}
