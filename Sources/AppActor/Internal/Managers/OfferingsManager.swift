@@ -227,21 +227,20 @@ actor AppActorOfferingsManager {
     // MARK: - Pipeline
 
     private func executePipeline(generation: UInt64) async throws -> AppActorOfferings {
-        let payload = try await fetchNetworkStageCoalesced(generation: generation)
+        let payload: NetworkStagePayload
+        do {
+            payload = try await fetchNetworkStageCoalesced(generation: generation)
+        } catch let error as AppActorError where error.code == "CACHE_INCONSISTENCY" {
+            Log.offerings.debug("Cache inconsistency on 304, trying fallback chain")
+            if let fallback = await fallbackOfferings(generation: generation) { return fallback }
+            throw error
+        }
 
         if let dto = payload.dto, let cacheDate = payload.cacheDate {
             return try await awaitEnrichment(dto: dto, cacheDate: cacheDate, generation: generation)
         }
 
-        if let existing = cachedOfferings {
-            return existing
-        }
-
-        if let disk = await loadFromDiskCache(generation: generation) {
-            return disk
-        }
-
-        if let fallback = await loadFromFallbackDTO(generation: generation) {
+        if let fallback = await fallbackOfferings(generation: generation) {
             return fallback
         }
 
@@ -252,6 +251,14 @@ actor AppActorOfferingsManager {
             details: nil,
             requestId: nil
         )
+    }
+
+    /// Returns the first available fallback: in-memory cache → disk cache → bundled fallback DTO.
+    private func fallbackOfferings(generation: UInt64) async -> AppActorOfferings? {
+        if let existing = cachedOfferings { return existing }
+        if let disk = await loadFromDiskCache(generation: generation) { return disk }
+        if let fallback = await loadFromFallbackDTO(generation: generation) { return fallback }
+        return nil
     }
 
     private func fetchNetworkStageCoalesced(generation: UInt64) async throws -> NetworkStagePayload {
@@ -479,6 +486,7 @@ actor AppActorOfferingsManager {
                     basePlanId: productRef.basePlanId,
                     offerId: productRef.offerId,
                     localizedPriceString: skProduct.displayPrice,
+                    offeringId: offeringDTO.id,
                     serverId: packageDTO.id,
                     displayName: packageDTO.displayName,
                     metadata: packageDTO.metadata,

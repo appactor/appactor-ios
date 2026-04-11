@@ -96,14 +96,15 @@ actor AppActorExperimentManager {
         appVersion: String?,
         country: String?
     ) async throws -> AppActorExperimentAssignment? {
-        lastCacheUserId = appUserId
-        // Check in-memory TTL cache
-        if let cached = cachedAssignments[experimentKey] {
+        // Check in-memory TTL cache (guard: must match current userId)
+        if lastCacheUserId == appUserId,
+           let cached = cachedAssignments[experimentKey] {
             let age = dateProvider().timeIntervalSince(cached.cachedAt)
             if age < Self.cacheTTL {
                 return cached.assignment?.toPublic()
             }
         }
+        lastCacheUserId = appUserId
 
         return try await fetchCoalesced(
             experimentKey: experimentKey,

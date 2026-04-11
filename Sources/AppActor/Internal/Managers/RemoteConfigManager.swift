@@ -54,13 +54,15 @@ actor AppActorRemoteConfigManager {
         appVersion: String?,
         country: String?
     ) async throws -> AppActorRemoteConfigs {
-        lastCacheUserId = normalizedUserId(appUserId)
-        if let cached = cachedConfigs, let at = cachedAt {
+        let normalized = normalizedUserId(appUserId)
+        if let cached = cachedConfigs, let at = cachedAt,
+           lastCacheUserId == normalized {
             let age = dateProvider().timeIntervalSince(at)
             if age < Self.cacheTTL {
                 return cached
             }
         }
+        lastCacheUserId = normalized
 
         return try await fetchCoalesced(appUserId: appUserId, appVersion: appVersion, country: country)
     }

@@ -794,7 +794,9 @@ actor AppActorPaymentProcessor {
         source: AppActorPaymentQueueItem.Source,
         appUserId: String,
         jwsPayload: [String: Any]? = nil,
-        environment: AppActorTransactionEnvironment? = nil
+        environment: AppActorTransactionEnvironment? = nil,
+        offeringId: String? = nil,
+        packageId: String? = nil
     ) -> AppActorPaymentQueueItem {
         let bundleId = Bundle.main.bundleIdentifier ?? "unknown"
         let resolvedJWSPayload = jwsPayload ?? AppActorASATransactionSupport.decodeJWSPayload(jws)
@@ -822,6 +824,8 @@ actor AppActorPaymentProcessor {
             productId: transaction.productID,
             originalTransactionId: String(transaction.originalID),
             storefront: storefront,
+            offeringId: offeringId,
+            packageId: packageId,
             phase: .needsPost,
             attemptCount: 0,
             nextRetryAt: now,
@@ -845,7 +849,9 @@ actor AppActorPaymentProcessor {
             transactionId: item.transactionId,
             productId: item.productId,
             idempotencyKey: item.key,
-            originalTransactionId: item.originalTransactionId
+            originalTransactionId: item.originalTransactionId,
+            offeringId: item.offeringId,
+            packageId: item.packageId
         )
     }
 

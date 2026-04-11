@@ -51,6 +51,8 @@ final class PaymentProcessorTests: XCTestCase {
             productId: "com.test.monthly",
             originalTransactionId: "12345",
             storefront: "USA",
+            offeringId: nil,
+            packageId: nil,
             phase: phase,
             attemptCount: attemptCount,
             nextRetryAt: Date(),

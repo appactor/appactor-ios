@@ -36,6 +36,8 @@ final class PipelineEdgeCaseTests: XCTestCase {
             productId: "com.test.monthly",
             originalTransactionId: transactionId,
             storefront: "USA",
+            offeringId: nil,
+            packageId: nil,
             phase: phase,
             attemptCount: attemptCount,
             nextRetryAt: Date(),

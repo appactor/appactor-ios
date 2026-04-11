@@ -38,6 +38,17 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// ISO 3166-1 alpha-3 storefront code, if available.
     let storefront: String?
 
+    // MARK: - Purchase Context (Analytics Attribution)
+
+    /// The offering that contained the purchased package. `nil` for non-package purchases
+    /// (direct `Product` purchase, restore, sweep) or items persisted before this field was added.
+    /// Mutable so `mergeFrom` can adopt non-nil context from a richer incoming item.
+    var offeringId: String?
+
+    /// The package identifier within the offering. `nil` for non-package purchases
+    /// or items persisted before this field was added.
+    var packageId: String?
+
     // MARK: - Phase State Machine
 
     /// Current processing phase.
@@ -115,6 +126,10 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         jws = incoming.jws
         sources = sources.union(incoming.sources)
         lastSeenAt = incoming.lastSeenAt
+        // Prefer non-nil purchase context from the richer source (e.g. purchase flow
+        // re-enqueuing an item that arrived earlier via sweep with nil context).
+        if offeringId == nil { offeringId = incoming.offeringId }
+        if packageId == nil { packageId = incoming.packageId }
         if phase == .deadLettered {
             phase = .needsPost
             attemptCount = 0

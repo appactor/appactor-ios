@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'AppActorPlugin'
-  s.version          = '0.0.1'
+  s.version          = '0.0.2'
   s.summary          = 'AppActor native iOS plugin bridge for hybrid wrappers (Flutter, React Native).'
   s.homepage         = 'https://github.com/appactor/appactor-ios'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }

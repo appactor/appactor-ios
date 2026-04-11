@@ -111,16 +111,17 @@ public final class AppActor: ObservableObject {
         if quantity > 1 {
             options.insert(.quantity(quantity))
         }
+
         let lookupId = package.storeProductId ?? package.productId
         if let manager = offeringsManager,
            let product = try await manager.storeKitProduct(for: lookupId) {
-            return try await executePaymentPurchase(product: product, options: options)
+            return try await executePaymentPurchase(product: product, options: options, offeringId: package.offeringId, packageId: package.id)
         }
         let products = try await Product.products(for: [lookupId])
         guard let product = products.first(where: { $0.id == lookupId }) else {
             throw AppActorError.validationError("StoreKit product '\(lookupId)' not found for package '\(package.id)'")
         }
-        return try await executePaymentPurchase(product: product, options: options)
+        return try await executePaymentPurchase(product: product, options: options, offeringId: package.offeringId, packageId: package.id)
     }
 
     // MARK: - Restore & Sync Purchases

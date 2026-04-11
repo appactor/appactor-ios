@@ -40,6 +40,9 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
 
     // MARK: - Payment-Only Fields
 
+    /// The offering identifier this package belongs to. `nil` in local mode or direct product purchases.
+    public let offeringId: String?
+
     /// Server-assigned package UUID. `nil` in local mode.
     public let serverId: String?
 
@@ -85,6 +88,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         case basePlanId
         case offerId
         case localizedPriceString
+        case offeringId
         case serverId
         case displayName
         case metadata
@@ -111,6 +115,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         basePlanId = try container.decodeIfPresent(String.self, forKey: .basePlanId)
         offerId = try container.decodeIfPresent(String.self, forKey: .offerId)
         localizedPriceString = try container.decode(String.self, forKey: .localizedPriceString)
+        offeringId = try container.decodeIfPresent(String.self, forKey: .offeringId)
         serverId = try container.decodeIfPresent(String.self, forKey: .serverId)
         displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata)
@@ -146,6 +151,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         basePlanId: String? = nil,
         offerId: String? = nil,
         localizedPriceString: String,
+        offeringId: String? = nil,
         serverId: String?,
         displayName: String?,
         metadata: [String: String]?,
@@ -167,6 +173,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         self.basePlanId = basePlanId
         self.offerId = offerId
         self.localizedPriceString = localizedPriceString
+        self.offeringId = offeringId
         self.serverId = serverId
         self.displayName = displayName
         self.metadata = metadata

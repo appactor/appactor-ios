@@ -79,7 +79,9 @@ extension AppActor {
     /// `AppActorError.purchaseAlreadyInProgress`.
     func executePaymentPurchase(
         product: Product,
-        options: Set<Product.PurchaseOption> = []
+        options: Set<Product.PurchaseOption> = [],
+        offeringId: String? = nil,
+        packageId: String? = nil
     ) async throws -> AppActorPurchaseResult {
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
@@ -130,7 +132,9 @@ extension AppActor {
                     from: transaction,
                     jws: jws,
                     source: .purchase,
-                    appUserId: purchaseAppUserId
+                    appUserId: purchaseAppUserId,
+                    offeringId: offeringId,
+                    packageId: packageId
                 )
 
                 let postResult = await processor.enqueueAndAwait(

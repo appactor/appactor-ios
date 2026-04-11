@@ -409,15 +409,24 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
             rateLimitCooldownUntil: cachedCooldown,
             postedKeys: postedLedger
         )
-        guard let data = try? encoder.encode(state) else { return }
+        let data: Data
+        do {
+            data = try encoder.encode(state)
+        } catch {
+            Log.storage.error("Queue encode failed: \(error.localizedDescription)")
+            return
+        }
         let dir = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Apply file protection to the directory (createDirectory only sets attributes on creation, not on existing dirs).
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: dir.path
         )
-        try? data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        do {
+            try data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch {
+            Log.storage.error("Queue disk write failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Default Path

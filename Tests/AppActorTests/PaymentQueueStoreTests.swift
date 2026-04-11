@@ -146,6 +146,8 @@ final class PaymentQueueStoreTests: XCTestCase {
             productId: "com.test.monthly",
             originalTransactionId: "expired_tx",
             storefront: "USA",
+            offeringId: nil,
+            packageId: nil,
             phase: .deadLettered,
             attemptCount: 3,
             nextRetryAt: oldDate,

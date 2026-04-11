@@ -13,6 +13,10 @@ struct AppActorReceiptPostRequest: Encodable, Sendable {
     let productId: String
     let idempotencyKey: String
     let originalTransactionId: String?
+    /// The offering that contained the purchased package (analytics attribution).
+    let offeringId: String?
+    /// The package identifier within the offering (analytics attribution).
+    let packageId: String?
 }
 
 // MARK: - Response DTO

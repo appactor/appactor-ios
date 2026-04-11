@@ -229,10 +229,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     do {
                         dto = try self.decoder.decode(AppActorCustomerResponseDTO.self, from: data)
                     } catch {
-                        Log.network.error("Decode failed for \(path): \(error)")
-                        if let bodySnippet = String(data: data.prefix(200), encoding: .utf8) {
-                            Log.network.debug("Response snippet: \(bodySnippet)")
-                        }
+                        Log.network.error("Decode failed for \(path) (\(data.count) bytes): \(error)")
                         throw AppActorError.decodingError(error, requestId: requestId)
                     }
                     let info = AppActorCustomerInfo(dto: dto.customer, appUserId: appUserId, requestDate: dto.requestDate, requestId: dto.requestId)
@@ -762,11 +759,6 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     }
                     let errorInfo = parseErrorEnvelope(from: data)
                     Log.network.error("\(http.statusCode) \(path): code=\(errorInfo?.code ?? "nil") message=\(errorInfo?.message ?? "nil")")
-                    #if DEBUG
-                    if let rawBody = String(data: data.prefix(200), encoding: .utf8) {
-                        Log.network.debug("Response snippet: \(rawBody)")
-                    }
-                    #endif
                     throw AppActorError.serverError(
                         httpStatus: http.statusCode,
                         code: errorInfo?.code,
