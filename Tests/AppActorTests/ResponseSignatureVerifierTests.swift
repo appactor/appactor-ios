@@ -42,9 +42,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
     /// Builds a v2 blob: certHeader(52) + rootCertSig(64) + payloadSig(64) = 180 bytes.
     private func buildV2Blob(
-        body: Data,
-        nonce: String,
-        timestamp: String,
+        payloadString: String,
         issuedAt: UInt64,
         expiresAt: UInt64,
         intermediateKey: Curve25519.Signing.PrivateKey? = nil,
@@ -53,35 +51,41 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         let intermediate = intermediateKey ?? Curve25519.Signing.PrivateKey()
         let rootSigner = rootSigningKey ?? rootKey!
 
-        // Build cert header (52 bytes)
         var certHeader = Data(count: 52)
-        certHeader[0] = 0x02  // version
-        certHeader[1] = 0x00  // flags
-        // keyId (bytes 2-3): 0
+        certHeader[0] = 0x02
+        certHeader[1] = 0x00
         writeUInt64BE(&certHeader, offset: 4, value: issuedAt)
         writeUInt64BE(&certHeader, offset: 12, value: expiresAt)
-        // intermediatePublicKey (32 bytes at offset 20)
-        let pubKey = intermediate.publicKey.rawRepresentation
-        certHeader.replaceSubrange(20..<52, with: pubKey)
+        certHeader.replaceSubrange(20..<52, with: intermediate.publicKey.rawRepresentation)
 
-        // Root cert signature: sign("appactor-cert-v1" + certHeader)
         var certPayload = Data("appactor-cert-v1".utf8)
         certPayload.append(certHeader)
         let rootCertSig = try! rootSigner.signature(for: certPayload)
 
-        // Payload signature: sign(nonce + "\n" + timestamp + "\n" + body)
-        let bodyString = String(data: body, encoding: .utf8) ?? ""
-        let payload = "\(nonce)\n\(timestamp)\n\(bodyString)"
-        let payloadData = payload.data(using: .utf8)!
+        let payloadData = payloadString.data(using: .utf8)!
         let payloadSig = try! intermediate.signature(for: payloadData)
 
-        // Assemble blob: certHeader(52) + rootCertSig(64) + payloadSig(64) = 180
         var blob = Data()
         blob.append(certHeader)
         blob.append(Data(rootCertSig))
         blob.append(Data(payloadSig))
         assert(blob.count == 180)
         return blob
+    }
+
+    /// Convenience: builds a nonce-based v2 blob.
+    private func buildV2Blob(
+        body: Data, nonce: String, timestamp: String,
+        issuedAt: UInt64, expiresAt: UInt64,
+        intermediateKey: Curve25519.Signing.PrivateKey? = nil,
+        rootSigningKey: Curve25519.Signing.PrivateKey? = nil
+    ) -> Data {
+        let bodyString = String(data: body, encoding: .utf8) ?? ""
+        return buildV2Blob(
+            payloadString: "\(nonce)\n\(timestamp)\n\(bodyString)",
+            issuedAt: issuedAt, expiresAt: expiresAt,
+            intermediateKey: intermediateKey, rootSigningKey: rootSigningKey
+        )
     }
 
     private func writeUInt64BE(_ data: inout Data, offset: Int, value: UInt64) {
@@ -105,6 +109,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .success)
@@ -125,6 +130,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: tamperedBody, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -151,6 +157,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .success)
@@ -176,6 +183,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .intermediateKeyExpired)
@@ -203,6 +211,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .intermediateCertInvalid)
@@ -217,6 +226,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signingNotSupported)
@@ -233,6 +243,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureMissing)
@@ -251,6 +262,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .nonceMismatch)
@@ -271,6 +283,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .timestampOutOfRange)
@@ -299,6 +312,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -324,6 +338,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -349,6 +364,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .intermediateCertInvalid)
@@ -376,6 +392,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: tamperedBody, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -393,6 +410,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -412,9 +430,245 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
+    }
+
+    // MARK: - Salt-Based Verification
+
+    private let testApiKey = "pk_test_abc123"
+    private let testPath = "/v1/payment/offerings"
+
+    private func randomSalt() -> String {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, 16, &bytes)
+        return Data(bytes).base64EncodedString()
+    }
+
+    private func saltPayloadString(body: Data, salt: String, apiKey: String, path: String, timestamp: String, eTag: String = "") -> String {
+        let bodyString = String(data: body, encoding: .utf8) ?? ""
+        return "\(salt)\n\(apiKey)\n\(path)\n\(timestamp)\n\(eTag)\n\(bodyString)"
+    }
+
+    /// Signs a salt-based payload with the v1 test key.
+    private func signSaltV1(body: Data, salt: String, apiKey: String, path: String, timestamp: String, eTag: String = "") -> String {
+        let payload = saltPayloadString(body: body, salt: salt, apiKey: apiKey, path: path, timestamp: timestamp, eTag: eTag)
+        let payloadData = payload.data(using: .utf8)!
+        let signature = try! v1Key.signature(for: payloadData)
+        return Data(signature).base64EncodedString()
+    }
+
+    /// Builds a v2 blob signed with a salt-based payload.
+    private func buildSaltV2Blob(
+        body: Data, salt: String, apiKey: String, path: String,
+        timestamp: String, eTag: String = "",
+        issuedAt: UInt64, expiresAt: UInt64
+    ) -> Data {
+        let payload = saltPayloadString(body: body, salt: salt, apiKey: apiKey, path: path, timestamp: timestamp, eTag: eTag)
+        return buildV2Blob(payloadString: payload, issuedAt: issuedAt, expiresAt: expiresAt)
+    }
+
+    func testSaltBasedV1ValidSignature() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .success)
+    }
+
+    func testSaltBasedV2ValidChain() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let issuedAt = UInt64(now) - 3600
+        let expiresAt = UInt64(now) + 3600
+
+        let blob = buildSaltV2Blob(
+            body: body, salt: salt, apiKey: testApiKey, path: testPath,
+            timestamp: timestampStr, issuedAt: issuedAt, expiresAt: expiresAt
+        )
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": blob.base64EncodedString(),
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .success)
+    }
+
+    func testSaltBasedMissingSaltHeader() {
+        let body = Data("{\"offerings\":[]}".utf8)
+
+        let response = makeResponse(headers: [:])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .signingNotSupported)
+    }
+
+    func testSaltBasedMissingSignatureHeader() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let timestampStr = String(Int(now))
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": randomSalt(),
+            "X-AppActor-Signature-Timestamp": timestampStr
+            // No X-AppActor-Signature header
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .signatureMissing)
+    }
+
+    func testSaltBasedWrongApiKey() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: "pk_wrong_key", requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .signatureInvalid)
+    }
+
+    func testSaltBasedWrongPath() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: "/v1/wrong-path",
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .signatureInvalid)
+    }
+
+    func testSaltBasedWrongETag() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr, eTag: "W/\"abc\"")
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr,
+            "ETag": "W/\"different\""
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .signatureInvalid)
+    }
+
+    func testSaltBasedTimestampDrift() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let oldTimestamp = now - 600
+        let timestampStr = String(Int(oldTimestamp))
+        let salt = randomSalt()
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .timestampOutOfRange)
+    }
+
+    func testSaltBasedTamperedBody() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: Data("{\"tampered\":true}".utf8), sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .signatureInvalid)
+    }
+
+    func testSaltBasedWithETagInPayload() {
+        let body = Data("{\"offerings\":[]}".utf8)
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let eTag = "W/\"abc123\""
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr, eTag: eTag)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr,
+            "ETag": eTag
+        ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .success)
     }
 
     // MARK: - Nonce Generation

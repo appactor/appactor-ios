@@ -108,14 +108,16 @@ actor AppActorCustomerManager {
                 case .fresh(let info, let eTag, let requestId, let signatureVerified):
                     self.lastRequestId = requestId
                     await etagManager.storeFresh(info, for: resource, eTag: eTag, verified: signatureVerified)
-                    return info
+                    let verification = AppActorVerificationResult.from(signatureVerified: signatureVerified)
+                    return info.withVerification(verification)
 
                 case .notModified(let eTag, let requestId):
                     self.lastRequestId = requestId
                     if let cached = await etagManager.handleNotModified(
                         AppActorCustomerInfo.self, for: resource, rotatedETag: eTag
                     ) {
-                        return cached
+                        let cachedVerification = await etagManager.cachedVerification(for: resource)
+                        return cached.withVerification(cachedVerification)
                     }
                     // 304 but cache is missing/corrupt — force a fresh fetch (no eTag)
                     let retry = try await client.getCustomer(appUserId: appUserId, eTag: nil)
@@ -129,7 +131,8 @@ actor AppActorCustomerManager {
                         )
                     }
                     await etagManager.storeFresh(info, for: resource, eTag: retryETag, verified: retryVerified)
-                    return info
+                    let retryVerification = AppActorVerificationResult.from(signatureVerified: retryVerified)
+                    return info.withVerification(retryVerification)
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -138,7 +141,8 @@ actor AppActorCustomerManager {
                 if !forceRefresh,
                    Self.shouldFallbackToCache(error),
                    let cached = await etagManager.cached(AppActorCustomerInfo.self, for: resource) {
-                    return cached.value
+                    let cachedVerification = await etagManager.cachedVerification(for: resource)
+                    return cached.value.withVerification(cachedVerification)
                 }
                 throw error
             }

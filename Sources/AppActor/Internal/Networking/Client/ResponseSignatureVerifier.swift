@@ -73,12 +73,16 @@ enum ResponseSignatureVerifier {
 	static func verify(
 		response: HTTPURLResponse,
 		body: Data,
-		sentNonce: String
+		sentNonce: String?,
+		apiKey: String = "",
+		requestPath: String = ""
 	) -> VerificationResult {
 		verify(
 			response: response,
 			body: body,
 			sentNonce: sentNonce,
+			apiKey: apiKey,
+			requestPath: requestPath,
 			v1Key: v1PublicKey,
 			rootKey: rootPublicKey,
 			now: Date().timeIntervalSince1970
@@ -88,22 +92,65 @@ enum ResponseSignatureVerifier {
 	// MARK: - Verify (test-injectable — accepts custom keys and time)
 
 	/// Test-injectable overload. Production `verify()` delegates to this.
+	///
+	/// Mode selection:
+	///   - sentNonce != nil → nonce-based verification (existing, unchanged)
+	///   - sentNonce == nil → salt-based verification (new, CDN-cacheable)
 	static func verify(
 		response: HTTPURLResponse,
 		body: Data,
-		sentNonce: String,
+		sentNonce: String?,
+		apiKey: String,
+		requestPath: String,
 		v1Key: Curve25519.Signing.PublicKey?,
 		rootKey: Curve25519.Signing.PublicKey?,
 		now: TimeInterval
 	) -> VerificationResult {
-		// Check if server echoed the nonce
-		let echoedNonce = response.value(forHTTPHeaderField: "X-AppActor-Request-Nonce")
 
-		guard let echoedNonce else {
+		// ── Route 1: Nonce-based verification (existing logic) ──
+		if let sentNonce {
+			let echoedNonce = response.value(forHTTPHeaderField: "X-AppActor-Request-Nonce")
+
+			guard let echoedNonce else {
+				return .signingNotSupported
+			}
+
+			guard let signatureBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature") else {
+				return .signatureMissing
+			}
+
+			guard let timestampStr = response.value(forHTTPHeaderField: "X-AppActor-Signature-Timestamp"),
+			      let timestamp = TimeInterval(timestampStr),
+			      timestamp.isFinite else {
+				return .signatureMissing
+			}
+
+			if echoedNonce != sentNonce {
+				return .nonceMismatch
+			}
+
+			if abs(now - timestamp) > maxTimestampDrift {
+				return .timestampOutOfRange
+			}
+
+			guard let signatureData = Data(base64Encoded: signatureBase64) else {
+				return .signatureInvalid
+			}
+
+			let bodyString = String(data: body, encoding: .utf8) ?? ""
+			let payload = "\(sentNonce)\n\(timestampStr)\n\(bodyString)"
+			guard let payloadData = payload.data(using: .utf8) else {
+				return .signatureInvalid
+			}
+
+			return verifySignature(signatureData, payloadData: payloadData, v1Key: v1Key, rootKey: rootKey, now: now)
+		}
+
+		// ── Route 2: Salt-based verification (new, CDN-cacheable) ──
+		guard let saltBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature-Salt") else {
 			return .signingNotSupported
 		}
 
-		// Signature headers MUST be present when nonce is echoed
 		guard let signatureBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature") else {
 			return .signatureMissing
 		}
@@ -114,26 +161,36 @@ enum ResponseSignatureVerifier {
 			return .signatureMissing
 		}
 
-		// Nonce echo match
-		if echoedNonce != sentNonce {
-			return .nonceMismatch
-		}
-
-		// Timestamp drift
 		if abs(now - timestamp) > maxTimestampDrift {
 			return .timestampOutOfRange
 		}
 
-		// Decode signature blob
 		guard let signatureData = Data(base64Encoded: signatureBase64) else {
 			return .signatureInvalid
 		}
 
-		// Route by blob size: v2 (180 bytes) or v1 (64 bytes)
+		let eTag = response.value(forHTTPHeaderField: "ETag") ?? ""
+		let bodyString = String(data: body, encoding: .utf8) ?? ""
+		let payload = "\(saltBase64)\n\(apiKey)\n\(requestPath)\n\(timestampStr)\n\(eTag)\n\(bodyString)"
+		guard let payloadData = payload.data(using: .utf8) else {
+			return .signatureInvalid
+		}
+
+		return verifySignature(signatureData, payloadData: payloadData, v1Key: v1Key, rootKey: rootKey, now: now)
+	}
+
+	/// Routes signature verification to v1 or v2 based on blob size.
+	private static func verifySignature(
+		_ signatureData: Data,
+		payloadData: Data,
+		v1Key: Curve25519.Signing.PublicKey?,
+		rootKey: Curve25519.Signing.PublicKey?,
+		now: TimeInterval
+	) -> VerificationResult {
 		if signatureData.count == v2BlobSize {
-			return verifyV2(blob: signatureData, sentNonce: sentNonce, timestampStr: timestampStr, body: body, rootKey: rootKey, now: now)
+			return verifyV2(blob: signatureData, payloadData: payloadData, rootKey: rootKey, now: now)
 		} else if signatureData.count == v1SignatureSize {
-			return verifyV1(signature: signatureData, sentNonce: sentNonce, timestampStr: timestampStr, body: body, v1Key: v1Key)
+			return verifyV1(signature: signatureData, payloadData: payloadData, v1Key: v1Key)
 		} else {
 			return .signatureInvalid
 		}
@@ -143,22 +200,12 @@ enum ResponseSignatureVerifier {
 
 	private static func verifyV1(
 		signature: Data,
-		sentNonce: String,
-		timestampStr: String,
-		body: Data,
+		payloadData: Data,
 		v1Key: Curve25519.Signing.PublicKey?
 	) -> VerificationResult {
 		guard let key = v1Key else {
 			return .publicKeyUnavailable
 		}
-
-		let bodyString = String(data: body, encoding: .utf8) ?? ""
-		let payload = "\(sentNonce)\n\(timestampStr)\n\(bodyString)"
-
-		guard let payloadData = payload.data(using: .utf8) else {
-			return .signatureInvalid
-		}
-
 		return key.isValidSignature(signature, for: payloadData) ? .success : .signatureInvalid
 	}
 
@@ -166,9 +213,7 @@ enum ResponseSignatureVerifier {
 
 	private static func verifyV2(
 		blob: Data,
-		sentNonce: String,
-		timestampStr: String,
-		body: Data,
+		payloadData: Data,
 		rootKey: Curve25519.Signing.PublicKey?,
 		now: TimeInterval
 	) -> VerificationResult {
@@ -217,14 +262,6 @@ enum ResponseSignatureVerifier {
 		let pubStart = certHeader.startIndex.advanced(by: 20)
 		let intermediatePubRaw = certHeader[pubStart..<pubStart.advanced(by: 32)]
 		guard let intermediateKey = try? Curve25519.Signing.PublicKey(rawRepresentation: intermediatePubRaw) else {
-			return .signatureInvalid
-		}
-
-		// Verify payload: intermediateKey.verify(nonce + "\n" + timestamp + "\n" + body)
-		let bodyString = String(data: body, encoding: .utf8) ?? ""
-		let payload = "\(sentNonce)\n\(timestampStr)\n\(bodyString)"
-
-		guard let payloadData = payload.data(using: .utf8) else {
 			return .signatureInvalid
 		}
 

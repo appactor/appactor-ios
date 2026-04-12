@@ -251,7 +251,10 @@ public final class AppActor: ObservableObject {
         hasOverflow: Bool,
         customerManager: AppActorCustomerManager
     ) async throws -> AppActorCustomerInfo {
-        guard hasOverflow else { return result.customerInfo }
+        guard hasOverflow else {
+            let verification = AppActorVerificationResult.from(signatureVerified: result.signatureVerified)
+            return result.customerInfo.withVerification(verification)
+        }
         return try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
     }
 

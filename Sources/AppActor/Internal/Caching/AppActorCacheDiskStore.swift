@@ -61,24 +61,13 @@ actor AppActorCacheDiskStore {
 
     func updateTimestamp(for resource: AppActorCacheResource, rotatedETag: String? = nil) {
         guard let entry = load(resource) else { return }
-        let updated = AppActorCacheEntry(
-            data: entry.data,
-            eTag: rotatedETag ?? entry.eTag,
-            cachedAt: Date(),
-            responseVerified: entry.responseVerified
-        )
-        save(updated, for: resource)
+        save(entry.refreshed(eTag: rotatedETag), for: resource)
     }
 
     /// Atomically updates timestamp + returns the updated entry in a single actor call.
     func updateTimestampAndLoad(for resource: AppActorCacheResource, rotatedETag: String? = nil) -> AppActorCacheEntry? {
         guard let entry = load(resource) else { return nil }
-        let updated = AppActorCacheEntry(
-            data: entry.data,
-            eTag: rotatedETag ?? entry.eTag,
-            cachedAt: Date(),
-            responseVerified: entry.responseVerified
-        )
+        let updated = entry.refreshed(eTag: rotatedETag)
         save(updated, for: resource)
         return updated
     }
@@ -88,13 +77,7 @@ actor AppActorCacheDiskStore {
     /// but still sends `If-None-Match` for a potential 304 response.
     func resetFreshness(for resource: AppActorCacheResource) {
         guard let entry = load(resource) else { return }
-        let stale = AppActorCacheEntry(
-            data: entry.data,
-            eTag: entry.eTag,
-            cachedAt: .distantPast,
-            responseVerified: entry.responseVerified
-        )
-        save(stale, for: resource)
+        save(entry.refreshed(cachedAt: .distantPast), for: resource)
     }
 
     func clear(_ resource: AppActorCacheResource) {
@@ -118,7 +101,7 @@ actor AppActorCacheDiskStore {
                 try? fm.removeItem(at: file)
                 continue
             }
-            if !entry.responseVerified {
+            if entry.resolvedVerification == .failed {
                 try? fm.removeItem(at: file)
             }
         }

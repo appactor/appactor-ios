@@ -8,11 +8,13 @@ struct PluginOfferings: Encodable, Sendable {
     let current: PluginOffering?
     let all: [String: PluginOffering]
     let productEntitlements: [String: [String]]?
+    let verification: String
 
     init(from offerings: AppActorOfferings) {
         self.current = offerings.current.map { PluginOffering(from: $0) }
         self.all = offerings.all.mapValues { PluginOffering(from: $0) }
         self.productEntitlements = offerings.productEntitlements
+        self.verification = offerings.verification.rawValue
     }
 }
 

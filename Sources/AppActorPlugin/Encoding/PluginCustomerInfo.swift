@@ -23,6 +23,7 @@ struct PluginCustomerInfo: Encodable, Sendable {
     let lastSeen: String?
     let managementUrl: String?
     let isComputedOffline: Bool
+    let verification: String
     let productEntitlements: [String: [String]]?
     let activeEntitlementKeys: Set<String>
 
@@ -40,6 +41,7 @@ struct PluginCustomerInfo: Encodable, Sendable {
         self.lastSeen = info.lastSeen
         self.managementUrl = info.managementUrl
         self.isComputedOffline = info.isComputedOffline
+        self.verification = info.verification.rawValue
         self.productEntitlements = info.productEntitlements
         self.activeEntitlementKeys = info.activeEntitlementKeys
     }

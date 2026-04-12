@@ -128,6 +128,9 @@ public struct AppActorOfferings: Sendable, Codable {
     /// `nil` in local mode; populated in payment mode.
     public let productEntitlements: [String: [String]]?
 
+    /// How this offerings data was verified.
+    public let verification: AppActorVerificationResult
+
     /// Returns the offering with the given ID, or `nil`.
     public func offering(id: String) -> AppActorOffering? {
         all[id]
@@ -140,9 +143,27 @@ public struct AppActorOfferings: Sendable, Codable {
 
     // MARK: - Internal Init
 
-    init(current: AppActorOffering?, all: [String: AppActorOffering], productEntitlements: [String: [String]]? = nil) {
+    private enum CodingKeys: String, CodingKey {
+        case current, all, productEntitlements
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.current = try container.decodeIfPresent(AppActorOffering.self, forKey: .current)
+        self.all = try container.decode([String: AppActorOffering].self, forKey: .all)
+        self.productEntitlements = try container.decodeIfPresent([String: [String]].self, forKey: .productEntitlements)
+        self.verification = .notRequested  // Set by SDK after decode
+    }
+
+    init(
+        current: AppActorOffering?,
+        all: [String: AppActorOffering],
+        productEntitlements: [String: [String]]? = nil,
+        verification: AppActorVerificationResult = .notRequested
+    ) {
         self.current = current
         self.all = all
         self.productEntitlements = productEntitlements
+        self.verification = verification
     }
 }

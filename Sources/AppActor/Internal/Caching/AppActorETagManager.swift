@@ -35,8 +35,9 @@ actor AppActorETagManager {
     func eTag(for resource: AppActorCacheResource, forceRefresh: Bool = false) async -> String? {
         guard !forceRefresh else { return nil }
         guard let entry = await diskStore.load(resource) else { return nil }
-        // Don't reuse ETag from unverified cache when verification is now required
-        if responseVerificationEnabled && !entry.responseVerified {
+        // Don't reuse ETag from failed verification — force fresh fetch.
+        // .notRequested (transitional unsigned) is intentionally allowed through.
+        if responseVerificationEnabled && entry.resolvedVerification == .failed {
             return nil
         }
         return entry.eTag
@@ -51,14 +52,25 @@ actor AppActorETagManager {
     ///   did not support signing (transitional `.signingNotSupported`).
     func storeFresh<T: Encodable>(_ value: T, for resource: AppActorCacheResource, eTag: String?, verified: Bool? = nil) async {
         guard let data = try? encoder.encode(value) else { return }
-        let entry = AppActorCacheEntry(data: data, eTag: eTag, cachedAt: Date(), responseVerified: verified ?? responseVerificationEnabled)
-        await diskStore.save(entry, for: resource)
+        await diskStore.save(makeCacheEntry(data: data, eTag: eTag, verified: verified), for: resource)
     }
 
     /// Stores raw Data as a fresh 200 response.
     func storeFreshData(_ data: Data, for resource: AppActorCacheResource, eTag: String?, verified: Bool? = nil) async {
-        let entry = AppActorCacheEntry(data: data, eTag: eTag, cachedAt: Date(), responseVerified: verified ?? responseVerificationEnabled)
-        await diskStore.save(entry, for: resource)
+        await diskStore.save(makeCacheEntry(data: data, eTag: eTag, verified: verified), for: resource)
+    }
+
+    /// Creates a cache entry with correctly mapped verification status.
+    ///
+    /// - `verified == true`  → `.verified` (signature passed)
+    /// - `verified == false` → `.notRequested` (server didn't sign — transitional, NOT a failure)
+    /// - `verified == nil`   → `nil` (verification wasn't relevant to the caller)
+    private func makeCacheEntry(data: Data, eTag: String?, verified: Bool?) -> AppActorCacheEntry {
+        AppActorCacheEntry(
+            data: data, eTag: eTag, cachedAt: Date(),
+            responseVerified: verified ?? responseVerificationEnabled,
+            verificationResult: verified.map { AppActorVerificationResult.from(signatureVerified: $0) }
+        )
     }
 
     // MARK: - Handle 304 Not Modified
@@ -73,10 +85,7 @@ actor AppActorETagManager {
         guard let entry = await diskStore.updateTimestampAndLoad(for: resource, rotatedETag: rotatedETag) else {
             return nil
         }
-        // Defense-in-depth: eTag() already prevents sending If-None-Match for
-        // unverified entries, so a 304 for unverified cache shouldn't occur.
-        // Guard anyway to prevent returning unverified data.
-        if responseVerificationEnabled && !entry.responseVerified { return nil }
+        if responseVerificationEnabled && entry.resolvedVerification == .failed { return nil }
         return try? decoder.decode(T.self, from: entry.data)
     }
 
@@ -84,18 +93,24 @@ actor AppActorETagManager {
 
     /// Loads the cached value if available.
     ///
-    /// When response verification is enabled, unverified cache entries are ignored.
+    /// When response verification is enabled, entries with failed verification are ignored.
     func cached<T: Decodable>(_ type: T.Type, for resource: AppActorCacheResource) async -> (value: T, eTag: String?, cachedAt: Date)? {
         guard let entry = await diskStore.load(resource) else { return nil }
-        if responseVerificationEnabled && !entry.responseVerified { return nil }
+        if responseVerificationEnabled && entry.resolvedVerification == .failed { return nil }
         guard let value = try? decoder.decode(T.self, from: entry.data) else { return nil }
         return (value: value, eTag: entry.eTag, cachedAt: entry.cachedAt)
+    }
+
+    /// Returns the resolved verification status for a cached resource.
+    func cachedVerification(for resource: AppActorCacheResource) async -> AppActorVerificationResult {
+        guard let entry = await diskStore.load(resource) else { return .notRequested }
+        return entry.resolvedVerification
     }
 
     /// Returns true if the resource has a cache entry fresher than the given TTL.
     func isFresh(for resource: AppActorCacheResource, ttl: TimeInterval) async -> Bool {
         guard let entry = await diskStore.load(resource) else { return false }
-        if responseVerificationEnabled && !entry.responseVerified { return false }
+        if responseVerificationEnabled && entry.resolvedVerification == .failed { return false }
         return Date().timeIntervalSince(entry.cachedAt) < ttl
     }
 

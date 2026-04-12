@@ -82,7 +82,8 @@ extension AppActor {
             nonSubscriptions: [:],
             snapshotDate: Date(),
             appUserId: expectedAppUserId,
-            isComputedOffline: true
+            isComputedOffline: true,
+            verification: .verifiedOnDevice
         )
     }
 }

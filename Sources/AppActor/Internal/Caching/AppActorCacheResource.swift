@@ -40,4 +40,24 @@ struct AppActorCacheEntry: Codable, Sendable {
     let cachedAt: Date
     /// Whether the response was stored after passing Ed25519 signature verification.
     let responseVerified: Bool
+    /// Richer verification status. Optional for backward compat with older cache files on disk.
+    let verificationResult: AppActorVerificationResult?
+
+    /// Resolves the verification status, preferring the richer enum when available,
+    /// falling back to the legacy bool for old cache entries.
+    var resolvedVerification: AppActorVerificationResult {
+        if let verificationResult { return verificationResult }
+        return responseVerified ? .verified : .failed
+    }
+
+    /// Returns a copy with an updated timestamp and optional ETag rotation.
+    func refreshed(cachedAt: Date = Date(), eTag: String? = nil) -> AppActorCacheEntry {
+        AppActorCacheEntry(
+            data: data,
+            eTag: eTag ?? self.eTag,
+            cachedAt: cachedAt,
+            responseVerified: responseVerified,
+            verificationResult: verificationResult
+        )
+    }
 }

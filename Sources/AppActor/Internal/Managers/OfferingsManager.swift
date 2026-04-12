@@ -13,6 +13,7 @@ actor AppActorOfferingsManager {
     private struct NetworkStagePayload {
         let dto: AppActorOfferingsResponseDTO?
         let cacheDate: Date?
+        let verification: AppActorVerificationResult
     }
 
     // MARK: - Dependencies
@@ -155,7 +156,7 @@ actor AppActorOfferingsManager {
         do {
             let payload = try await fetchNetworkStageCoalesced(generation: gen)
             guard let dto = payload.dto, let cacheDate = payload.cacheDate else { return }
-            startEnrichmentTaskIfNeeded(dto: dto, cacheDate: cacheDate, generation: gen)
+            startEnrichmentTaskIfNeeded(dto: dto, cacheDate: cacheDate, generation: gen, verification: payload.verification)
         } catch is CancellationError {
             return
         } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
@@ -237,7 +238,7 @@ actor AppActorOfferingsManager {
         }
 
         if let dto = payload.dto, let cacheDate = payload.cacheDate {
-            return try await awaitEnrichment(dto: dto, cacheDate: cacheDate, generation: generation)
+            return try await awaitEnrichment(dto: dto, cacheDate: cacheDate, generation: generation, verification: payload.verification)
         }
 
         if let fallback = await fallbackOfferings(generation: generation) {
@@ -296,11 +297,12 @@ actor AppActorOfferingsManager {
         switch result {
         case .fresh(let dto, let eTag, let requestId, let signatureVerified):
             Log.offerings.info("  ⏱ offerings/api: \(apiMs) ms (200 fresh)")
+            let verification = AppActorVerificationResult.from(signatureVerified: signatureVerified)
             if cacheGeneration == generation {
                 await etagManager.storeFresh(dto, for: .offerings, eTag: eTag, verified: signatureVerified)
                 lastRequestId = requestId
             }
-            return NetworkStagePayload(dto: dto, cacheDate: dateProvider())
+            return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), verification: verification)
 
         case .notModified(let eTag, let requestId):
             Log.offerings.info("  ⏱ offerings/api: \(apiMs) ms (304 not modified)")
@@ -317,13 +319,13 @@ actor AppActorOfferingsManager {
                 }
                 Log.offerings.debug("Offerings not modified (304), using in-memory cache")
                 Log.offerings.info("  ⏱ offerings/storekit: 0 ms (memory cache hit)")
-                return NetworkStagePayload(dto: nil, cacheDate: nil)
+                return NetworkStagePayload(dto: nil, cacheDate: nil, verification: cachedOfferings?.verification ?? .notRequested)
             }
 
             if cacheGeneration == generation, let dto = await etagManager.handleNotModified(
                 AppActorOfferingsResponseDTO.self, for: .offerings, rotatedETag: eTag
             ) {
-                return NetworkStagePayload(dto: dto, cacheDate: dateProvider())
+                return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), verification: .notRequested)
             }
 
             Log.offerings.debug("Cache miss on 304, refreshing offerings")
@@ -338,20 +340,22 @@ actor AppActorOfferingsManager {
                 )
             }
 
+            let retryVerification = AppActorVerificationResult.from(signatureVerified: retryVerified)
             if cacheGeneration == generation {
                 await etagManager.storeFresh(dto, for: .offerings, eTag: retryETag, verified: retryVerified)
                 lastRequestId = retryReqId
             }
-            return NetworkStagePayload(dto: dto, cacheDate: dateProvider())
+            return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), verification: retryVerification)
         }
     }
 
     private func awaitEnrichment(
         dto: AppActorOfferingsResponseDTO,
         cacheDate: Date,
-        generation: UInt64
+        generation: UInt64,
+        verification: AppActorVerificationResult = .notRequested
     ) async throws -> AppActorOfferings {
-        startEnrichmentTaskIfNeeded(dto: dto, cacheDate: cacheDate, generation: generation)
+        startEnrichmentTaskIfNeeded(dto: dto, cacheDate: cacheDate, generation: generation, verification: verification)
         guard let task = enrichmentTask else {
             throw AppActorError.serverError(
                 httpStatus: 500,
@@ -367,7 +371,8 @@ actor AppActorOfferingsManager {
     private func startEnrichmentTaskIfNeeded(
         dto: AppActorOfferingsResponseDTO,
         cacheDate: Date,
-        generation: UInt64
+        generation: UInt64,
+        verification: AppActorVerificationResult = .notRequested
     ) {
         guard enrichmentTask == nil else { return }
 
@@ -375,7 +380,7 @@ actor AppActorOfferingsManager {
             guard let self else { throw AppActorError.notConfigured }
             let storeKitStart = CFAbsoluteTimeGetCurrent()
             do {
-                let offerings = try await self.enrich(dto: dto)
+                let offerings = try await self.enrich(dto: dto, verification: verification)
                 let storeKitMs = Int((CFAbsoluteTimeGetCurrent() - storeKitStart) * 1000)
                 Log.offerings.info("  ⏱ offerings/storekit: \(storeKitMs) ms (\(dto.allStoreProductIds.count) product(s))")
 
@@ -419,12 +424,12 @@ actor AppActorOfferingsManager {
 
     /// Extracts App Store product IDs, bulk-fetches from StoreKit, builds public models.
     /// Drops packages/offerings that have zero products after enrichment.
-    private func enrich(dto: AppActorOfferingsResponseDTO) async throws -> AppActorOfferings {
+    private func enrich(dto: AppActorOfferingsResponseDTO, verification: AppActorVerificationResult = .notRequested) async throws -> AppActorOfferings {
         let allIds = dto.allStoreProductIds
 
         guard !allIds.isEmpty else {
             // Server returned offerings with no product IDs — valid empty config
-            return AppActorOfferings(current: nil, all: [:], productEntitlements: dto.productEntitlements)
+            return AppActorOfferings(current: nil, all: [:], productEntitlements: dto.productEntitlements, verification: verification)
         }
 
         // Bulk fetch from StoreKit
@@ -535,7 +540,7 @@ actor AppActorOfferingsManager {
             currentOffering = allOfferings[serverCurrent.id]
         }
 
-        return AppActorOfferings(current: currentOffering, all: allOfferings, productEntitlements: dto.productEntitlements)
+        return AppActorOfferings(current: currentOffering, all: allOfferings, productEntitlements: dto.productEntitlements, verification: verification)
     }
 
     // MARK: - Cold Start (Disk Cache)

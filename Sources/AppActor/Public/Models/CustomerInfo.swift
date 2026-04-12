@@ -59,6 +59,13 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
     /// will replace this with server-authoritative data.
     public let isComputedOffline: Bool
 
+    /// How this snapshot's data was verified.
+    /// - `.verified`: server response signature passed Ed25519 verification.
+    /// - `.verifiedOnDevice`: entitlements derived from StoreKit 2 verified transactions.
+    /// - `.notRequested`: verification was not performed (signing disabled or transitional).
+    /// - `.failed`: verification was attempted but failed.
+    public let verification: AppActorVerificationResult
+
     /// Mapping of product IDs to entitlement keys they grant.
     /// Populated from offerings cache, NOT from the customer endpoint.
     /// Remains `nil` when constructed from server customer responses.
@@ -89,6 +96,19 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
 
     /// Parsed `lastSeen` as `Date`, or `nil` if missing/unparseable.
     public var lastSeenDate: Date? { lastSeen.flatMap { AppActorCustomerDateParser.date(from: $0) } }
+
+    /// Returns a copy with the given verification result.
+    func withVerification(_ result: AppActorVerificationResult) -> AppActorCustomerInfo {
+        AppActorCustomerInfo(
+            entitlements: entitlements, subscriptions: subscriptions,
+            nonSubscriptions: nonSubscriptions, consumableBalances: consumableBalances,
+            tokenBalance: tokenBalance, snapshotDate: snapshotDate,
+            appUserId: appUserId, requestId: requestId, requestDate: requestDate,
+            firstSeen: firstSeen, lastSeen: lastSeen, managementUrl: managementUrl,
+            isComputedOffline: isComputedOffline, verification: result,
+            productEntitlements: productEntitlements
+        )
+    }
 
     // MARK: - Empty
 
@@ -126,6 +146,7 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
         lastSeen: String? = nil,
         managementUrl: String? = nil,
         isComputedOffline: Bool = false,
+        verification: AppActorVerificationResult = .notRequested,
         productEntitlements: [String: [String]]? = nil
     ) {
         self.entitlements = entitlements
@@ -141,6 +162,7 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
         self.lastSeen = lastSeen
         self.managementUrl = managementUrl
         self.isComputedOffline = isComputedOffline
+        self.verification = verification
         self.productEntitlements = productEntitlements
     }
 
@@ -207,6 +229,7 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
         self.lastSeen = try? container.decodeIfPresent(String.self, forKey: .lastSeen)
         self.managementUrl = try? container.decodeIfPresent(String.self, forKey: .managementUrl)
         self.isComputedOffline = false  // Transient in-memory state — always false when decoded
+        self.verification = .notRequested  // Set by SDK after decode, not from server JSON
         self.productEntitlements = try? container.decodeIfPresent([String: [String]].self, forKey: .productEntitlements)
     }
 

@@ -285,15 +285,18 @@ extension AppActor {
 
         // Seed customer cache with the snapshot from identify
         // so that subsequent calls can benefit from ETag/304 responses
+        let verification = AppActorVerificationResult.from(signatureVerified: result.signatureVerified)
+        let verifiedInfo = result.customerInfo.withVerification(verification)
+
         if let manager = customerManager {
             await manager.seedCache(info: result.customerInfo, eTag: result.customerETag, appUserId: result.appUserId, verified: result.signatureVerified)
         }
 
-        self.paymentCurrentUser = result.customerInfo
-        self.customerInfo = result.customerInfo
+        self.paymentCurrentUser = verifiedInfo
+        self.customerInfo = verifiedInfo
         Log.identity.debug("Identified as \(String(result.appUserId.prefix(8)))…")
         Log.identity.info("👤 Identity established")
-        return result.customerInfo
+        return verifiedInfo
     }
 
     // MARK: - Login
@@ -381,13 +384,16 @@ extension AppActor {
         storage.clearAppAccountToken()
         storage.ensureAppAccountToken()
 
+        let loginVerification = AppActorVerificationResult.from(signatureVerified: loginResult.signatureVerified)
+        let verifiedLoginInfo = loginResult.customerInfo.withVerification(loginVerification)
+
         // Seed customer cache with the snapshot from login
         if let manager = customerManager {
             await manager.seedCache(info: loginResult.customerInfo, eTag: loginResult.customerETag, appUserId: loginResult.appUserId, verified: loginResult.signatureVerified)
         }
 
-        self.paymentCurrentUser = loginResult.customerInfo
-        self.customerInfo = loginResult.customerInfo
+        self.paymentCurrentUser = verifiedLoginInfo
+        self.customerInfo = verifiedLoginInfo
 
         // End identity transition — flush buffered transactions with their captured appUserId
         if let watcher = transactionWatcher {
@@ -396,7 +402,7 @@ extension AppActor {
 
         Log.identity.debug("Logged in as \(String(loginResult.appUserId.prefix(8)))…")
         Log.identity.info("👤 Login complete")
-        return loginResult.customerInfo
+        return verifiedLoginInfo
     }
 
     // MARK: - Logout

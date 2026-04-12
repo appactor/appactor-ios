@@ -83,13 +83,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.httpBody = try encoder.encode(request)
         urlRequest.timeoutInterval = 30
 
         Log.network.debug("identify request → \(path)")
 
-        return try await performRetryableRequest(urlRequest, path: path) { data, http, signatureVerified, requestId in
+        return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce) { data, http, signatureVerified, requestId in
             guard (200..<300).contains(http.statusCode) else {
                 throw AppActorError.serverError(httpStatus: http.statusCode, code: "UNEXPECTED_STATUS", message: nil, details: nil, requestId: requestId)
             }
@@ -123,13 +123,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.httpBody = try encoder.encode(request)
         urlRequest.timeoutInterval = 30
 
         Log.network.debug("login request → \(path)")
 
-        return try await performRetryableRequest(urlRequest, path: path) { data, http, signatureVerified, requestId in
+        return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce) { data, http, signatureVerified, requestId in
             guard (200..<300).contains(http.statusCode) else {
                 throw AppActorError.serverError(httpStatus: http.statusCode, code: "UNEXPECTED_STATUS", message: nil, details: nil, requestId: requestId)
             }
@@ -172,10 +172,10 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "GET"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.timeoutInterval = 30
 
-        return try await performRetryableRequest(urlRequest, path: path, eTag: eTag) { data, http, signatureVerified, requestId in
+        return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce, eTag: eTag) { data, http, signatureVerified, requestId in
             switch http.statusCode {
             case 200:
                 let dto: AppActorOfferingsResponseDTO
@@ -210,12 +210,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "GET"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.timeoutInterval = 30
 
         return try await performRetryableRequest(
             urlRequest,
             path: path,
+            sentNonce: nonce,
             eTag: eTag,
             additionalNonRetryHandler: { statusCode, data, requestId in
                 guard statusCode == 404 else { return nil }
@@ -264,10 +265,10 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "GET"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.timeoutInterval = 30
 
-        return try await performRetryableRequest(urlRequest, path: path, eTag: eTag) { data, http, signatureVerified, requestId in
+        return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce, eTag: eTag) { data, http, signatureVerified, requestId in
             switch http.statusCode {
             case 200:
                 let items: [AppActorRemoteConfigItemDTO]
@@ -317,12 +318,12 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.timeoutInterval = 30
 
         Log.network.debug("experiment assignment → \(path)")
 
-        return try await performRetryableRequest(urlRequest, path: path) { data, http, signatureVerified, requestId in
+        return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce) { data, http, signatureVerified, requestId in
             guard (200..<300).contains(http.statusCode) else {
                 throw AppActorError.serverError(httpStatus: http.statusCode, code: "UNEXPECTED_STATUS", message: nil, details: nil, requestId: requestId)
             }
@@ -346,13 +347,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.httpBody = try encoder.encode(request)
         urlRequest.timeoutInterval = 30
 
         // Single attempt — no HTTP-level retry. Retry is handled by ReceiptProcessor queue.
         do {
-            let (data, http, _) = try await performRawRequest(urlRequest, path: path)
+            let (data, http, _) = try await performRawRequest(urlRequest, path: path, sentNonce: nonce)
             let requestId = extractRequestId(from: data)
 
             switch http.statusCode {
@@ -404,13 +405,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.httpBody = try encoder.encode(request)
         urlRequest.timeoutInterval = 30
 
         Log.network.debug("restore request → \(path)")
 
-        return try await performRetryableRequest(urlRequest, path: path) { data, http, signatureVerified, requestId in
+        return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce) { data, http, signatureVerified, requestId in
             guard (200..<300).contains(http.statusCode) else {
                 throw AppActorError.serverError(httpStatus: http.statusCode, code: "UNEXPECTED_STATUS", message: nil, details: nil, requestId: requestId)
             }
@@ -470,12 +471,12 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.httpBody = try encoder.encode(body)
         urlRequest.timeoutInterval = 30
 
         do {
-            let (data, http, _) = try await performRawRequest(urlRequest, path: path)
+            let (data, http, _) = try await performRawRequest(urlRequest, path: path, sentNonce: nonce)
             let requestId = extractRequestId(from: data)
 
             switch http.statusCode {
@@ -546,11 +547,11 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuth(to: &urlRequest)
+        let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.httpBody = try encoder.encode(body)
         urlRequest.timeoutInterval = 30
 
-        return try await performRequest(urlRequest, path: path)
+        return try await performRequest(urlRequest, path: path, sentNonce: nonce)
     }
 
     /// Normalize an ETag value: trim whitespace, return nil if empty.
@@ -559,16 +560,17 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         return trimmed
     }
 
-    /// Applies authentication header and generates a nonce for response signature verification.
-    /// - Returns: The generated nonce string (used later to verify the response signature).
-    @discardableResult
-    private func applyAuth(to request: inout URLRequest) -> String {
+    /// Applies authentication header and optionally generates a nonce for response signature verification.
+    /// - Returns: The generated nonce string if one was sent, `nil` for nonce-free endpoints.
+    private func applyAuth(to request: inout URLRequest, path: String) -> String? {
         switch headerMode {
         case .bearer:
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         case .apiKey:
             request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         }
+
+        guard EndpointSigningPolicy.forPath(path).needsNonce else { return nil }
 
         let nonce = ResponseSignatureVerifier.generateNonce()
         request.setValue(nonce, forHTTPHeaderField: "X-AppActor-Nonce")
@@ -581,11 +583,10 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     /// `false` if verification was skipped or server didn't support signing.
     private func performRawRequest(
         _ urlRequest: URLRequest,
-        path: String
+        path: String,
+        sentNonce: String?
     ) async throws -> (Data, HTTPURLResponse, Bool) {
         Log.network.debug("→ \(urlRequest.httpMethod ?? "?") \(path)")
-
-        let sentNonce = urlRequest.value(forHTTPHeaderField: "X-AppActor-Nonce") ?? ""
 
         let (data, response) = try await session.data(for: urlRequest)
 
@@ -605,11 +606,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
         // Verify response signature (only for 2xx responses when enabled)
         var signatureVerified = false
-        if verifySignatures && (200..<300).contains(http.statusCode) && !sentNonce.isEmpty {
+        if verifySignatures && (200..<300).contains(http.statusCode) {
             let result = ResponseSignatureVerifier.verify(
                 response: http,
                 body: data,
-                sentNonce: sentNonce
+                sentNonce: sentNonce,
+                apiKey: apiKey,
+                requestPath: path
             )
 
             switch result {
@@ -617,13 +620,17 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 signatureVerified = true
                 Log.signing.debug("Signature verified for \(path)")
             case .signingNotSupported:
-                if requireSignatures {
-                    // Strict mode: reject unsigned responses even without nonce echo
-                    Log.signing.error("Response signature required but server did not sign for \(path)")
-                    throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
+                if sentNonce != nil {
+                    // Nonce-required endpoint: server didn't echo nonce
+                    if requireSignatures {
+                        Log.signing.error("Response signature required but server did not sign for \(path)")
+                        throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
+                    }
+                    Log.signing.debug("Response signing not active on server for \(path)")
+                } else {
+                    // Nonce-free endpoint: server doesn't support salt signing yet (transitional)
+                    Log.signing.debug("Salt-based signing not active on server for \(path)")
                 }
-                // Transitional: server did not echo nonce — signing not enabled server-side
-                Log.signing.debug("Response signing not active on server for \(path)")
             case .signatureMissing:
                 // Server echoed nonce but signature is missing — possible MITM header strip
                 Log.signing.error("Response signature missing (nonce was echoed) for \(path)")
@@ -657,9 +664,10 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     /// Used by `post()` for login/logout — no ETag, no custom 4xx handler.
     private func performRequest<Response: Decodable>(
         _ urlRequest: URLRequest,
-        path: String
+        path: String,
+        sentNonce: String?
     ) async throws -> Response {
-        try await performRetryableRequest(urlRequest, path: path) { [decoder] data, http, _, requestId in
+        try await performRetryableRequest(urlRequest, path: path, sentNonce: sentNonce) { [decoder] data, http, _, requestId in
             guard (200..<300).contains(http.statusCode) else {
                 throw AppActorError.serverError(
                     httpStatus: http.statusCode,
@@ -699,11 +707,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     private func performRetryableRequest<T>(
         _ urlRequest: URLRequest,
         path: String,
+        sentNonce: String?,
         eTag: String? = nil,
         additionalNonRetryHandler: ((_ statusCode: Int, _ data: Data, _ requestId: String?) throws -> T?)? = nil,
         onSuccess: (_ data: Data, _ http: HTTPURLResponse, _ signatureVerified: Bool, _ requestId: String?) throws -> T
     ) async throws -> T {
         var mutableRequest = urlRequest
+        var currentNonce = sentNonce
         var lastError: Error = AppActorError.networkError(URLError(.unknown))
         var retryAfterOverride: TimeInterval?
 
@@ -717,14 +727,18 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 // Strip stale ETag on retry to avoid 304 loop
                 mutableRequest.setValue(nil, forHTTPHeaderField: "If-None-Match")
-                // Fresh nonce per attempt for unique response binding
-                mutableRequest.setValue(ResponseSignatureVerifier.generateNonce(), forHTTPHeaderField: "X-AppActor-Nonce")
+                // Fresh nonce per attempt for unique response binding (only if endpoint uses nonce)
+                if currentNonce != nil {
+                    let freshNonce = ResponseSignatureVerifier.generateNonce()
+                    mutableRequest.setValue(freshNonce, forHTTPHeaderField: "X-AppActor-Nonce")
+                    currentNonce = freshNonce
+                }
             } else if let normalized = normalizeETag(eTag) {
                 mutableRequest.setValue(normalized, forHTTPHeaderField: "If-None-Match")
             }
 
             do {
-                let (data, http, signatureVerified) = try await performRawRequest(mutableRequest, path: path)
+                let (data, http, signatureVerified) = try await performRawRequest(mutableRequest, path: path, sentNonce: currentNonce)
                 let requestId = extractRequestId(from: data)
 
                 switch http.statusCode {
