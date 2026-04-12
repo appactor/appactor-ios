@@ -101,34 +101,46 @@ actor AppActorCustomerManager {
             // forceRefresh always skips the eTag to guarantee a fresh 200.
             let lastETag = await etagManager.eTag(for: resource, forceRefresh: forceRefresh)
 
-            let result = try await client.getCustomer(appUserId: appUserId, eTag: lastETag)
+            do {
+                let result = try await client.getCustomer(appUserId: appUserId, eTag: lastETag)
 
-            switch result {
-            case .fresh(let info, let eTag, let requestId, let signatureVerified):
-                self.lastRequestId = requestId
-                await etagManager.storeFresh(info, for: resource, eTag: eTag, verified: signatureVerified)
-                return info
+                switch result {
+                case .fresh(let info, let eTag, let requestId, let signatureVerified):
+                    self.lastRequestId = requestId
+                    await etagManager.storeFresh(info, for: resource, eTag: eTag, verified: signatureVerified)
+                    return info
 
-            case .notModified(let eTag, let requestId):
-                self.lastRequestId = requestId
-                if let cached = await etagManager.handleNotModified(
-                    AppActorCustomerInfo.self, for: resource, rotatedETag: eTag
-                ) {
-                    return cached
+                case .notModified(let eTag, let requestId):
+                    self.lastRequestId = requestId
+                    if let cached = await etagManager.handleNotModified(
+                        AppActorCustomerInfo.self, for: resource, rotatedETag: eTag
+                    ) {
+                        return cached
+                    }
+                    // 304 but cache is missing/corrupt — force a fresh fetch (no eTag)
+                    let retry = try await client.getCustomer(appUserId: appUserId, eTag: nil)
+                    guard case .fresh(let info, let retryETag, _, let retryVerified) = retry else {
+                        throw AppActorError.serverError(
+                            httpStatus: 304,
+                            code: "CACHE_INCONSISTENCY",
+                            message: "Server returned 304 but local cache is unavailable",
+                            details: nil,
+                            requestId: nil
+                        )
+                    }
+                    await etagManager.storeFresh(info, for: resource, eTag: retryETag, verified: retryVerified)
+                    return info
                 }
-                // 304 but cache is missing/corrupt — force a fresh fetch (no eTag)
-                let retry = try await client.getCustomer(appUserId: appUserId, eTag: nil)
-                guard case .fresh(let info, let retryETag, _, let retryVerified) = retry else {
-                    throw AppActorError.serverError(
-                        httpStatus: 304,
-                        code: "CACHE_INCONSISTENCY",
-                        message: "Server returned 304 but local cache is unavailable",
-                        details: nil,
-                        requestId: nil
-                    )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Returns stale cached data on transient network/server errors instead of throwing.
+                if !forceRefresh,
+                   Self.shouldFallbackToCache(error),
+                   let cached = await etagManager.cached(AppActorCustomerInfo.self, for: resource) {
+                    return cached.value
                 }
-                await etagManager.storeFresh(info, for: resource, eTag: retryETag, verified: retryVerified)
-                return info
+                throw error
             }
         }
 
@@ -198,6 +210,13 @@ actor AppActorCustomerManager {
         return Set(activeIds.flatMap { productId in
             mapping["ios:\(productId)"] ?? mapping[productId] ?? []
         })
+    }
+
+    private static func shouldFallbackToCache(_ error: Error) -> Bool {
+        if let appError = error as? AppActorError {
+            return appError.isTransient
+        }
+        return error is URLError
     }
 
     private func cachedActiveEntitlementKeys(appUserId: String) async -> Set<String>? {
