@@ -11,5 +11,5 @@ Pod::Spec.new do |s|
   s.swift_version = '5.9'
 
   s.source_files = 'Sources/AppActorPlugin/**/*.swift'
-  s.dependency 'AppActor'
+  s.dependency 'AppActor', '0.0.3'
 end
