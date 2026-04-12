@@ -161,7 +161,7 @@ actor AppActorOfferingsManager {
             return
         } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
             if let entry = await etagManager.cached(AppActorOfferingsResponseDTO.self, for: .offerings) {
-                startEnrichmentTaskIfNeeded(dto: entry.value, cacheDate: entry.cachedAt, generation: gen)
+                startEnrichmentTaskIfNeeded(dto: entry.value, cacheDate: entry.cachedAt, generation: gen, verification: entry.verification)
             } else if let fallback = fallbackDTO {
                 Log.offerings.debug("Bootstrap prefetch — using bundled fallback offerings")
                 startEnrichmentTaskIfNeeded(dto: fallback, cacheDate: dateProvider(), generation: gen)
@@ -322,10 +322,10 @@ actor AppActorOfferingsManager {
                 return NetworkStagePayload(dto: nil, cacheDate: nil, verification: cachedOfferings?.verification ?? .notRequested)
             }
 
-            if cacheGeneration == generation, let dto = await etagManager.handleNotModified(
+            if cacheGeneration == generation, let result = await etagManager.handleNotModified(
                 AppActorOfferingsResponseDTO.self, for: .offerings, rotatedETag: eTag
             ) {
-                return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), verification: .notRequested)
+                return NetworkStagePayload(dto: result.value, cacheDate: dateProvider(), verification: result.verification)
             }
 
             Log.offerings.debug("Cache miss on 304, refreshing offerings")
@@ -551,7 +551,7 @@ actor AppActorOfferingsManager {
         guard let entry = await etagManager.cached(AppActorOfferingsResponseDTO.self, for: .offerings) else {
             return nil
         }
-        return await enrichAndCache(dto: entry.value, cacheDate: entry.cachedAt, context: "disk cache", generation: generation)
+        return await enrichAndCache(dto: entry.value, cacheDate: entry.cachedAt, context: "disk cache", generation: generation, verification: entry.verification)
     }
 
     /// Attempts to load offerings from the bundled fallback DTO and enrich with StoreKit products.
@@ -574,10 +574,11 @@ actor AppActorOfferingsManager {
         dto: AppActorOfferingsResponseDTO,
         cacheDate: Date,
         context: String,
-        generation: UInt64? = nil
+        generation: UInt64? = nil,
+        verification: AppActorVerificationResult = .notRequested
     ) async -> AppActorOfferings? {
         do {
-            let offerings = try await enrich(dto: dto)
+            let offerings = try await enrich(dto: dto, verification: verification)
             if generation == nil || cacheGeneration == generation {
                 cachedOfferings = offerings
                 cachedAt = cacheDate

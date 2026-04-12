@@ -174,10 +174,10 @@ actor AppActorRemoteConfigManager {
             }
 
             // No in-memory cache — try disk cache via ETagManager
-            if let dtos = await etagManager.handleNotModified(
+            if let result = await etagManager.handleNotModified(
                 [AppActorRemoteConfigItemDTO].self, for: cacheResource, rotatedETag: eTag
             ) {
-                let configs = buildPublicModel(from: dtos)
+                let configs = buildPublicModel(from: result.value)
                 cachedConfigs = configs
                 cachedAt = dateProvider()
                 Log.sdk.debug("Remote configs not modified (304), loaded from disk cache")

@@ -76,17 +76,18 @@ actor AppActorETagManager {
     // MARK: - Handle 304 Not Modified
 
     /// Handles a 304 response: atomically updates timestamp and optional rotated ETag,
-    /// then returns the cached value. Returns nil if cache is missing.
+    /// then returns the cached value with its verification status. Returns nil if cache is missing.
     func handleNotModified<T: Decodable>(
         _ type: T.Type,
         for resource: AppActorCacheResource,
         rotatedETag: String? = nil
-    ) async -> T? {
+    ) async -> (value: T, verification: AppActorVerificationResult)? {
         guard let entry = await diskStore.updateTimestampAndLoad(for: resource, rotatedETag: rotatedETag) else {
             return nil
         }
         if responseVerificationEnabled && entry.resolvedVerification == .failed { return nil }
-        return try? decoder.decode(T.self, from: entry.data)
+        guard let value = try? decoder.decode(T.self, from: entry.data) else { return nil }
+        return (value: value, verification: entry.resolvedVerification)
     }
 
     // MARK: - Read Cache
@@ -94,17 +95,11 @@ actor AppActorETagManager {
     /// Loads the cached value if available.
     ///
     /// When response verification is enabled, entries with failed verification are ignored.
-    func cached<T: Decodable>(_ type: T.Type, for resource: AppActorCacheResource) async -> (value: T, eTag: String?, cachedAt: Date)? {
+    func cached<T: Decodable>(_ type: T.Type, for resource: AppActorCacheResource) async -> (value: T, eTag: String?, cachedAt: Date, verification: AppActorVerificationResult)? {
         guard let entry = await diskStore.load(resource) else { return nil }
         if responseVerificationEnabled && entry.resolvedVerification == .failed { return nil }
         guard let value = try? decoder.decode(T.self, from: entry.data) else { return nil }
-        return (value: value, eTag: entry.eTag, cachedAt: entry.cachedAt)
-    }
-
-    /// Returns the resolved verification status for a cached resource.
-    func cachedVerification(for resource: AppActorCacheResource) async -> AppActorVerificationResult {
-        guard let entry = await diskStore.load(resource) else { return .notRequested }
-        return entry.resolvedVerification
+        return (value: value, eTag: entry.eTag, cachedAt: entry.cachedAt, verification: entry.resolvedVerification)
     }
 
     /// Returns true if the resource has a cache entry fresher than the given TTL.

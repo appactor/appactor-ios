@@ -113,11 +113,10 @@ actor AppActorCustomerManager {
 
                 case .notModified(let eTag, let requestId):
                     self.lastRequestId = requestId
-                    if let cached = await etagManager.handleNotModified(
+                    if let result = await etagManager.handleNotModified(
                         AppActorCustomerInfo.self, for: resource, rotatedETag: eTag
                     ) {
-                        let cachedVerification = await etagManager.cachedVerification(for: resource)
-                        return cached.withVerification(cachedVerification)
+                        return result.value.withVerification(result.verification)
                     }
                     // 304 but cache is missing/corrupt — force a fresh fetch (no eTag)
                     let retry = try await client.getCustomer(appUserId: appUserId, eTag: nil)
@@ -141,8 +140,7 @@ actor AppActorCustomerManager {
                 if !forceRefresh,
                    Self.shouldFallbackToCache(error),
                    let cached = await etagManager.cached(AppActorCustomerInfo.self, for: resource) {
-                    let cachedVerification = await etagManager.cachedVerification(for: resource)
-                    return cached.value.withVerification(cachedVerification)
+                    return cached.value.withVerification(cached.verification)
                 }
                 throw error
             }
