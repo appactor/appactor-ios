@@ -840,8 +840,8 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertEqual(customerInfo.entitlements.count, 1)
         XCTAssertTrue(customerInfo.hasActiveEntitlement("premium"))
 
-        // ETag from identify should NOT be sent (forceRefresh skips ETag)
-        XCTAssertNil(capturedETag, "getCustomerInfo() should skip ETag (force refresh)")
+        // ETag from identify should be sent for conditional request (304 optimization)
+        XCTAssertEqual(capturedETag, "hash_from_identify", "getCustomerInfo() should send ETag from identify for 304 optimization")
     }
 
     /// Identify should store the eTag from ETag header even when customer has empty entitlements.

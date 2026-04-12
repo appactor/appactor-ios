@@ -83,6 +83,20 @@ actor AppActorCacheDiskStore {
         return updated
     }
 
+    /// Sets `cachedAt` to `.distantPast`, preserving data and eTag for conditional requests.
+    /// This makes the cache appear stale so the next fetch goes to the server,
+    /// but still sends `If-None-Match` for a potential 304 response.
+    func resetFreshness(for resource: AppActorCacheResource) {
+        guard let entry = load(resource) else { return }
+        let stale = AppActorCacheEntry(
+            data: entry.data,
+            eTag: entry.eTag,
+            cachedAt: .distantPast,
+            responseVerified: entry.responseVerified
+        )
+        save(stale, for: resource)
+    }
+
     func clear(_ resource: AppActorCacheResource) {
         try? FileManager.default.removeItem(at: fileURL(for: resource))
     }

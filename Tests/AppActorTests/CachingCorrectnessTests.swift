@@ -197,13 +197,16 @@ final class CachingCorrectnessTests: XCTestCase {
         XCTAssertNotNil(result, "Result must be from the stale cache")
     }
 
-    /// CACH-02: CustomerManager's forceRefresh: true bypasses TTL entirely.
-    func testCACH02_forceRefreshBypassesTTL() async throws {
+    /// CACH-02: CustomerManager always makes a network request (ETag handles bandwidth).
+    /// forceRefresh: true additionally skips ETag to guarantee a fresh 200.
+    func testCACH02_alwaysNetworkWithETagOptimization() async throws {
         let customerInfo = AppActorCustomerInfo(appUserId: "user1")
 
         var networkCalls = 0
+        var receivedETags: [String?] = []
         client.getCustomerHandler = { appUserId, eTag in
             networkCalls += 1
+            receivedETags.append(eTag)
             return .fresh(
                 AppActorCustomerInfo(appUserId: appUserId),
                 eTag: "customer_hash_\(networkCalls)",
@@ -215,19 +218,21 @@ final class CachingCorrectnessTests: XCTestCase {
         let customerManager = AppActorCustomerManager(
             client: client,
             etagManager: etagManager,
-            cacheTTL: 24 * 60 * 60  // 24h TTL
+            cacheTTL: 24 * 60 * 60  // 24h TTL (used only for offline fallback)
         )
 
-        // Seed fresh cache — well within 24h TTL
+        // Seed fresh cache
         await etagManager.storeFresh(customerInfo, for: .customer(appUserId: "user1"), eTag: "initial_hash")
 
-        // forceRefresh: false — should use cache (within TTL, no network)
-        _ = try await customerManager.getCustomerInfo(appUserId: "user1", forceRefresh: false)
-        XCTAssertEqual(networkCalls, 0, "Within TTL: no network call should be made with forceRefresh: false")
+        // Normal call — always hits network, sends ETag for 304 optimization
+        _ = try await customerManager.getCustomerInfo(appUserId: "user1")
+        XCTAssertEqual(networkCalls, 1, "getCustomerInfo should always make a network request")
+        XCTAssertEqual(receivedETags[0], "initial_hash", "Should send ETag for conditional request")
 
-        // forceRefresh: true — must bypass TTL and hit network
+        // forceRefresh: true — hits network WITHOUT ETag (guarantees fresh 200)
         _ = try await customerManager.getCustomerInfo(appUserId: "user1", forceRefresh: true)
-        XCTAssertEqual(networkCalls, 1, "forceRefresh: true must bypass TTL and call network even within TTL")
+        XCTAssertEqual(networkCalls, 2, "forceRefresh should also hit network")
+        XCTAssertNil(receivedETags[1], "forceRefresh should skip ETag to guarantee fresh response")
     }
 
     // MARK: - CACH-04: Corrupt Cache File Handling Tests

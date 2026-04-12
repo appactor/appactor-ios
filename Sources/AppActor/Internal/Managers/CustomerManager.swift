@@ -59,23 +59,34 @@ actor AppActorCustomerManager {
         await etagManager.storeFresh(info, for: .customer(appUserId: appUserId), eTag: eTag, verified: verified)
     }
 
+    /// Resets the cache freshness timestamp so the next fetch goes to the server.
+    /// Preserves cached data and ETag for conditional requests (304 optimization).
+    /// Cancels any in-flight fetch to prevent stale writes after the reset.
+    func clearCache(appUserId: String) async {
+        inflight?.task.cancel()
+        inflight = nil
+        await etagManager.resetFreshness(for: .customer(appUserId: appUserId))
+    }
+
+    func clearCache() async {
+        guard let userId = currentAppUserId else { return }
+        await clearCache(appUserId: userId)
+    }
+
     // MARK: - Public API
 
     /// Fetches customer info, using conditional requests and in-flight dedup.
     ///
+    /// Always makes a network request (with `If-None-Match` ETag for 304 optimization).
+    /// Concurrent callers for the same user are coalesced into a single request.
+    ///
     /// - Parameters:
     ///   - appUserId: The user ID to fetch info for.
-    ///   - forceRefresh: If `true`, skips the conditional ETag (always fetches fresh).
+    ///   - forceRefresh: If `true`, skips the conditional ETag (always fetches fresh 200).
     /// - Returns: The latest `AppActorCustomerInfo`.
     func getCustomerInfo(appUserId: String, forceRefresh: Bool = false) async throws -> AppActorCustomerInfo {
         currentAppUserId = appUserId
         let resource = AppActorCacheResource.customer(appUserId: appUserId)
-
-        // Return fresh cache without network call
-        if !forceRefresh, await etagManager.isFresh(for: resource, ttl: cacheTTL),
-           let cached = await etagManager.cached(AppActorCustomerInfo.self, for: resource) {
-            return cached.value
-        }
 
         // Coalesce only if same userId and not a force refresh.
         if !forceRefresh, let inflight, inflight.userId == appUserId {

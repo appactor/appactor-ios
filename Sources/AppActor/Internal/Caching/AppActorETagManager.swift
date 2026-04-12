@@ -113,6 +113,13 @@ actor AppActorETagManager {
 
     // MARK: - Clear
 
+    /// Resets the freshness timestamp without deleting the cached data or ETag.
+    /// Next fetch will treat the cache as stale but still send `If-None-Match`
+    /// for a potential 304 response (bandwidth-efficient retry).
+    func resetFreshness(for resource: AppActorCacheResource) async {
+        await diskStore.resetFreshness(for: resource)
+    }
+
     /// Clears cache for a specific resource.
     func clear(_ resource: AppActorCacheResource) async {
         await diskStore.clear(resource)

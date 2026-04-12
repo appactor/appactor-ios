@@ -7,8 +7,8 @@ extension AppActor {
     /// Fetches the current customer's entitlement and subscription info from the server.
     ///
     /// Always makes a network request. Uses conditional requests (`If-None-Match` / `ETag`)
-    /// to minimize data transfer when info hasn't changed. Concurrent calls are
-    /// coalesced into a single network request.
+    /// to minimize data transfer when info hasn't changed (server returns 304).
+    /// Concurrent calls are coalesced into a single network request.
     ///
     /// - Returns: The latest `AppActorCustomerInfo`.
     /// - Throws: `AppActorError` on network, decode, or server failures.
@@ -22,11 +22,12 @@ extension AppActor {
         }
         let appUserId = storage.ensureAppUserId()
         do {
-            let info = try await manager.getCustomerInfo(appUserId: appUserId, forceRefresh: false)
+            let info = try await manager.getCustomerInfo(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             return info
         } catch let appError as AppActorError where appError.isTransient {
-            // Transient errors (network, 5xx, 429) — attempt offline fallback
+            // Clear cache timestamp so staleness timer/foreground handler retries immediately
+            await manager.clearCache(appUserId: appUserId)
             let offlineKeys = await manager.activeEntitlementKeysOffline(appUserId: appUserId)
             if let offlineInfo = offlineCustomerInfoIfIdentityMatches(
                 expectedAppUserId: appUserId,

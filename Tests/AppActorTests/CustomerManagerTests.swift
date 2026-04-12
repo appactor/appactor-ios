@@ -346,8 +346,7 @@ final class CustomerManagerTests: XCTestCase {
             .notModified(eTag: nil, requestId: "req_cond")
         }
 
-        // TTL=0 makes cache "expired" so early-return is skipped,
-        // but the conditional eTag is still sent for 304 optimization.
+        // cacheTTL=0 for offline fallback tests; getCustomerInfo always hits network.
         let manager = makeManager(cacheTTL: 0)
         _ = try await manager.getCustomerInfo(appUserId: "user_123", forceRefresh: false)
 
@@ -772,25 +771,24 @@ final class CustomerManagerTests: XCTestCase {
 
         XCTAssertEqual(callCount, 1)
 
-        // --- Assert Phase 2: Cache is fresh -> returns from cache without network ---
+        // --- Assert Phase 2: Second call always hits network (ETag for 304) ---
 
         let info2 = try await manager.getCustomerInfo(appUserId: appUserId)
 
-        XCTAssertEqual(info2, info1, "Should return identical cached CustomerInfo")
-        XCTAssertEqual(callCount, 1, "No network call -- cache is fresh within TTL")
-        XCTAssertEqual(cached1?.eTag, "smoke_hash_v1", "ETag should be unchanged")
+        XCTAssertEqual(info2, info1, "Should return identical CustomerInfo")
+        XCTAssertEqual(callCount, 2, "Every getCustomerInfo call hits network (ETag handles bandwidth)")
 
-        // --- Assert Phase 3: forceRefresh bypasses cache -> network call ---
+        // --- Assert Phase 3: forceRefresh skips ETag -> guarantees fresh 200 ---
 
         let info3 = try await manager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
         XCTAssertEqual(info3, info1, "forceRefresh should return fresh data")
-        XCTAssertEqual(callCount, 2, "forceRefresh triggers network call")
+        XCTAssertEqual(callCount, 3, "forceRefresh also hits network")
 
         // --- Assert Phase 4: offline entitlement keys from cache ---
 
         let offlineKeys = await manager.activeEntitlementKeysOffline()
         XCTAssertEqual(offlineKeys, ["premium"], "Cached customer info has 'premium' entitlement")
-        XCTAssertEqual(callCount, 2, "Offline keys use cache, no extra network call")
+        XCTAssertEqual(callCount, 3, "Offline keys use cache, no extra network call")
     }
 
     // MARK: - Offline Entitlement Keys: Stale Cache in Smoke Test
@@ -1235,5 +1233,71 @@ final class CustomerManagerTests: XCTestCase {
         XCTAssertEqual(sub?.originalTransactionId, "100000099")
         XCTAssertEqual(sub?.latestTransactionId, "200000099")
         XCTAssertEqual(sub?.activePromotionalOfferType, "FREE_TRIAL")
+    }
+
+    // MARK: - Always-network + clearCache (TTL gap fix)
+
+    func testGetCustomerInfoAlwaysHitsNetwork() async throws {
+        let info = makePremiumInfo()
+        let manager = makeManager()
+
+        // Seed cache so ETag is available
+        await manager.seedCache(info: info, eTag: "hash1", appUserId: "user_123")
+
+        client.getCustomerHandler = { _, eTag in
+            // Should receive ETag for conditional request
+            .notModified(eTag: nil, requestId: "req_1")
+        }
+
+        // Even with fresh cache, getCustomerInfo always makes a network call
+        _ = try await manager.getCustomerInfo(appUserId: "user_123")
+        XCTAssertEqual(client.getCustomerCalls.count, 1,
+                       "getCustomerInfo should always make a network request, not return from cache")
+    }
+
+    func testGetCustomerInfoSendsETagForBandwidthOptimization() async throws {
+        let info = makePremiumInfo()
+        let manager = makeManager()
+        await manager.seedCache(info: info, eTag: "cached_hash", appUserId: "user_123")
+
+        client.getCustomerHandler = { _, eTag in
+            .notModified(eTag: nil, requestId: "req_etag")
+        }
+
+        _ = try await manager.getCustomerInfo(appUserId: "user_123")
+
+        XCTAssertEqual(client.getCustomerCalls[0].eTag, "cached_hash",
+                       "Should send ETag for 304 bandwidth optimization")
+    }
+
+    func testClearCacheResetsFreshness() async throws {
+        let info = makePremiumInfo()
+        let manager = makeManager()
+        await manager.seedCache(info: info, eTag: "hash1", appUserId: "user_123")
+
+        let freshBefore = await manager.isCustomerCacheFresh(appUserId: "user_123")
+        XCTAssertTrue(freshBefore)
+
+        await manager.clearCache(appUserId: "user_123")
+
+        let freshAfter = await manager.isCustomerCacheFresh(appUserId: "user_123")
+        XCTAssertFalse(freshAfter, "clearCache should reset freshness timestamp")
+    }
+
+    func testClearCachePreservesETagForConditionalRequest() async throws {
+        let info = makePremiumInfo()
+        let manager = makeManager()
+        await manager.seedCache(info: info, eTag: "original_etag", appUserId: "user_123")
+
+        await manager.clearCache(appUserId: "user_123")
+
+        client.getCustomerHandler = { _, eTag in
+            .notModified(eTag: nil, requestId: "req_304")
+        }
+
+        _ = try await manager.getCustomerInfo(appUserId: "user_123")
+
+        XCTAssertEqual(client.getCustomerCalls[0].eTag, "original_etag",
+                       "clearCache should preserve ETag for conditional 304 requests")
     }
 }
