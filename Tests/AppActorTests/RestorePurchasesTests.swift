@@ -76,6 +76,47 @@ final class RestorePurchasesTests: XCTestCase {
         XCTAssertNotNil(info.appUserId)
     }
 
+    func testRestorePurchasesWithNoTransactionsPostsAppTransactionFallback() async throws {
+        let config = AppActorPaymentConfiguration(
+            apiKey: "pk_test_restore_app_transaction",
+            baseURL: URL(string: "https://api.test.appactor.com")!
+        )
+        let fetcher = MockStoreKitSilentSyncFetcher(
+            firstVerifiedTransactionHandler: nil,
+            appTransactionHandler: {
+                AppActorSilentSyncAppTransaction(
+                    bundleId: "com.test.app",
+                    environment: "sandbox",
+                    jwsRepresentation: "app-transaction-jws"
+                )
+            }
+        )
+        let expected = AppActorCustomerInfo(appUserId: storage.ensureAppUserId())
+        mockClient.postRestoreHandler = { request in
+            XCTAssertEqual(request.transactions.count, 0)
+            XCTAssertEqual(request.signedAppTransactionInfo, "app-transaction-jws")
+            return AppActorRestoreResult(
+                customerInfo: expected,
+                restoredCount: 0,
+                transferred: false,
+                requestId: "req_restore_app_transaction",
+                customerETag: nil,
+                signatureVerified: true
+            )
+        }
+        appactor.configureForTesting(
+            config: config,
+            client: mockClient,
+            storage: storage,
+            silentSyncFetcher: fetcher
+        )
+
+        let info = try await appactor.restorePurchases()
+
+        XCTAssertEqual(info.appUserId, expected.appUserId)
+        XCTAssertEqual(mockClient.postRestoreCalls.count, 1)
+    }
+
     func testOnCustomerInfoChangedFiresWhenCustomerInfoRefreshes() async throws {
         let config = AppActorPaymentConfiguration(
             apiKey: "pk_test_callback",
@@ -241,7 +282,8 @@ final class RestorePurchasesTests: XCTestCase {
             transactions: [
                 AppActorRestoreTransactionItem(transactionId: "100", jwsRepresentation: "jws_a"),
                 AppActorRestoreTransactionItem(transactionId: "200", jwsRepresentation: "jws_b"),
-            ]
+            ],
+            signedAppTransactionInfo: "app-transaction-jws"
         )
 
         let encoder = JSONEncoder()
@@ -250,6 +292,7 @@ final class RestorePurchasesTests: XCTestCase {
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
         XCTAssertEqual(json["appUserId"] as? String, "user_123")
+        XCTAssertEqual(json["signedAppTransactionInfo"] as? String, "app-transaction-jws")
         let txns = json["transactions"] as? [[String: Any]]
         XCTAssertEqual(txns?.count, 2)
         XCTAssertEqual(txns?[0]["transactionId"] as? String, "100")
@@ -302,7 +345,8 @@ final class RestorePurchasesTests: XCTestCase {
                 AppActorRestoreTransactionItem(transactionId: "1", jwsRepresentation: "jws1"),
                 AppActorRestoreTransactionItem(transactionId: "2", jwsRepresentation: "jws2"),
                 AppActorRestoreTransactionItem(transactionId: "3", jwsRepresentation: "jws3"),
-            ]
+            ],
+            signedAppTransactionInfo: "app-transaction-jws"
         )
 
         let result = try await mockClient.postRestore(request)
@@ -312,6 +356,7 @@ final class RestorePurchasesTests: XCTestCase {
         XCTAssertEqual(result.customerInfo.appUserId, "user_456")
         XCTAssertEqual(mockClient.postRestoreCalls.count, 1)
         XCTAssertEqual(mockClient.postRestoreCalls[0].transactions.count, 3)
+        XCTAssertEqual(mockClient.postRestoreCalls[0].signedAppTransactionInfo, "app-transaction-jws")
     }
 
     // MARK: - Mock Handler Override
@@ -333,7 +378,8 @@ final class RestorePurchasesTests: XCTestCase {
             appUserId: "user_789",
             transactions: [
                 AppActorRestoreTransactionItem(transactionId: "1", jwsRepresentation: "jws")
-            ]
+            ],
+            signedAppTransactionInfo: "app-transaction-jws"
         )
         let result = try await mockClient.postRestore(request)
 

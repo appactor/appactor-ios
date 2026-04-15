@@ -32,6 +32,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
             environment: "sandbox",
             transactionId: transactionId,
             jws: "jws_payload",
+            signedAppTransactionInfo: nil,
             appUserId: appUserId,
             productId: "com.test.monthly",
             originalTransactionId: transactionId,
@@ -75,7 +76,11 @@ final class PipelineEdgeCaseTests: XCTestCase {
         let storage = InMemoryPaymentStorage()
         storage.set("user_A", forKey: AppActorPaymentStorageKey.appUserId)
 
-        let watcher = AppActorTransactionWatcher(processor: processor, storage: storage)
+        let watcher = AppActorTransactionWatcher(
+            processor: processor,
+            storage: storage,
+            silentSyncFetcher: MockStoreKitSilentSyncFetcher()
+        )
 
         // Begin transition — watcher should buffer incoming transactions
         await watcher.beginIdentityTransition()

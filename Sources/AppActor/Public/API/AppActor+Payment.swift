@@ -107,13 +107,15 @@ extension AppActor {
         // Initialize payment pipeline
         let queueStore = AppActorAtomicJSONQueueStore()
         let processor = AppActorPaymentProcessor(store: queueStore, client: client)
+        let silentSyncFetcher = AppActorStoreKitSilentSyncFetcher()
         self.paymentQueueStore = queueStore
         self.paymentProcessor = processor
         self.transactionWatcher = AppActorTransactionWatcher(
             processor: processor,
-            storage: storage
+            storage: storage,
+            silentSyncFetcher: silentSyncFetcher
         )
-        self.storeKitSilentSyncFetcher = AppActorStoreKitSilentSyncFetcher()
+        self.storeKitSilentSyncFetcher = silentSyncFetcher
 
         // Eagerly ensure userId exists BEFORE any async tasks start.
         // Both bootstrap (identify) and ASA (attribution) need userId.

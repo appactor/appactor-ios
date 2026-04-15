@@ -81,7 +81,13 @@ final class SyncPurchasesTests: XCTestCase {
                     jwsRepresentation: "signed-jws"
                 )
             },
-            appTransactionJWSHandler: { nil }
+            appTransactionHandler: {
+                AppActorSilentSyncAppTransaction(
+                    bundleId: "com.appactor.test",
+                    environment: "production",
+                    jwsRepresentation: "app-transaction-jws"
+                )
+            }
         )
 
         mockClient.postReceiptHandler = { request in
@@ -89,6 +95,7 @@ final class SyncPurchasesTests: XCTestCase {
             XCTAssertEqual(request.transactionId, "tx_123")
             XCTAssertEqual(request.productId, "premium_lifetime")
             XCTAssertEqual(request.signedTransactionInfo, "signed-jws")
+            XCTAssertEqual(request.signedAppTransactionInfo, "app-transaction-jws")
             XCTAssertEqual(request.idempotencyKey, "apple:tx_123")
             return AppActorReceiptPostResponse(
                 status: "ok",
@@ -123,15 +130,23 @@ final class SyncPurchasesTests: XCTestCase {
         XCTAssertEqual(appactor.customerInfo.entitlements["premium"]?.isActive, true)
     }
 
-    func testSyncPurchasesFallsBackToCustomerFetchWhenNoVerifiedTransactionExists() async throws {
+    func testSyncPurchasesFallsBackToAppTransactionWhenNoVerifiedTransactionExists() async throws {
         let expectedUserId = storage.ensureAppUserId()
         let fetcher = MockStoreKitSilentSyncFetcher(
             firstVerifiedTransactionHandler: { nil },
-            appTransactionJWSHandler: { "app-transaction-jws" }
+            appTransactionHandler: {
+                AppActorSilentSyncAppTransaction(
+                    bundleId: "com.appactor.test",
+                    environment: "sandbox",
+                    jwsRepresentation: "app-transaction-jws"
+                )
+            }
         )
 
         mockClient.postReceiptHandler = { request in
             XCTAssertEqual(request.appUserId, expectedUserId)
+            XCTAssertEqual(request.bundleId, "com.appactor.test")
+            XCTAssertEqual(request.environment, "sandbox")
             XCTAssertNil(request.signedTransactionInfo)
             XCTAssertEqual(request.signedAppTransactionInfo, "app-transaction-jws")
             XCTAssertNil(request.transactionId)
@@ -167,11 +182,116 @@ final class SyncPurchasesTests: XCTestCase {
         XCTAssertEqual(info.appUserId, expectedUserId)
     }
 
+    func testSyncPurchasesReturnsSufficientCachedCustomerWhenNoStoreSyncCandidateExists() async throws {
+        let expectedUserId = storage.ensureAppUserId()
+        let etagManager = AppActorETagManager()
+        let customerManager = AppActorCustomerManager(
+            client: mockClient,
+            etagManager: etagManager
+        )
+        let cachedInfo = AppActorCustomerInfo(
+            entitlements: [:],
+            subscriptions: [:],
+            nonSubscriptions: [:],
+            appUserId: expectedUserId,
+            requestDate: "2026-04-15T10:00:00Z",
+            firstSeen: "2026-04-14T10:00:00Z",
+            lastSeen: "2026-04-15T10:00:00Z"
+        )
+        await customerManager.seedCache(info: cachedInfo, eTag: "etag_cached", appUserId: expectedUserId)
+
+        let fetcher = MockStoreKitSilentSyncFetcher(
+            firstVerifiedTransactionHandler: { nil },
+            appTransactionHandler: { nil }
+        )
+
+        appactor.configureForTesting(
+            config: AppActorPaymentConfiguration(
+                apiKey: "pk_test_sync_cached_customer",
+                baseURL: URL(string: "https://api.test.appactor.com")!
+            ),
+            client: mockClient,
+            storage: storage,
+            etagManager: etagManager,
+            customerManager: customerManager,
+            silentSyncFetcher: fetcher
+        )
+
+        let info = try await appactor.syncPurchases()
+
+        XCTAssertEqual(mockClient.postReceiptCalls.count, 0)
+        XCTAssertEqual(mockClient.getCustomerCalls.count, 0)
+        XCTAssertEqual(info, cachedInfo)
+        XCTAssertEqual(appactor.customerInfo, cachedInfo)
+    }
+
+    func testSyncPurchasesPrefersAppTransactionFallbackOverCachedCustomer() async throws {
+        let expectedUserId = storage.ensureAppUserId()
+        let etagManager = AppActorETagManager()
+        let customerManager = AppActorCustomerManager(
+            client: mockClient,
+            etagManager: etagManager
+        )
+        let cachedInfo = AppActorCustomerInfo(
+            entitlements: [:],
+            subscriptions: [:],
+            nonSubscriptions: [:],
+            appUserId: expectedUserId,
+            requestDate: "2026-04-15T10:00:00Z",
+            firstSeen: "2026-04-14T10:00:00Z",
+            lastSeen: "2026-04-15T10:00:00Z"
+        )
+        await customerManager.seedCache(info: cachedInfo, eTag: "etag_cached", appUserId: expectedUserId)
+
+        let fetcher = MockStoreKitSilentSyncFetcher(
+            firstVerifiedTransactionHandler: { nil },
+            appTransactionHandler: {
+                AppActorSilentSyncAppTransaction(
+                    bundleId: "com.appactor.test",
+                    environment: "sandbox",
+                    jwsRepresentation: "app-transaction-jws"
+                )
+            }
+        )
+        mockClient.postReceiptHandler = { request in
+            XCTAssertEqual(request.appUserId, expectedUserId)
+            XCTAssertEqual(request.bundleId, "com.appactor.test")
+            XCTAssertNil(request.signedTransactionInfo)
+            XCTAssertEqual(request.signedAppTransactionInfo, "app-transaction-jws")
+            return AppActorReceiptPostResponse(
+                status: "ok",
+                customer: AppActorCustomerDTO(entitlements: [:]),
+                requestId: "req_sync_app_transaction"
+            )
+        }
+
+        appactor.configureForTesting(
+            config: AppActorPaymentConfiguration(
+                apiKey: "pk_test_sync_cached_over_app_transaction",
+                baseURL: URL(string: "https://api.test.appactor.com")!
+            ),
+            client: mockClient,
+            storage: storage,
+            etagManager: etagManager,
+            customerManager: customerManager,
+            silentSyncFetcher: fetcher
+        )
+
+        let info = try await appactor.syncPurchases()
+
+        XCTAssertEqual(mockClient.postReceiptCalls.count, 1)
+        XCTAssertEqual(mockClient.getCustomerCalls.count, 0)
+        XCTAssertEqual(info.appUserId, expectedUserId)
+        XCTAssertNil(info.requestDate)
+        XCTAssertEqual(appactor.customerInfo.appUserId, expectedUserId)
+        XCTAssertNil(appactor.customerInfo.requestDate)
+    }
+
     func testSyncPurchasesFallsBackToCustomerFetchWhenNoStoreSyncCandidateExists() async throws {
         let expectedUserId = storage.ensureAppUserId()
         let fetcher = MockStoreKitSilentSyncFetcher(
             firstVerifiedTransactionHandler: { nil },
-            appTransactionJWSHandler: { nil }
+            appTransactionHandler: { nil }
         )
 
         mockClient.getCustomerHandler = { appUserId, _ in
@@ -214,7 +334,7 @@ final class SyncPurchasesTests: XCTestCase {
                     jwsRepresentation: "signed-jws"
                 )
             },
-            appTransactionJWSHandler: { nil }
+            appTransactionHandler: { nil }
         )
 
         mockClient.postReceiptHandler = { _ in
@@ -294,7 +414,7 @@ final class SyncPurchasesTests: XCTestCase {
                     jwsRepresentation: "signed-jws"
                 )
             },
-            appTransactionJWSHandler: { nil }
+            appTransactionHandler: { nil }
         )
 
         mockClient.postReceiptHandler = { _ in

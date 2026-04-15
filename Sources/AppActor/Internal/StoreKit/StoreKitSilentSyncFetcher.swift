@@ -12,10 +12,17 @@ struct AppActorSilentSyncTransaction: Sendable, Equatable {
 	let jwsRepresentation: String
 }
 
+/// Minimal AppTransaction snapshot used by quiet `syncPurchases()`.
+struct AppActorSilentSyncAppTransaction: Sendable, Equatable {
+	let bundleId: String
+	let environment: String
+	let jwsRepresentation: String
+}
+
 /// Abstraction for the RevenueCat-style SK2 quiet sync candidate lookup.
 protocol AppActorStoreKitSilentSyncFetcherProtocol: Sendable {
 	func firstVerifiedTransaction() async -> AppActorSilentSyncTransaction?
-	func appTransactionJWS() async -> String?
+	func appTransaction() async -> AppActorSilentSyncAppTransaction?
 }
 
 /// Default StoreKit-backed implementation used by `syncPurchases()`.
@@ -52,9 +59,30 @@ struct AppActorStoreKitSilentSyncFetcher: AppActorStoreKitSilentSyncFetcherProto
 		return nil
 	}
 
-	func appTransactionJWS() async -> String? {
+	func appTransaction() async -> AppActorSilentSyncAppTransaction? {
 		if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
-			return try? await AppTransaction.shared.jwsRepresentation
+			do {
+				let result = try await AppTransaction.shared
+				guard case let .verified(appTransaction) = result else {
+					return nil
+				}
+
+				let jws = result.jwsRepresentation
+				let jwsPayload = AppActorASATransactionSupport.decodeJWSPayload(jws)
+				let environment = AppActorASATransactionSupport.resolveEnvironment(
+					storeKitEnvironmentRaw: appTransaction.environment.rawValue,
+					jwsPayload: jwsPayload,
+					receiptFileName: Bundle.main.appStoreReceiptURL?.lastPathComponent
+				).rawValue
+
+				return AppActorSilentSyncAppTransaction(
+					bundleId: appTransaction.bundleID,
+					environment: environment,
+					jwsRepresentation: jws
+				)
+			} catch {
+				return nil
+			}
 		}
 
 		return nil

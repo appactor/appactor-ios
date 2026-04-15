@@ -9,6 +9,7 @@ actor AppActorTransactionWatcher {
 
     private let processor: AppActorPaymentProcessor
     private let storage: AppActorPaymentStorage
+    private let silentSyncFetcher: any AppActorStoreKitSilentSyncFetcherProtocol
     private var listenerTask: Task<Void, Never>?
     private var asaManager: AppActorASAManager?
     private var asaTrackInSandbox = false
@@ -28,9 +29,14 @@ actor AppActorTransactionWatcher {
 
     private var pendingBuffer: [BufferedTransaction] = []
 
-    init(processor: AppActorPaymentProcessor, storage: AppActorPaymentStorage) {
+    init(
+        processor: AppActorPaymentProcessor,
+        storage: AppActorPaymentStorage,
+        silentSyncFetcher: any AppActorStoreKitSilentSyncFetcherProtocol
+    ) {
         self.processor = processor
         self.storage = storage
+        self.silentSyncFetcher = silentSyncFetcher
     }
 
     /// Configures ASA purchase event tracking through the transaction watcher.
@@ -195,6 +201,7 @@ actor AppActorTransactionWatcher {
             for: transaction,
             jwsPayload: jwsPayload
         )
+        let appTransaction = await silentSyncFetcher.appTransaction()
 
         let item = AppActorPaymentProcessor.makePaymentQueueItem(
             from: transaction,
@@ -202,7 +209,8 @@ actor AppActorTransactionWatcher {
             source: source,
             appUserId: appUserId,
             jwsPayload: jwsPayload,
-            environment: environment
+            environment: environment,
+            signedAppTransactionInfo: appTransaction?.jwsRepresentation
         )
         await processor.enqueue(item: item, transaction: transaction)
 

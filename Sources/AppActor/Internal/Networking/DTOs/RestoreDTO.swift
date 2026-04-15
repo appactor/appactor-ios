@@ -6,6 +6,7 @@ import Foundation
 struct AppActorRestoreRequest: Encodable, Sendable {
     let appUserId: String
     let transactions: [AppActorRestoreTransactionItem]
+    let signedAppTransactionInfo: String?
 }
 
 /// A single transaction item within a bulk restore request.

@@ -154,16 +154,37 @@ public final class AppActor: ObservableObject {
               let processor = paymentProcessor,
               let client = paymentClient,
               let storage = paymentStorage,
-              let customerManager = customerManager else {
+              let customerManager = customerManager,
+              let silentSyncFetcher = storeKitSilentSyncFetcher else {
             throw AppActorError.notConfigured
         }
 
         // Step 1: Collect all verified transactions without enqueuing
+        async let silentAppTransaction = silentSyncFetcher.appTransaction()
         let collected = await watcher.collectCurrentEntitlements()
+        let restoreAppTransaction = await silentAppTransaction
 
         // Step 2: If no transactions, just refresh customer info
         if collected.isEmpty {
             let appUserId = storage.ensureAppUserId()
+            if let restoreAppTransaction {
+                let result = try await client.postRestore(
+                    AppActorRestoreRequest(
+                        appUserId: appUserId,
+                        transactions: [],
+                        signedAppTransactionInfo: restoreAppTransaction.jwsRepresentation
+                    )
+                )
+                let info = try await resolveRestoreCustomerInfo(
+                    from: result,
+                    appUserId: appUserId,
+                    hasOverflow: false,
+                    customerManager: customerManager
+                )
+                setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+                Log.sdk.info("✅ Purchases restored via AppTransaction fallback")
+                return info
+            }
             let info = try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (no transactions)")
@@ -184,7 +205,11 @@ public final class AppActor: ObservableObject {
                 jwsRepresentation: entry.jws
             )
         }
-        let request = AppActorRestoreRequest(appUserId: appUserId, transactions: items)
+        let request = AppActorRestoreRequest(
+            appUserId: appUserId,
+            transactions: items,
+            signedAppTransactionInfo: restoreAppTransaction?.jwsRepresentation
+        )
 
         do {
             // Step 4: POST bulk restore
@@ -280,7 +305,8 @@ public final class AppActor: ObservableObject {
     /// Quietly syncs StoreKit 2 purchases to the backend.
     ///
     /// This is the RevenueCat-style SK2 path: try one verified transaction first,
-    /// then fall back to an AppTransaction post before finally fetching customer info.
+    /// then fall back to an AppTransaction post before finally using sufficient
+    /// cached customer info or fetching customer info from the server.
     ///
     /// It does not scan `Transaction.currentEntitlements` and it does not call
     /// `AppStore.sync()`. For a user-initiated restore flow, use ``restorePurchases()``.
@@ -301,9 +327,15 @@ public final class AppActor: ObservableObject {
         }
 
         let appUserId = storage.ensureAppUserId()
+        async let firstVerifiedTransaction = silentSyncFetcher.firstVerifiedTransaction()
+        async let silentAppTransaction = silentSyncFetcher.appTransaction()
 
-        if let transaction = await silentSyncFetcher.firstVerifiedTransaction() {
-            let request = makeSilentSyncRequest(from: transaction, appUserId: appUserId)
+        if let transaction = await firstVerifiedTransaction {
+            let request = makeSilentSyncRequest(
+                from: transaction,
+                appUserId: appUserId,
+                appTransaction: await silentAppTransaction
+            )
             let response = try await client.postReceipt(request)
             let info = try await resolveSilentSyncCustomerInfo(
                 from: response,
@@ -314,9 +346,9 @@ public final class AppActor: ObservableObject {
             return info
         }
 
-        if let appTransactionJWS = await silentSyncFetcher.appTransactionJWS() {
+        if let appTransaction = await silentAppTransaction {
             let request = makeSilentSyncAppTransactionRequest(
-                appTransactionJWS: appTransactionJWS,
+                appTransaction: appTransaction,
                 appUserId: appUserId
             )
             let response = try await client.postReceipt(request)
@@ -329,6 +361,13 @@ public final class AppActor: ObservableObject {
             return info
         }
 
+        if let cachedInfo = await customerManager.cachedInfo(),
+           shouldReturnCachedCustomerInfoForQuietSync(cachedInfo, expectedAppUserId: appUserId) {
+            Log.customer.debug("Quiet sync: returning cached customer info after store sync candidates were exhausted")
+            setCustomerInfoIfIdentityMatches(cachedInfo, expectedAppUserId: appUserId)
+            return cachedInfo
+        }
+
         let info = try await customerManager.getCustomerInfo(appUserId: appUserId)
         setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
         return info
@@ -336,7 +375,8 @@ public final class AppActor: ObservableObject {
 
     private func makeSilentSyncRequest(
         from transaction: AppActorSilentSyncTransaction,
-        appUserId: String
+        appUserId: String,
+        appTransaction: AppActorSilentSyncAppTransaction?
     ) -> AppActorReceiptPostRequest {
         AppActorReceiptPostRequest(
             appUserId: appUserId,
@@ -345,7 +385,7 @@ public final class AppActor: ObservableObject {
             bundleId: transaction.bundleId,
             storefront: transaction.storefront,
             signedTransactionInfo: transaction.jwsRepresentation,
-            signedAppTransactionInfo: nil,
+            signedAppTransactionInfo: appTransaction?.jwsRepresentation,
             transactionId: transaction.transactionId,
             productId: transaction.productId,
             idempotencyKey: AppActorPaymentQueueItem.makeKey(transactionId: transaction.transactionId),
@@ -356,18 +396,17 @@ public final class AppActor: ObservableObject {
     }
 
     private func makeSilentSyncAppTransactionRequest(
-        appTransactionJWS: String,
+        appTransaction: AppActorSilentSyncAppTransaction,
         appUserId: String
     ) -> AppActorReceiptPostRequest {
-        let bundleId = Bundle.main.bundleIdentifier ?? "unknown"
         return AppActorReceiptPostRequest(
             appUserId: appUserId,
-            appId: bundleId,
-            environment: "production",
-            bundleId: bundleId,
+            appId: appTransaction.bundleId,
+            environment: appTransaction.environment,
+            bundleId: appTransaction.bundleId,
             storefront: nil,
             signedTransactionInfo: nil,
-            signedAppTransactionInfo: appTransactionJWS,
+            signedAppTransactionInfo: appTransaction.jwsRepresentation,
             transactionId: nil,
             productId: nil,
             idempotencyKey: nil,
@@ -375,6 +414,25 @@ public final class AppActor: ObservableObject {
             offeringId: nil,
             packageId: nil
         )
+    }
+
+    private func shouldReturnCachedCustomerInfoForQuietSync(
+        _ info: AppActorCustomerInfo,
+        expectedAppUserId: String
+    ) -> Bool {
+        guard info.appUserId == expectedAppUserId, !info.isComputedOffline else {
+            return false
+        }
+
+        if info.requestDate != nil || info.requestId != nil || info.firstSeen != nil || info.lastSeen != nil || info.managementUrl != nil {
+            return true
+        }
+
+        if !info.activeEntitlements.isEmpty || !info.subscriptions.isEmpty || !info.nonSubscriptions.isEmpty || info.tokenBalance != nil {
+            return true
+        }
+
+        return false
     }
 
     private func resolveSilentSyncCustomerInfo(

@@ -3,7 +3,7 @@ import Foundation
 
 struct MockStoreKitSilentSyncFetcher: AppActorStoreKitSilentSyncFetcherProtocol {
     var firstVerifiedTransactionHandler: (@Sendable () async -> AppActorSilentSyncTransaction?)?
-    var appTransactionJWSHandler: (@Sendable () async -> String?)?
+    var appTransactionHandler: (@Sendable () async -> AppActorSilentSyncAppTransaction?)?
 
     func firstVerifiedTransaction() async -> AppActorSilentSyncTransaction? {
         if let handler = firstVerifiedTransactionHandler {
@@ -12,8 +12,8 @@ struct MockStoreKitSilentSyncFetcher: AppActorStoreKitSilentSyncFetcherProtocol 
         return nil
     }
 
-    func appTransactionJWS() async -> String? {
-        if let handler = appTransactionJWSHandler {
+    func appTransaction() async -> AppActorSilentSyncAppTransaction? {
+        if let handler = appTransactionHandler {
             return await handler()
         }
         return nil

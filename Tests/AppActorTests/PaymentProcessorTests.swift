@@ -39,7 +39,8 @@ final class PaymentProcessorTests: XCTestCase {
         phase: AppActorPaymentQueueItem.Phase = .needsPost,
         attemptCount: Int = 0,
         firstSeenAt: Date = Date(),
-        source: AppActorPaymentQueueItem.Source = .purchase
+        source: AppActorPaymentQueueItem.Source = .purchase,
+        signedAppTransactionInfo: String? = nil
     ) -> AppActorPaymentQueueItem {
         AppActorPaymentQueueItem(
             key: key,
@@ -47,6 +48,7 @@ final class PaymentProcessorTests: XCTestCase {
             environment: "sandbox",
             transactionId: transactionId,
             jws: "jws_payload",
+            signedAppTransactionInfo: signedAppTransactionInfo,
             appUserId: "user_123",
             productId: "com.test.monthly",
             originalTransactionId: "12345",
@@ -409,7 +411,7 @@ final class PaymentProcessorTests: XCTestCase {
     // MARK: - Request Construction
 
     func testMakeRequest() {
-        let item = makeItem()
+        let item = makeItem(signedAppTransactionInfo: "app-transaction-jws")
         let request = AppActorPaymentProcessor.makeRequest(from: item)
 
         XCTAssertEqual(request.appUserId, "user_123")
@@ -418,6 +420,7 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(request.bundleId, "com.test")
         XCTAssertEqual(request.storefront, "USA")
         XCTAssertEqual(request.signedTransactionInfo, "jws_payload")
+        XCTAssertEqual(request.signedAppTransactionInfo, "app-transaction-jws")
         XCTAssertEqual(request.transactionId, "12345")
         XCTAssertEqual(request.productId, "com.test.monthly")
         XCTAssertEqual(request.idempotencyKey, "apple:12345")

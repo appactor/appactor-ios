@@ -795,6 +795,7 @@ actor AppActorPaymentProcessor {
         appUserId: String,
         jwsPayload: [String: Any]? = nil,
         environment: AppActorTransactionEnvironment? = nil,
+        signedAppTransactionInfo: String? = nil,
         offeringId: String? = nil,
         packageId: String? = nil
     ) -> AppActorPaymentQueueItem {
@@ -820,6 +821,7 @@ actor AppActorPaymentProcessor {
             environment: resolvedEnvironment,
             transactionId: transactionId,
             jws: jws,
+            signedAppTransactionInfo: signedAppTransactionInfo,
             appUserId: appUserId,
             productId: transaction.productID,
             originalTransactionId: String(transaction.originalID),
@@ -846,7 +848,7 @@ actor AppActorPaymentProcessor {
             bundleId: item.bundleId,
             storefront: item.storefront,
             signedTransactionInfo: item.jws,
-            signedAppTransactionInfo: nil,
+            signedAppTransactionInfo: item.signedAppTransactionInfo,
             transactionId: item.transactionId,
             productId: item.productId,
             idempotencyKey: item.key,

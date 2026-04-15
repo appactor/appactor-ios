@@ -120,6 +120,8 @@ extension AppActor {
         case .success(let verificationResult):
             switch verificationResult {
             case .verified(let transaction):
+                let appTransaction = await storeKitSilentSyncFetcher?.appTransaction()
+
                 // ASA purchase event tracking is handled centrally by
                 // TransactionWatcher via Transaction.updates — no manual
                 // enqueue needed here. Watcher start is kicked off in
@@ -133,6 +135,7 @@ extension AppActor {
                     jws: jws,
                     source: .purchase,
                     appUserId: purchaseAppUserId,
+                    signedAppTransactionInfo: appTransaction?.jwsRepresentation,
                     offeringId: offeringId,
                     packageId: packageId
                 )

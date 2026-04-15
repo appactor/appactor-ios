@@ -142,6 +142,7 @@ final class PaymentQueueStoreTests: XCTestCase {
             environment: "sandbox",
             transactionId: "expired_tx",
             jws: "jws_payload",
+            signedAppTransactionInfo: nil,
             appUserId: "user_123",
             productId: "com.test.monthly",
             originalTransactionId: "expired_tx",

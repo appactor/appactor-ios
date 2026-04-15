@@ -26,6 +26,9 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// The JWS-signed transaction info. Updated on re-enqueue if a newer JWS is available.
     var jws: String
 
+    /// Optional AppTransaction JWS used to enrich receipt posts with app-level metadata.
+    var signedAppTransactionInfo: String?
+
     /// The app user ID at the time of the transaction.
     let appUserId: String
 
@@ -124,6 +127,7 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Updates JWS and sources; resets dead-lettered items for a fresh retry cycle.
     mutating func mergeFrom(_ incoming: AppActorPaymentQueueItem) {
         jws = incoming.jws
+        if signedAppTransactionInfo == nil { signedAppTransactionInfo = incoming.signedAppTransactionInfo }
         sources = sources.union(incoming.sources)
         lastSeenAt = incoming.lastSeenAt
         // Prefer non-nil purchase context from the richer source (e.g. purchase flow

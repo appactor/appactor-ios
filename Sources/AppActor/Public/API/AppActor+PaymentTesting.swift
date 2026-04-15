@@ -38,13 +38,15 @@ extension AppActor {
         // Payment pipeline for testing
         let queueStore = paymentQueueStore ?? AppActorAtomicJSONQueueStore()
         let processor = AppActorPaymentProcessor(store: queueStore, client: client)
+        let storeKitFetcher = silentSyncFetcher ?? AppActorStoreKitSilentSyncFetcher()
         self.paymentQueueStore = queueStore
         self.paymentProcessor = processor
         self.transactionWatcher = AppActorTransactionWatcher(
             processor: processor,
-            storage: storage
+            storage: storage,
+            silentSyncFetcher: storeKitFetcher
         )
-        self.storeKitSilentSyncFetcher = silentSyncFetcher ?? AppActorStoreKitSilentSyncFetcher()
+        self.storeKitSilentSyncFetcher = storeKitFetcher
 
         self.asaManager = nil
 
