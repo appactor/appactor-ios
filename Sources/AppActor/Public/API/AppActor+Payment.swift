@@ -12,7 +12,7 @@ extension AppActor {
     /// Configures the AppActor Payment identity module and runs the full bootstrap sequence.
     ///
     /// Performs local setup (storage, client, managers) synchronously, then awaits
-    /// the bootstrap sequence: watcher start → identify → offerings → sweep → sync → customerInfo.
+    /// the bootstrap sequence: watcher start → identify → offerings → sweep → drain+refresh.
     /// When this method returns, the SDK is fully initialized and ready to use.
     ///
     /// ASA attribution runs independently in the background and does **not** block this call.
@@ -113,6 +113,7 @@ extension AppActor {
             processor: processor,
             storage: storage
         )
+        self.storeKitSilentSyncFetcher = AppActorStoreKitSilentSyncFetcher()
 
         // Eagerly ensure userId exists BEFORE any async tasks start.
         // Both bootstrap (identify) and ASA (attribution) need userId.

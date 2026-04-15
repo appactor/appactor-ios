@@ -86,4 +86,9 @@ extension AppActor {
         get { paymentContext.asaManager }
         set { paymentContext.asaManager = newValue }
     }
+
+    var storeKitSilentSyncFetcher: (any AppActorStoreKitSilentSyncFetcherProtocol)? {
+        get { paymentContext.storeKitSilentSyncFetcher }
+        set { paymentContext.storeKitSilentSyncFetcher = newValue }
+    }
 }

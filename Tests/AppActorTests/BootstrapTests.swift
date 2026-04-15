@@ -208,7 +208,7 @@ final class BootstrapTests: XCTestCase {
     // MARK: - BOOT-08: configure() completes all steps and swallows errors
 
     /// BOOT-08 (Part A): Proves configure() runs bootstrap steps — identify,
-    /// sweepUnfinished, and syncPurchases (which calls getCustomer internally).
+    /// sweepUnfinished, and drainReceiptQueueAndRefreshCustomer().
     func testConfigureCompletesAllBootstrapSteps() async {
         let config = AppActorPaymentConfiguration(
             apiKey: "pk_test_all_steps",
@@ -225,7 +225,7 @@ final class BootstrapTests: XCTestCase {
         XCTAssertEqual(mockClient.getOfferingsCallCount, 1,
                        "Offerings API should be warmed during bootstrap")
 
-        // Steps 4+5: syncPurchases calls drainAll + getCustomerInfo (→ getCustomer)
+        // Steps 4+5: drainReceiptQueueAndRefreshCustomer calls drainAll + getCustomerInfo (→ getCustomer)
         // The mock identify also seeds customer cache, so getCustomer may or may not
         // be called depending on cache freshness. We verify at least the user is set.
         XCTAssertNotNil(appactor.customerInfo.appUserId,
@@ -233,7 +233,7 @@ final class BootstrapTests: XCTestCase {
     }
 
     /// BOOT-08 (Part B): Proves configure() does NOT throw and SDK remains in .configured state
-    /// even when bootstrap steps (identify, offerings API warm-up, syncPurchases) fail.
+    /// even when bootstrap steps (identify, offerings API warm-up, drainReceiptQueueAndRefreshCustomer) fail.
     /// This locks the "partial-success" decision: errors are swallowed, SDK stays usable.
     func testConfigureDoesNotThrowWhenBootstrapStepsFail() async {
         mockClient.identifyHandler = { _ in

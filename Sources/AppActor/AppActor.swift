@@ -258,16 +258,15 @@ public final class AppActor: ObservableObject {
         return try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
     }
 
-    /// Silently syncs pending receipt events without scanning all transactions.
+    /// Drains the local receipt queue and refreshes customer info from the server.
     ///
-    /// **Payment mode only.** Unlike ``restorePurchases()`` which re-scans **all**
-    /// current entitlements, this only drains the existing receipt queue and refreshes
-    /// customer info from the server.
+    /// This preserves the previous AppActor `syncPurchases()` behavior and is
+    /// intentionally separate from the new RevenueCat-style quiet store sync.
     ///
     /// - Throws: ``AppActorError`` if payment mode is not configured.
     /// - Returns: The latest customer info from the server.
     @discardableResult
-    public func syncPurchases() async throws -> AppActorCustomerInfo {
+    public func drainReceiptQueueAndRefreshCustomer() async throws -> AppActorCustomerInfo {
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
         }
@@ -275,8 +274,146 @@ public final class AppActor: ObservableObject {
             throw AppActorError.notConfigured
         }
         await processor.drainAll()
-        let info = try await getCustomerInfo()
+        return try await getCustomerInfo()
+    }
+
+    /// Quietly syncs StoreKit 2 purchases to the backend.
+    ///
+    /// This is the RevenueCat-style SK2 path: try one verified transaction first,
+    /// then fall back to an AppTransaction post before finally fetching customer info.
+    ///
+    /// It does not scan `Transaction.currentEntitlements` and it does not call
+    /// `AppStore.sync()`. For a user-initiated restore flow, use ``restorePurchases()``.
+    ///
+    /// - Throws: ``AppActorError`` if payment mode is not configured or the server
+    ///   rejects the quiet sync attempt.
+    /// - Returns: The latest customer info from the server.
+    @discardableResult
+    public func syncPurchases() async throws -> AppActorCustomerInfo {
+        guard paymentLifecycle == .configured else {
+            throw AppActorError.notConfigured
+        }
+        guard let client = paymentClient,
+              let storage = paymentStorage,
+              let customerManager = customerManager,
+              let silentSyncFetcher = storeKitSilentSyncFetcher else {
+            throw AppActorError.notConfigured
+        }
+
+        let appUserId = storage.ensureAppUserId()
+
+        if let transaction = await silentSyncFetcher.firstVerifiedTransaction() {
+            let request = makeSilentSyncRequest(from: transaction, appUserId: appUserId)
+            let response = try await client.postReceipt(request)
+            let info = try await resolveSilentSyncCustomerInfo(
+                from: response,
+                appUserId: appUserId,
+                customerManager: customerManager
+            )
+            setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+            return info
+        }
+
+        if let appTransactionJWS = await silentSyncFetcher.appTransactionJWS() {
+            let request = makeSilentSyncAppTransactionRequest(
+                appTransactionJWS: appTransactionJWS,
+                appUserId: appUserId
+            )
+            let response = try await client.postReceipt(request)
+            let info = try await resolveSilentSyncCustomerInfo(
+                from: response,
+                appUserId: appUserId,
+                customerManager: customerManager
+            )
+            setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+            return info
+        }
+
+        let info = try await customerManager.getCustomerInfo(appUserId: appUserId)
+        setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
         return info
+    }
+
+    private func makeSilentSyncRequest(
+        from transaction: AppActorSilentSyncTransaction,
+        appUserId: String
+    ) -> AppActorReceiptPostRequest {
+        AppActorReceiptPostRequest(
+            appUserId: appUserId,
+            appId: transaction.bundleId,
+            environment: transaction.environment,
+            bundleId: transaction.bundleId,
+            storefront: transaction.storefront,
+            signedTransactionInfo: transaction.jwsRepresentation,
+            signedAppTransactionInfo: nil,
+            transactionId: transaction.transactionId,
+            productId: transaction.productId,
+            idempotencyKey: AppActorPaymentQueueItem.makeKey(transactionId: transaction.transactionId),
+            originalTransactionId: transaction.originalTransactionId,
+            offeringId: nil,
+            packageId: nil
+        )
+    }
+
+    private func makeSilentSyncAppTransactionRequest(
+        appTransactionJWS: String,
+        appUserId: String
+    ) -> AppActorReceiptPostRequest {
+        let bundleId = Bundle.main.bundleIdentifier ?? "unknown"
+        return AppActorReceiptPostRequest(
+            appUserId: appUserId,
+            appId: bundleId,
+            environment: "production",
+            bundleId: bundleId,
+            storefront: nil,
+            signedTransactionInfo: nil,
+            signedAppTransactionInfo: appTransactionJWS,
+            transactionId: nil,
+            productId: nil,
+            idempotencyKey: nil,
+            originalTransactionId: nil,
+            offeringId: nil,
+            packageId: nil
+        )
+    }
+
+    private func resolveSilentSyncCustomerInfo(
+        from response: AppActorReceiptPostResponse,
+        appUserId: String,
+        customerManager: AppActorCustomerManager
+    ) async throws -> AppActorCustomerInfo {
+        switch response.status {
+        case "ok":
+            if let customer = response.customer {
+                let info = AppActorCustomerInfo(dto: customer, appUserId: appUserId, requestDate: nil)
+                await customerManager.seedCache(info: info, eTag: nil, appUserId: appUserId)
+                return info
+            }
+
+            let info = try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
+            return info
+
+        case "retryable_error":
+            throw AppActorError.serverError(
+                httpStatus: 503,
+                code: response.error?.code ?? "QUIET_SYNC_RETRYABLE",
+                message: response.error?.message ?? "Store sync temporarily failed. Retry again shortly.",
+                details: nil,
+                requestId: response.requestId,
+                retryAfterSeconds: response.retryAfterSeconds
+            )
+
+        case "permanent_error":
+            throw AppActorError.clientError(
+                kind: .receiptPostFailed,
+                code: response.error?.code,
+                message: response.error?.message ?? "Server permanently rejected the quiet sync receipt",
+                requestId: response.requestId
+            )
+
+        default:
+            throw AppActorError.receiptPostFailed("Unexpected quiet sync response status: \(response.status)")
+        }
     }
 
 }
@@ -346,6 +483,7 @@ final class AppActorPaymentContext {
     var experimentManager: AppActorExperimentManager?
     var remoteConfigManager: AppActorRemoteConfigManager?
     var asaManager: AppActorASAManager?
+    var storeKitSilentSyncFetcher: (any AppActorStoreKitSilentSyncFetcherProtocol)?
 
     var offerings: AppActorOfferings?
     var remoteConfigs: AppActorRemoteConfigs?

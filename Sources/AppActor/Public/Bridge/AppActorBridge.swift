@@ -269,7 +269,7 @@ public final class AppActorBridge {
         }
     }
 
-    /// Syncs purchases from previous sessions.
+    /// Drains the local receipt queue and refreshes customer info.
     ///
     /// - Parameters:
     ///   - onSuccess: Called with the updated customer info on success.
@@ -279,7 +279,35 @@ public final class AppActorBridge {
         onError: ((AppActorBridgeError) -> Void)? = nil
     ) {
         launchAsync(onSuccess: onSuccess, onError: onError) {
+            try await AppActor.shared.drainReceiptQueueAndRefreshCustomer()
+        }
+    }
+
+    /// Quietly syncs StoreKit purchases to the backend.
+    ///
+    /// - Parameters:
+    ///   - onSuccess: Called with the updated customer info on success.
+    ///   - onError: Called with an ``AppActorBridgeError`` on failure.
+    public func quietSyncPurchases(
+        onSuccess: ((AppActorCustomerInfo) -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: onSuccess, onError: onError) {
             try await AppActor.shared.syncPurchases()
+        }
+    }
+
+    /// Drains the local receipt queue and refreshes customer info.
+    ///
+    /// - Parameters:
+    ///   - onSuccess: Called with the updated customer info on success.
+    ///   - onError: Called with an ``AppActorBridgeError`` on failure.
+    public func drainReceiptQueueAndRefreshCustomer(
+        onSuccess: ((AppActorCustomerInfo) -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: onSuccess, onError: onError) {
+            try await AppActor.shared.drainReceiptQueueAndRefreshCustomer()
         }
     }
 

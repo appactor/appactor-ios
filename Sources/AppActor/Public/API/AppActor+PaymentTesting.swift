@@ -14,7 +14,8 @@ extension AppActor {
         customerManager: AppActorCustomerManager? = nil,
         remoteConfigManager: AppActorRemoteConfigManager? = nil,
         experimentManager: AppActorExperimentManager? = nil,
-        paymentQueueStore: AppActorPaymentQueueStoreProtocol? = nil
+        paymentQueueStore: AppActorPaymentQueueStoreProtocol? = nil,
+        silentSyncFetcher: (any AppActorStoreKitSilentSyncFetcherProtocol)? = nil
     ) {
         paymentLifecycle = .configured
         let etagManager = etagManager ?? AppActorETagManager()
@@ -43,6 +44,7 @@ extension AppActor {
             processor: processor,
             storage: storage
         )
+        self.storeKitSilentSyncFetcher = silentSyncFetcher ?? AppActorStoreKitSilentSyncFetcher()
 
         self.asaManager = nil
 

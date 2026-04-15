@@ -42,7 +42,7 @@ extension AppActor {
             return
         }
 
-        // ── Phase 2: Bootstrap (sequential: identify → offerings(api) → sweep → sync → refresh) ──
+        // ── Phase 2: Bootstrap (sequential: identify → offerings(api) → sweep → drain+refresh) ──
         await self.runBootstrap(verboseBootstrap: verboseBootstrap)
 
         // If bootstrap was cancelled mid-way, revert lifecycle so configure() can be retried.
@@ -216,12 +216,12 @@ extension AppActor {
         logStep("sweepUnfinished")
         guard !Task.isCancelled else { return }
 
-        // 4+5. Sync pending receipts and refresh customer info in one step.
-        // syncPurchases() drains the queue AND fetches fresh customerInfo,
-        // so a separate Step 5 customerInfo fetch is redundant.
-        // If syncPurchases fails, fall back to a standalone customerInfo refresh.
+        // 4+5. Drain pending receipts and refresh customer info in one step.
+        // drainReceiptQueueAndRefreshCustomer() preserves the previous preload
+        // behavior. The new syncPurchases() is reserved for explicit quiet SK2 sync.
+        // If the drain+refresh step fails, fall back to a standalone customerInfo refresh.
         do {
-            let info = try await self.syncPurchases()
+            let info = try await self.drainReceiptQueueAndRefreshCustomer()
             if verboseBootstrap {
                 let activeKeys = info.activeEntitlementKeys
                 Log.sdk.verbose("Bootstrap sync+refresh OK — active entitlements: \(activeKeys.isEmpty ? "none" : activeKeys.joined(separator: ", "))")
@@ -229,7 +229,7 @@ extension AppActor {
         } catch is CancellationError {
             return
         } catch {
-            Log.sdk.warn("Bootstrap syncPurchases failed: \(error.localizedDescription)")
+            Log.sdk.warn("Bootstrap drainReceiptQueueAndRefreshCustomer failed: \(error.localizedDescription)")
             do {
                 let fresh = try await self.getCustomerInfo()
                 if verboseBootstrap {
@@ -242,7 +242,7 @@ extension AppActor {
                 Log.sdk.warn("Bootstrap customer refresh failed: \(error.localizedDescription)")
             }
         }
-        logStep("syncPurchases+customerInfo")
+        logStep("drainReceiptQueueAndRefreshCustomer")
 
         let totalMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
         Log.sdk.info("  ⏱ bootstrap: \(totalMs) ms")

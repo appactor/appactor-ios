@@ -846,6 +846,7 @@ actor AppActorPaymentProcessor {
             bundleId: item.bundleId,
             storefront: item.storefront,
             signedTransactionInfo: item.jws,
+            signedAppTransactionInfo: nil,
             transactionId: item.transactionId,
             productId: item.productId,
             idempotencyKey: item.key,

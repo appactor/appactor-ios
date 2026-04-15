@@ -8,10 +8,11 @@ struct AppActorReceiptPostRequest: Encodable, Sendable {
     let environment: String
     let bundleId: String
     let storefront: String?
-    let signedTransactionInfo: String
-    let transactionId: String
-    let productId: String
-    let idempotencyKey: String
+    let signedTransactionInfo: String?
+    let signedAppTransactionInfo: String?
+    let transactionId: String?
+    let productId: String?
+    let idempotencyKey: String?
     let originalTransactionId: String?
     /// The offering that contained the purchased package (analytics attribution).
     let offeringId: String?

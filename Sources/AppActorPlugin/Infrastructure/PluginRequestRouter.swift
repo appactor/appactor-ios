@@ -12,6 +12,8 @@ enum AppActorPluginRequestRouter {
             PurchasePackageRequest.self,
             RestorePurchasesRequest.self,
             SyncPurchasesRequest.self,
+            QuietSyncPurchasesRequest.self,
+            DrainReceiptQueueAndRefreshCustomerRequest.self,
             GetCustomerInfoRequest.self,
             ActiveEntitlementsOfflineRequest.self,
             GetOfferingsRequest.self,
