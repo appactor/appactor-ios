@@ -13,13 +13,14 @@ extension AppActor {
     ///
     /// Performs local setup (storage, client, managers) synchronously, then awaits
     /// the bootstrap sequence: watcher start → identify → offerings → sweep → drain+refresh.
-    /// When this method returns, the SDK is fully initialized and ready to use.
+    /// Identity-dependent APIs still apply an internal server-identity readiness
+    /// barrier when bootstrap identity establishment must be retried later.
     ///
     /// ASA attribution runs independently in the background and does **not** block this call.
     ///
     /// ```swift
     /// await AppActor.configure(apiKey: "pk_YOUR_PUBLIC_API_KEY")
-    /// // SDK is fully ready here
+    /// // Startup is complete here. Identity-dependent APIs retry identify internally if needed.
     /// ```
     public static func configure(
         apiKey: String,
@@ -174,40 +175,7 @@ extension AppActor {
             self.foregroundTask?.cancel()
             self.foregroundTask = Task { [weak self] in
                 guard let self else { return }
-                // Retry identify if a previous logOut() failed to re-identify
-                if let storage = self.paymentStorage, storage.needsReidentify {
-                    do {
-                        _ = try await self.identify()
-                        storage.setNeedsReidentify(false)
-                        Log.identity.info("Foreground: re-identify succeeded after previous failure")
-                    } catch {
-                        Log.identity.debug("Foreground: re-identify retry failed: \(error.localizedDescription)")
-                    }
-                }
-                guard !Task.isCancelled else { return }
-                // Flush pending ASA events on foreground
-                if let asaManager = self.asaManager {
-                    await asaManager.flushPendingUserIdChange()
-                    guard !Task.isCancelled else { return }
-                    await asaManager.flushPendingPurchaseEvents()
-                }
-                guard !Task.isCancelled else { return }
-                // Always drain pending receipts on foreground
-                if let processor = self.paymentProcessor {
-                    await processor.drainAll()
-                }
-                guard !Task.isCancelled else { return }
-                // Only refresh customer info if cache is stale (>5 min)
-                if let manager = self.customerManager,
-                   let userId = self.paymentStorage?.currentAppUserId {
-                    let fresh = await manager.isCustomerCacheFresh(appUserId: userId)
-                    if !fresh {
-                        _ = try? await self.getCustomerInfo()
-                        Log.sdk.debug("Foreground: customer cache stale — refreshed")
-                    } else {
-                        Log.sdk.debug("Foreground: customer cache fresh — skipped refresh")
-                    }
-                }
+                await self.runForegroundMaintenance()
             }
             Log.sdk.debug("App entering foreground — offerings TTL set to 5m, draining receipts")
 
@@ -233,6 +201,56 @@ extension AppActor {
 
         lifecycleObservers = [bgObserver, fgObserver]
         #endif
+    }
+
+    /// Runs the foreground maintenance sequence shared by lifecycle notifications
+    /// and tests that need to validate foreground behavior without UIKit hooks.
+    func runForegroundMaintenance() async {
+        // Retry server identity establishment before any foreground work that depends on it.
+        if let storage = self.paymentStorage,
+           storage.needsReidentify || storage.serverUserId == nil {
+            do {
+                _ = try await self.ensureServerIdentityReady()
+                Log.identity.info("Foreground: server identity ready")
+            } catch {
+                Log.identity.debug("Foreground: ensureServerIdentityReady failed: \(error.localizedDescription)")
+            }
+        }
+        guard !Task.isCancelled else { return }
+
+        // Retry deferred ASA attribution once identity becomes ready, then flush
+        // any queued follow-up events that depend on the attributed identity.
+        if let asaManager = self.asaManager {
+            do {
+                _ = try await self.ensureServerIdentityReady()
+                await asaManager.flushPendingUserIdChange()
+                guard !Task.isCancelled else { return }
+                await asaManager.performAttributionIfNeeded()
+                guard !Task.isCancelled else { return }
+                await asaManager.flushPendingPurchaseEvents()
+            } catch {
+                Log.attribution.debug("Foreground: server identity not ready, skipping ASA work: \(error.localizedDescription)")
+            }
+        }
+        guard !Task.isCancelled else { return }
+
+        // Always drain pending receipts on foreground
+        if let processor = self.paymentProcessor {
+            await processor.drainAll()
+        }
+        guard !Task.isCancelled else { return }
+
+        // Only refresh customer info if cache is stale (>5 min)
+        if let manager = self.customerManager,
+           let userId = self.paymentStorage?.currentAppUserId {
+            let fresh = await manager.isCustomerCacheFresh(appUserId: userId)
+            if !fresh {
+                _ = try? await self.getCustomerInfo()
+                Log.sdk.debug("Foreground: customer cache stale — refreshed")
+            } else {
+                Log.sdk.debug("Foreground: customer cache fresh — skipped refresh")
+            }
+        }
     }
 
     // MARK: - Identify
@@ -285,6 +303,8 @@ extension AppActor {
         if result.appUserId != currentId {
             storage.setAppUserId(result.appUserId)
         }
+        storage.setServerUserId(result.serverUserId)
+        storage.setNeedsReidentify(false)
 
         // Seed customer cache with the snapshot from identify
         // so that subsequent calls can benefit from ETag/304 responses
@@ -303,6 +323,46 @@ extension AppActor {
         Log.identity.debug("Identified as \(String(result.appUserId.prefix(8)))…")
         Log.identity.info("👤 Identity established")
         return verifiedInfo
+    }
+
+    /// Ensures the current local `app_user_id` has been confirmed by the backend.
+    /// Concurrent callers coalesce onto a single in-flight `identify()` task.
+    func ensureServerIdentityReady() async throws -> String {
+        guard paymentLifecycle == .configured else {
+            throw AppActorError.notConfigured
+        }
+        guard let storage = paymentStorage else {
+            throw AppActorError.notConfigured
+        }
+
+        if let appUserId = storage.currentAppUserId,
+           storage.serverUserId != nil,
+           !storage.needsReidentify {
+            return appUserId
+        }
+
+        if let task = identityReadyTask {
+            return try await task.value
+        }
+
+        let task = Task<String, Error> { @MainActor [weak self] in
+            guard let self else { throw AppActorError.notConfigured }
+            let info = try await self.identify()
+            guard let readyAppUserId = self.paymentStorage?.currentAppUserId ?? info.appUserId else {
+                throw AppActorError.notConfigured
+            }
+            return readyAppUserId
+        }
+        identityReadyTask = task
+
+        do {
+            let appUserId = try await task.value
+            identityReadyTask = nil
+            return appUserId
+        } catch {
+            identityReadyTask = nil
+            throw error
+        }
     }
 
     // MARK: - Login
@@ -325,15 +385,7 @@ extension AppActor {
 
         try AppActorPaymentValidation.validateAppUserId(newAppUserId)
 
-        // Ensure we have a current identity first
-        let currentId: String
-        if let existing = storage.currentAppUserId {
-            currentId = existing
-        } else {
-            // No identity yet — identify first to establish one
-            let identified = try await identify()
-            currentId = identified.appUserId ?? storage.ensureAppUserId()
-        }
+        let currentId = try await ensureServerIdentityReady()
 
         let request = AppActorLoginRequest(
             currentAppUserId: currentId,
@@ -557,14 +609,17 @@ extension AppActor {
         foregroundTask?.cancel()
         stalenessTimerTask?.cancel()
         offeringsPrefetchTask?.cancel()
+        identityReadyTask?.cancel()
         await asaTask?.value
         await foregroundTask?.value
         await stalenessTimerTask?.value
         await offeringsPrefetchTask?.value
+        _ = try? await identityReadyTask?.value
         asaTask = nil
         foregroundTask = nil
         stalenessTimerTask = nil
         offeringsPrefetchTask = nil
+        identityReadyTask = nil
 
         // Stop transaction watcher and payment processor explicitly.
         // The supervisor started them but stop() requires deterministic await.

@@ -24,20 +24,20 @@ public final class AppActorBridge {
 
     // MARK: - Synchronous Accessors (nonisolated)
 
-    /// Whether the SDK has been configured.
-    public nonisolated var isConfigured: Bool {
-        AppActorPaymentContext._lifecycle == .configured
+    /// Whether the SDK is ready for identity-dependent network APIs.
+    public nonisolated var isReady: Bool {
+        AppActorPaymentContext._isReady
     }
 
-    /// The current app user ID, or `nil` if not configured.
+    /// The current app user ID, or `nil` if the SDK is not configured.
     public nonisolated var appUserId: String? {
-        guard isConfigured else { return nil }
+        guard AppActorPaymentContext._lifecycle == .configured else { return nil }
         return AppActor.shared.appUserId
     }
 
     /// Whether the current user is anonymous.
     public nonisolated var isAnonymous: Bool {
-        guard isConfigured else { return true }
+        guard AppActorPaymentContext._lifecycle == .configured else { return true }
         return AppActor.shared.isAnonymous
     }
 
@@ -86,7 +86,8 @@ public final class AppActorBridge {
     /// - Parameters:
     ///   - apiKey: Your AppActor API key (e.g. `"pk_YOUR_PUBLIC_API_KEY"`).
     ///   - options: Optional configuration options.
-    ///   - onComplete: Called on the main thread when configuration finishes.
+    ///   - onComplete: Called on the main thread when configuration finishes. Check `isReady`
+    ///     if you need a confirmed server identity immediately after startup.
     ///   - onError: Called with an ``AppActorBridgeError`` when validation fails.
     public func configure(
         apiKey: String,

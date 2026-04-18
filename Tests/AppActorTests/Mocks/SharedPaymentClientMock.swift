@@ -74,6 +74,7 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
         }
         return AppActorIdentifyResult(
             appUserId: request.appUserId,
+            serverUserId: "server-uuid-123",
             customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
             customerETag: "mock_hash",
             requestId: "req_mock_identify",

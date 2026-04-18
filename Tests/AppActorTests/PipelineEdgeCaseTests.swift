@@ -184,6 +184,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
         mockClient.identifyHandler = { _ in
             AppActorIdentifyResult(
                 appUserId: "test_user",
+                serverUserId: "server-test-user",
                 customerInfo: .empty,
                 customerETag: nil,
                 requestId: "req_id",

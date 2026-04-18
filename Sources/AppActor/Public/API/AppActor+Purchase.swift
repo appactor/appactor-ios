@@ -284,7 +284,10 @@ extension AppActor {
 
     var isBootstrapComplete: Bool {
         get { paymentContext.isBootstrapComplete }
-        set { paymentContext.isBootstrapComplete = newValue }
+        set {
+            paymentContext.isBootstrapComplete = newValue
+            AppActorPaymentContext._isBootstrapComplete = newValue
+        }
     }
 
     var purchaseIntentWatcher: Any? {

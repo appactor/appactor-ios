@@ -51,7 +51,10 @@ extension AppActor {
         self.asaManager = nil
 
         // Tests skip bootstrap, so mark the generated local user as confirmed.
-        Task { await processor.confirmIdentity(appUserId: storage.ensureAppUserId()) }
+        let seededAppUserId = storage.ensureAppUserId()
+        storage.setServerUserId("test-server-user-id")
+        storage.setNeedsReidentify(false)
+        Task { await processor.confirmIdentity(appUserId: seededAppUserId) }
         self.isBootstrapComplete = true
 
         // Watcher setup and bootstrap handled by runStartupSequence().

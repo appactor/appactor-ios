@@ -27,7 +27,7 @@ enum AppActorPluginRequestRouter {
             ResetRequest.self,
             PresentOfferCodeRequest.self,
             SetLogLevelRequest.self,
-            IsConfiguredRequest.self,
+            IsReadyRequest.self,
             GetSDKVersionRequest.self,
             GetAppUserIdRequest.self,
             GetIsAnonymousRequest.self,

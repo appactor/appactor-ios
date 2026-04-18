@@ -22,6 +22,7 @@ final class RetrySimulatingMockClient: AppActorPaymentClientProtocol, @unchecked
     func identify(_ request: AppActorIdentifyRequest) async throws -> AppActorIdentifyResult {
         AppActorIdentifyResult(
             appUserId: request.appUserId,
+            serverUserId: "server-uuid-retry-mock",
             customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
             customerETag: nil,
             requestId: nil,

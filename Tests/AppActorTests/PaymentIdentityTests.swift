@@ -76,6 +76,7 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { _ in
             AppActorIdentifyResult(
                 appUserId: "server_normalized_id",
+                serverUserId: "server-normalized-uuid",
                 customerInfo: AppActorCustomerInfo(appUserId: "server_normalized_id"),
                 customerETag: nil,
                 requestId: "req_1",
@@ -94,6 +95,7 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server-cache-uuid",
                 customerInfo: AppActorCustomerInfo(
                     entitlements: ["premium": entitlement],
                     appUserId: request.appUserId
@@ -134,6 +136,7 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server-request-tracking-uuid",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: nil,
                 requestId: "req_tracked_123",
@@ -341,6 +344,7 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server-logout-clear-uuid",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: nil,
                 requestId: "req_id",
@@ -371,6 +375,7 @@ final class PaymentIdentityTests: XCTestCase {
             }
             return AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server-logout-failure-uuid",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: nil,
                 requestId: nil,
@@ -871,6 +876,7 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server-identify-etag-uuid",
                 customerInfo: AppActorCustomerInfo(
                     entitlements: ["premium": entitlement],
                     appUserId: request.appUserId
@@ -910,6 +916,7 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server-empty-customer-uuid",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: "empty_customer_hash",
                 requestId: "req_empty",

@@ -109,6 +109,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             let responseETag = self.normalizeETag(http.value(forHTTPHeaderField: "ETag"))
             return AppActorIdentifyResult(
                 appUserId: dto.appUserId,
+                serverUserId: dto.serverUserId,
                 customerInfo: customerInfo,
                 customerETag: responseETag,
                 requestId: dto.requestId ?? requestId,

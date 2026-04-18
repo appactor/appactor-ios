@@ -495,6 +495,7 @@ final class CacheIdentityChangeTests: XCTestCase {
         client.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server-uuid-identify-logout",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: "cust_etag_anon",
                 requestId: "req_identify_anon",

@@ -114,8 +114,11 @@ extension AppActor {
     private func revertLifecycleIfCancelled() async {
         guard paymentLifecycle == .configured else { return }
         offeringsPrefetchTask?.cancel()
+        identityReadyTask?.cancel()
         await offeringsPrefetchTask?.value
+        _ = try? await identityReadyTask?.value
         offeringsPrefetchTask = nil
+        identityReadyTask = nil
         await transactionWatcher?.stop()
         await paymentProcessor?.stop()
         transactionWatcher = nil

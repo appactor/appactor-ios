@@ -23,14 +23,14 @@ AppActor handles in-app purchases, subscriptions, and entitlements so you can fo
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/appactor/appactor-ios.git", from: "0.0.6")
+    .package(url: "https://github.com/appactor/appactor-ios.git", from: "0.0.7")
 ]
 ```
 
 ### CocoaPods
 
 ```ruby
-pod 'AppActor', '~> 0.0.6'
+pod 'AppActor', '~> 0.0.7'
 ```
 
 ## Quick Start

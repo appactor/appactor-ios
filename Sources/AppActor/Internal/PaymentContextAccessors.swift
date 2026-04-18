@@ -82,6 +82,11 @@ extension AppActor {
         set { paymentContext.offeringsPrefetchTask = newValue }
     }
 
+    var identityReadyTask: Task<String, Error>? {
+        get { paymentContext.identityReadyTask }
+        set { paymentContext.identityReadyTask = newValue }
+    }
+
     var asaManager: AppActorASAManager? {
         get { paymentContext.asaManager }
         set { paymentContext.asaManager = newValue }

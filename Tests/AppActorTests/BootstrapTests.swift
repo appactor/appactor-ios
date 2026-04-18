@@ -204,6 +204,7 @@ final class BootstrapTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server-current-user",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: "identify_hash",
                 requestId: "req_identify_current",
@@ -330,6 +331,7 @@ final class BootstrapTests: XCTestCase {
             userIdAtIdentifyTime = capturedStorage.currentAppUserId
             return AppActorIdentifyResult(
                 appUserId: request.appUserId,
+                serverUserId: "server_boot01",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: nil,
                 requestId: "req_boot01",

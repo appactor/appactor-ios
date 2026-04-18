@@ -10,6 +10,7 @@ extension AppActor {
     ///
     /// Must be called **after** `configure()` has returned. Calling before
     /// configuration or during bootstrap throws ``AppActorError/notConfigured``.
+    /// Attribution waits for a confirmed server identity before posting.
     /// Calling more than once is a no-op.
     ///
     /// The attribution task runs in the background and does **not** block this call.
@@ -52,9 +53,14 @@ extension AppActor {
                 await watcher.configureASATracking(manager: manager, trackInSandbox: options.trackInSandbox)
             }
             let asaStart = CFAbsoluteTimeGetCurrent()
-            await manager.flushPendingUserIdChange()
-            await manager.performAttributionIfNeeded()
-            await manager.flushPendingPurchaseEvents()
+            do {
+                _ = try await self.ensureServerIdentityReady()
+                await manager.flushPendingUserIdChange()
+                await manager.performAttributionIfNeeded()
+                await manager.flushPendingPurchaseEvents()
+            } catch {
+                Log.attribution.warn("ASA deferred until server identity is ready: \(error.localizedDescription)")
+            }
             let elapsed = Int((CFAbsoluteTimeGetCurrent() - asaStart) * 1000)
             Log.attribution.info("  ⏱ ASA: \(elapsed) ms")
         }

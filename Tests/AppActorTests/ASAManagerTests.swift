@@ -39,6 +39,8 @@ final class ASAAttributionTests: XCTestCase {
     private func makeManager(debugMode: Bool = false) -> AppActorASAManager {
         // Set app user ID (required for attribution)
         storage.set("user_123", forKey: AppActorPaymentStorageKey.appUserId)
+        storage.setServerUserId("server_user_123")
+        storage.setNeedsReidentify(false)
         return AppActorASAManager(
             client: client,
             storage: storage,
@@ -223,20 +225,21 @@ final class ASAAttributionTests: XCTestCase {
         XCTAssertFalse(storage.asaAttributionCompleted, "Should NOT mark completed when all retries fail")
     }
 
-    // MARK: - No User ID (auto-generated)
+    // MARK: - Missing Confirmed Identity
 
-    func testAttributionAutoGeneratesUserIdWhenMissing() async {
+    func testAttributionDefersWhenConfirmedIdentityMissing() async {
         let manager = AppActorASAManager(
             client: client, storage: storage, eventStore: eventStore,
             tokenProvider: tokenProvider, options: makeDefaultOptions(),
             sdkVersion: "1.0.0"
         )
-        // storage has no appUserId set — ensureAppUserId() will generate one
+        // storage has no confirmed identity — attribution should defer.
 
         let result = await manager.performAttributionIfNeeded()
-        XCTAssertNotNil(result, "Should proceed with auto-generated userId")
-        XCTAssertNotNil(storage.currentAppUserId, "ensureAppUserId should have generated an anon ID")
-        XCTAssertEqual(client.attributionCalls.count, 1, "Should POST attribution with generated userId")
+        XCTAssertNil(result, "Should defer until a confirmed server identity exists")
+        XCTAssertNil(storage.currentAppUserId, "ASA should not generate a local-only identity anymore")
+        XCTAssertEqual(client.attributionCalls.count, 0, "Should not POST attribution without a confirmed identity")
+        XCTAssertFalse(storage.asaAttributionCompleted, "Deferred attribution must remain retryable")
     }
 }
 
@@ -1003,6 +1006,8 @@ final class ASATokenOnlyAttemptTests: XCTestCase {
         client = MockPaymentClient()
         storage = InMemoryPaymentStorage()
         storage.set("user_123", forKey: AppActorPaymentStorageKey.appUserId)
+        storage.setServerUserId("server_user_123")
+        storage.setNeedsReidentify(false)
         tokenProvider = MockASATokenProvider()
         // Make Apple API fail so we get token-only path
         tokenProvider.appleAttributionResult = .error(NSError(domain: "test", code: 500, userInfo: nil))

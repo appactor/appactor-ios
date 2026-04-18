@@ -68,6 +68,7 @@ struct AppActorLogoutRequest: Encodable {
 /// The `customerETag` comes from the `ETag` response header.
 struct AppActorIdentifyResult: Sendable {
     let appUserId: String
+    let serverUserId: String?
     let customerInfo: AppActorCustomerInfo
     let customerETag: String?
     let requestId: String?
@@ -85,14 +86,15 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
     let requestDateMs: Int64?
     let requestId: String?
     let appUserId: String
+    let serverUserId: String?
     let customer: AppActorCustomerDTO
 
     private enum CodingKeys: String, CodingKey {
-        case requestDate, requestDateMs, requestId, appUserId, customer, data
+        case requestDate, requestDateMs, requestId, appUserId, serverUserId, customer, data
     }
 
     private enum DataCodingKeys: String, CodingKey {
-        case appUserId, customer, user, requestDate, requestDateMs, requestId
+        case appUserId, serverUserId, customer, user, requestDate, requestDateMs, requestId
     }
 
     init(from decoder: Decoder) throws {
@@ -104,6 +106,7 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
             self.requestDateMs = try? container.decodeIfPresent(Int64.self, forKey: .requestDateMs)
             self.requestId = try? container.decodeIfPresent(String.self, forKey: .requestId)
             self.appUserId = appUserId
+            self.serverUserId = try? container.decodeIfPresent(String.self, forKey: .serverUserId)
             self.customer = customer
             return
         }
@@ -118,6 +121,7 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
             self.requestId = (try? container.decodeIfPresent(String.self, forKey: .requestId))
                 ?? (try? data.decodeIfPresent(String.self, forKey: .requestId))
             self.appUserId = appUserId
+            self.serverUserId = try? data.decodeIfPresent(String.self, forKey: .serverUserId)
             self.customer = customer
             return
         }
@@ -130,6 +134,7 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
         self.requestId = (try? container.decodeIfPresent(String.self, forKey: .requestId))
             ?? (try? data.decodeIfPresent(String.self, forKey: .requestId))
         self.appUserId = user.appUserId
+        self.serverUserId = try? data.decodeIfPresent(String.self, forKey: .serverUserId)
         self.customer = user.customerDTO
     }
 }

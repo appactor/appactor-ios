@@ -97,8 +97,8 @@ final class BootstrapLifecycleTests: XCTestCase {
         XCTAssertEqual(validationError?.errorDescription, "[AppActor] Validation: apiKey must not be blank.")
         XCTAssertEqual(appactor.paymentLifecycle, .idle,
                        "Reading validation errors must not mutate SDK lifecycle state")
-        XCTAssertFalse(AppActorBridge.shared.isConfigured,
-                       "Bridge must not report configured before a valid configure() succeeds")
+        XCTAssertFalse(AppActorBridge.shared.isReady,
+                       "Bridge must not report ready before a valid configure() succeeds")
         XCTAssertNil(appactor.paymentStorage,
                      "Validation checks must not leave partially initialized storage behind")
     }
@@ -167,8 +167,8 @@ final class BootstrapLifecycleTests: XCTestCase {
         // Assert: lifecycle reverted to .idle and actors cleaned up
         XCTAssertEqual(appactor.paymentLifecycle, .idle,
                        "Lifecycle must be .idle after cancelled bootstrap (BOOT-07 fix)")
-        XCTAssertFalse(AppActorBridge.shared.isConfigured,
-                       "Bridge must not report configured after cancelled bootstrap")
+        XCTAssertFalse(AppActorBridge.shared.isReady,
+                       "Bridge must not report ready after cancelled bootstrap")
         XCTAssertNotNil(appactor.paymentStorage,
                         "Cancelled bootstrap should preserve storage so configure() can retry with the same identity")
         XCTAssertNil(appactor.transactionWatcher,
@@ -227,8 +227,8 @@ final class BootstrapLifecycleTests: XCTestCase {
         XCTAssertNotNil(newUserId, "A new anonymous user ID must be generated after logout")
         XCTAssertTrue(newUserId?.hasPrefix("appactor-anon-") ?? false,
                       "Post-logout user ID must be anonymous (BOOT-05 fix)")
-        XCTAssertNil(storage.serverUserId,
-                     "Server user ID must be cleared after logout")
+        XCTAssertNotNil(storage.serverUserId,
+                        "Server user ID must be re-established for the new anonymous identity after logout")
         XCTAssertEqual(mockClient.logoutCalls.count, 1,
                        "logout() should be called once on the client")
         // identify() is called after logout to establish new anonymous identity

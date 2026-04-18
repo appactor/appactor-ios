@@ -20,6 +20,8 @@ final class ASAEnableTests: XCTestCase {
     override func tearDown() {
         appactor.asaTask?.cancel()
         appactor.asaTask = nil
+        appactor.foregroundTask?.cancel()
+        appactor.foregroundTask = nil
         appactor.asaManager = nil
         appactor.paymentConfig = nil
         appactor.paymentStorage = nil
@@ -105,5 +107,43 @@ final class ASAEnableTests: XCTestCase {
         try appactor.enableAppleSearchAdsTracking(options: options)
 
         XCTAssertNotNil(appactor.asaManager)
+    }
+
+    func testForegroundRetriesDeferredAttributionAfterIdentityRecovers() async throws {
+        let config = AppActorPaymentConfiguration(apiKey: "pk_test_asa_retry")
+        appactor.configureForTesting(config: config, client: mockClient, storage: storage)
+
+        storage.setServerUserId(nil)
+        storage.setNeedsReidentify(true)
+
+        let manager = AppActorASAManager(
+            client: mockClient,
+            storage: storage,
+            eventStore: InMemoryASAEventStore(),
+            tokenProvider: MockASATokenProvider(),
+            options: AppActorASAOptions(autoTrackPurchases: true, debugMode: false),
+            sdkVersion: "1.0.0-test"
+        )
+        appactor.asaManager = manager
+
+        let deferred = await manager.performAttributionIfNeeded()
+        XCTAssertNil(deferred, "Initial attribution should defer while identity is unavailable")
+        XCTAssertEqual(mockClient.attributionCalls.count, 0)
+
+        mockClient.identifyHandler = { request in
+            AppActorIdentifyResult(
+                appUserId: request.appUserId,
+                serverUserId: "server-recovered-user",
+                customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
+                customerETag: nil,
+                requestId: "req_asa_retry_identify",
+                signatureVerified: false
+            )
+        }
+
+        await appactor.runForegroundMaintenance()
+
+        XCTAssertEqual(mockClient.attributionCalls.count, 1, "Foreground maintenance should retry deferred attribution once identity is ready")
+        XCTAssertEqual(storage.serverUserId, "server-recovered-user")
     }
 }

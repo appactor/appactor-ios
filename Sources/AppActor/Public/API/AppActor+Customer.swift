@@ -17,10 +17,10 @@ extension AppActor {
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
         }
-        guard let manager = customerManager, let storage = paymentStorage else {
+        guard let manager = customerManager, paymentStorage != nil else {
             throw AppActorError.notConfigured
         }
-        let appUserId = storage.ensureAppUserId()
+        let appUserId = try await ensureServerIdentityReady()
         do {
             let info = try await manager.getCustomerInfo(appUserId: appUserId)
             await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)

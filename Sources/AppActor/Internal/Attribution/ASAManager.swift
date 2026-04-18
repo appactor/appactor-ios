@@ -60,7 +60,7 @@ actor AppActorASAManager {
     ///
     /// Flow:
     /// 1. Get attribution token from AdServices
-    /// 2. Validate userId exists (captured once — update-user-id mechanism handles changes)
+    /// 2. Validate a confirmed userId exists (captured once — update-user-id mechanism handles changes)
     /// 3. Call Apple AdServices API for raw attribution data (graceful degradation on failure)
     /// 4. Build request with token + Apple response + device info
     /// 5. POST with retry for transient failures (up to 3 times with exponential backoff)
@@ -110,10 +110,13 @@ actor AppActorASAManager {
             Log.attribution.debug("Got attribution token (\(token.prefix(20))...)")
         }
 
-        // 2. Ensure userId exists BEFORE making Apple API call.
-        // Uses ensureAppUserId() to guarantee an ID is available even on
-        // first launch before identify() completes (generates anon UUID if needed).
-        let userId = storage.ensureAppUserId()
+        // 2. Require a confirmed server identity before making the attribution call.
+        guard let userId = storage.currentAppUserId,
+              storage.serverUserId != nil,
+              !storage.needsReidentify else {
+            Log.attribution.info("Server identity not ready, deferring ASA attribution.")
+            return nil
+        }
 
         // 3. Call Apple's AdServices API to get raw attribution response
         var appleAttributionResponse: [String: AnyCodable]? = nil
