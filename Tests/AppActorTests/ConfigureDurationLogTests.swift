@@ -7,44 +7,28 @@ final class ConfigureDurationLogTests: XCTestCase {
     private var appactor: AppActor!
     private var mockClient: MockPaymentClient!
     private var storage: InMemoryPaymentStorage!
-    private var capturedLogs: [(level: String, message: String)] = []
+    private var logCollector: LockedLogCollector!
 
     override func setUp() {
         super.setUp()
         appactor = AppActor.shared
         mockClient = MockPaymentClient()
         storage = InMemoryPaymentStorage()
-        capturedLogs = []
+        logCollector = LockedLogCollector()
 
         AppActorLogger.level = .debug
-        AppActorLogger.testSink = { [weak self] level, message in
-            self?.capturedLogs.append((level, message))
+        let logCollector = logCollector
+        AppActorLogger.testSink = { level, message in
+            logCollector?.append(level: level, message: message)
         }
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         AppActorLogger.testSink = nil
         AppActorLogger.level = .info
-        appactor.asaTask?.cancel()
-        appactor.asaTask = nil
-        appactor.foregroundTask?.cancel()
-        appactor.foregroundTask = nil
-        appactor.offeringsPrefetchTask?.cancel()
-        appactor.offeringsPrefetchTask = nil
-        appactor.paymentConfig = nil
-        appactor.paymentStorage = nil
-        appactor.paymentClient = nil
-        appactor.paymentCurrentUser = nil
-        appactor.paymentETagManager = nil
-        appactor.offeringsManager = nil
-        appactor.customerManager = nil
-        appactor.remoteConfigManager = nil
-        appactor.experimentManager = nil
-        appactor.paymentProcessor = nil
-        appactor.transactionWatcher = nil
-        appactor.paymentQueueStore = nil
-        appactor.paymentLifecycle = .idle
-        super.tearDown()
+        await appactor.reset()
+        logCollector = nil
+        try await super.tearDown()
     }
 
     // MARK: - Tests
@@ -57,6 +41,7 @@ final class ConfigureDurationLogTests: XCTestCase {
         appactor.configureForTesting(config: config, client: mockClient, storage: storage)
         await appactor.runStartupSequence()
 
+        let capturedLogs = logCollector.snapshot()
         let bootstrapLogs = capturedLogs.filter {
             $0.message.contains("bootstrap:")
         }
@@ -78,6 +63,7 @@ final class ConfigureDurationLogTests: XCTestCase {
         appactor.configureForTesting(config: config, client: mockClient, storage: storage)
         await appactor.runStartupSequence()
 
+        let capturedLogs = logCollector.snapshot()
         let stepNames = ["setup", "identify", "sweepUnfinished", "drainReceiptQueueAndRefreshCustomer"]
         for step in stepNames {
             let found = capturedLogs.contains { $0.message.contains("⏱ \(step):") }

@@ -160,9 +160,15 @@ extension AppActor {
                     // A login/logout between enqueue and response could cause stale data.
                     guard receiptAppUserId == currentAppUserId else {
                         Log.customer.debug("Skipping customer cache seed — receipt userId (\(receiptAppUserId)) != current userId (\(currentAppUserId))")
+                        _ = try? await self.getCustomerInfo()
                         return
                     }
-                    await manager.seedCache(info: info, eTag: nil, appUserId: currentAppUserId)
+                    await manager.seedCache(
+                        info: info,
+                        eTag: nil,
+                        appUserId: currentAppUserId,
+                        verified: info.verification == .verified
+                    )
                     self.customerInfo = info
 
                     // Fire deferred purchase callback if this product was previously pending
@@ -191,14 +197,6 @@ extension AppActor {
             if verboseBootstrap {
                 Log.sdk.warn("Bootstrap identify failed: \(error.localizedDescription)")
             }
-        }
-
-        // Open the identity gate so the receipt pipeline can start POSTing.
-        // Even if identify() failed, the local userId is valid (created in
-        // configureInternal). Receipts will retry with backoff if the server
-        // hasn't seen this user yet.
-        if let processor = self.paymentProcessor {
-            await processor.confirmIdentity()
         }
 
         // 2. Fire-and-forget: warm offerings cache in the background.

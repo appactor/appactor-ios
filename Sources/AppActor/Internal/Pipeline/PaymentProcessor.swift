@@ -72,16 +72,9 @@ actor AppActorPaymentProcessor {
     /// Rate limit cooldown: skip POSTs until this time.
     private var rateLimitCooldownUntil: Date?
 
-    // ── Identity Gate ──
-    // Receipts are enqueued to disk immediately (no data loss), but drain()
-    // waits for the identity gate before POSTing. This prevents receipts from
-    // reaching the server before identify() has created the user.
-
-    /// Whether `confirmIdentity()` has been called.
-    private var identityConfirmed = false
-
-    /// Continuations waiting for the identity gate to open.
-    private var identityWaiters: [CheckedContinuation<Void, Never>] = []
+    /// App user IDs that have been established with the backend in this app session.
+    /// Receipts for other users are persisted locally but held in `.waitingForIdentity`.
+    private var confirmedAppUserIds: Set<String> = []
 
     /// Callback for pipeline events with product and user context.
     var onPipelineEvent: (@Sendable (AppActorReceiptPipelineEventDetail) -> Void)?
@@ -96,7 +89,17 @@ actor AppActorPaymentProcessor {
         let recordedAt: Date
     }
 
-    /// Maximum retry attempts before dead-lettering.
+    private static func isRateLimitCode(_ code: String?) -> Bool {
+        switch code {
+        case "RATE_LIMIT", "RATE_LIMIT_EXCEEDED":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Legacy retry threshold retained for metrics/tests. Retryable errors are no longer
+    /// dead-lettered at this threshold; only decode mismatches use a hard terminal limit.
     static let maxRetryAttempts = 3
 
     /// Maximum retry attempts for decode mismatches (HTTP 200 but body can't be parsed).
@@ -104,8 +107,8 @@ actor AppActorPaymentProcessor {
     static let maxDecodeRetryAttempts = 3
 
     /// Timeout for purchase flow await — returns `.queued` if server doesn't respond within this window.
-    /// Sized to fit 3 quick retries (0 + 0.75 + 3 = 3.75s) plus network round-trip time.
-    static let purchaseAwaitTimeout: TimeInterval = 10
+    /// Kept generous so identity establishment and receipt retries can still resolve inline when possible.
+    static let purchaseAwaitTimeout: TimeInterval = 35
 
     /// Maximum age of a queue item before permanent dead-letter.
     /// Younger items will be recovered by sweepUnfinished() on next boot.
@@ -133,34 +136,20 @@ actor AppActorPaymentProcessor {
 
     // MARK: - Identity Gate
 
-    /// Signals that identity has been established (or attempted).
-    ///
-    /// Called by bootstrap after `identify()` completes — whether it succeeded
-    /// or failed. The local `appUserId` is always valid (created synchronously
-    /// in `configureInternal`); this gate just ensures the server has seen the
-    /// identify call before we POST any receipts.
-    ///
-    /// If identify failed, receipts will POST and likely fail too, but they'll
-    /// retry with exponential backoff — same as any transient network error.
-    func confirmIdentity() {
-        identityConfirmed = true
-        for waiter in identityWaiters {
-            waiter.resume()
+    /// Marks an app user ID as backend-confirmed and releases any queued receipts for it.
+    func confirmIdentity(appUserId: String) {
+        let (inserted, released) = (
+            confirmedAppUserIds.insert(appUserId).inserted,
+            store.releaseWaitingForIdentity(appUserId: appUserId)
+        )
+        if inserted {
+            Log.identity.debug("Receipt pipeline identity confirmed for \(String(appUserId.prefix(8)))…")
         }
-        identityWaiters.removeAll()
-    }
-
-    /// Suspends until `confirmIdentity()` is called. No-op if already confirmed.
-    private func waitForIdentity() async {
-        if identityConfirmed { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            // Double-check: confirmIdentity() may have been called between
-            // the if-check above and this continuation registration.
-            if identityConfirmed {
-                continuation.resume()
-            } else {
-                identityWaiters.append(continuation)
-            }
+        if !released.isEmpty {
+            Log.receipts.debug("Released \(released.count) queued receipt(s) for confirmed identity")
+        }
+        if inserted || !released.isEmpty {
+            kick()
         }
     }
 
@@ -179,9 +168,16 @@ actor AppActorPaymentProcessor {
             await transaction.finish()
             return
         }
-        store.upsert(item)
+        var storedItem = item
+        if !confirmedAppUserIds.contains(item.appUserId) {
+            storedItem.phase = .waitingForIdentity
+            emitEvent(.deferredWaitingForIdentity(transactionId: item.transactionId), item: item)
+        }
+        store.upsert(storedItem)
         transactionMap[item.key] = transaction
-        kick()
+        if confirmedAppUserIds.contains(item.appUserId) {
+            kick()
+        }
     }
 
     /// Enqueues a payment queue item and awaits the server result. Used by the
@@ -200,7 +196,12 @@ actor AppActorPaymentProcessor {
             await transaction.finish()
             return consumeCompletedResult(for: item.key) ?? .alreadyPosted
         }
-        store.upsert(item)
+        var storedItem = item
+        if !confirmedAppUserIds.contains(item.appUserId) {
+            storedItem.phase = .waitingForIdentity
+            emitEvent(.deferredWaitingForIdentity(transactionId: item.transactionId), item: item)
+        }
+        store.upsert(storedItem)
         transactionMap[item.key] = transaction
 
         let timeoutNanos = UInt64(Self.purchaseAwaitTimeout * 1_000_000_000)
@@ -213,7 +214,9 @@ actor AppActorPaymentProcessor {
                 Log.receipts.debug("[key=\(key)] Overwriting pending continuation")
             }
             pendingResults[key] = continuation
-            kick()
+            if confirmedAppUserIds.contains(item.appUserId) {
+                kick()
+            }
 
             // Hard timeout: guarantee purchase() never blocks longer than 35s
             // F5 fix: store the timeout task so it can be cancelled on normal completion
@@ -258,15 +261,6 @@ actor AppActorPaymentProcessor {
     /// no drain work is in progress.
     func stop() async {
         isStopped = true          // Prevent re-entrant kick() during await
-
-        // Resume identity waiters FIRST — drain() may be suspended at
-        // waitForIdentity(). Without this, awaiting the listener below deadlocks:
-        // stop() waits for drain, drain waits for identity gate, identity
-        // waiters are only resumed after stop() returns → circular wait.
-        for waiter in identityWaiters {
-            waiter.resume()
-        }
-        identityWaiters.removeAll()
 
         // Close the stream — listener loop exits naturally after current drainOnce() finishes
         streamContinuation?.finish()
@@ -402,12 +396,6 @@ actor AppActorPaymentProcessor {
     /// 6. Loop while there's work
     @discardableResult
     private func drainOnce() async -> Bool {
-        // Identity gate: wait for identify() to complete before POSTing.
-        // Items are already persisted to disk by enqueue(), so no data is lost.
-        // If stop() is called while waiting, Task.isCancelled breaks us out.
-        await waitForIdentity()
-        guard !Task.isCancelled else { return false }
-
         // Purge expired posted ledger entries on every drain (90 days retention)
         store.purgeExpiredLedgerEntries(olderThan: 90 * 24 * 60 * 60)
         let purgedDeadLetters = store.purgeExpiredDeadLetters()
@@ -467,7 +455,14 @@ actor AppActorPaymentProcessor {
                 }
             }
 
-            // Step 3: Claim ready items — claimReady sets phase=.posting and persists
+            // Step 3: Move items for unconfirmed users into a holding phase.
+            let deferred = store.deferReadyUntilIdentity(confirmedAppUserIds: confirmedAppUserIds, now: now)
+            for item in deferred {
+                didWork = true
+                emitEvent(.deferredWaitingForIdentity(transactionId: item.transactionId), item: item)
+            }
+
+            // Step 4: Claim ready items — claimReady sets phase=.posting and persists
             let claimed = store.claimReady(limit: maxConcurrentPosts, now: now)
 
             if !claimed.isEmpty {
@@ -507,7 +502,7 @@ actor AppActorPaymentProcessor {
             await handleResponse(item: item, response: response)
         } catch let paymentError as AppActorError where paymentError.kind == .decoding {
             // HTTP 200 but response body couldn't be decoded — contract mismatch.
-            // Won't self-resolve, so dead-letter aggressively after 5 attempts.
+            // Won't self-resolve, so dead-letter aggressively after `maxDecodeRetryAttempts`.
             var updated = item
             updated.attemptCount += 1
             updated.claimedAt = nil
@@ -558,10 +553,31 @@ actor AppActorPaymentProcessor {
             updated.attemptCount += 1
             updated.claimedAt = nil
 
-            // Permanent client errors (4xx excluding 429) will never succeed on retry — dead-letter immediately.
-            if let appError = error as? AppActorError, appError.isPermanentClientError {
+            if let appError = error as? AppActorError, appError.isRetryableReceiptClientError {
+                updated.phase = .needsPost
+                updated.nextRetryAt = Date().addingTimeInterval(
+                    Self.retryDelay(
+                        attempt: updated.attemptCount,
+                        serverRetryAfter: appError.retryAfterSeconds
+                    )
+                )
+                updated.lastError = error.localizedDescription
+                store.update(updated)
+
+                Log.receipts.warn("[key=\(item.key)] Deferred client error treated as retryable: \(error.localizedDescription)")
+                emitEvent(.retryScheduled(
+                    transactionId: item.transactionId,
+                    attempt: updated.attemptCount,
+                    nextAttemptAt: updated.nextRetryAt,
+                    errorCode: appError.code
+                ), item: item)
+                resumeContinuation(key: item.key, result: .queued)
+            } else if let appError = error as? AppActorError, appError.isPermanentClientError {
+                // Permanent client errors (4xx excluding 429 and allow-listed identity races)
+                // will never succeed on retry — dead-letter immediately.
+                let rejectionErrorCode = appError.code ?? "HTTP_\(appError.httpStatus ?? 0)"
                 let rejectionResult = AppActorReceiptPostResult.permanentlyRejected(
-                    errorCode: "HTTP_\(appError.httpStatus ?? 0)",
+                    errorCode: rejectionErrorCode,
                     message: error.localizedDescription,
                     requestId: appError.requestId
                 )
@@ -573,14 +589,43 @@ actor AppActorPaymentProcessor {
                 await finishTransaction(updated)
 
                 Log.receipts.warn("[key=\(item.key)] Permanent client error (HTTP \(appError.httpStatus ?? 0)) — dead-lettered")
+                emitEvent(.permanentlyRejected(
+                    transactionId: item.transactionId,
+                    errorCode: rejectionErrorCode
+                ), item: item)
                 emitEvent(.deadLettered(
                     transactionId: item.transactionId,
                     attemptCount: updated.attemptCount,
-                    lastErrorCode: "HTTP_\(appError.httpStatus ?? 0)"
+                    lastErrorCode: rejectionErrorCode
                 ), item: item)
                 resumeContinuation(key: item.key, result: rejectionResult)
+            } else if let appError = error as? AppActorError, appError.isTransient {
+                let effectiveErrorCode = appError.code ?? (appError.httpStatus == 429 ? "RATE_LIMIT_EXCEEDED" : nil)
+                let backoff = Self.retryDelay(
+                    attempt: updated.attemptCount,
+                    serverRetryAfter: appError.retryAfterSeconds
+                )
+                if Self.isRateLimitCode(effectiveErrorCode) {
+                    let cooldownDate = Date().addingTimeInterval(backoff)
+                    rateLimitCooldownUntil = cooldownDate
+                    store.setRateLimitCooldown(cooldownDate)
+                    Log.receipts.debug("[key=\(item.key)] Rate-limit cooldown set until \(cooldownDate)")
+                }
+                updated.phase = .needsPost
+                updated.nextRetryAt = Date().addingTimeInterval(backoff)
+                updated.lastError = error.localizedDescription
+                store.update(updated)
+
+                Log.receipts.warn("[key=\(item.key)] Transient receipt POST failure (queued for retry): \(error.localizedDescription)")
+                emitEvent(.retryScheduled(
+                    transactionId: item.transactionId,
+                    attempt: updated.attemptCount,
+                    nextAttemptAt: updated.nextRetryAt,
+                    errorCode: effectiveErrorCode
+                ), item: item)
+                resumeContinuation(key: item.key, result: .queued)
             } else {
-                // Network or unexpected error — mark for retry with standard backoff
+                // Unexpected non-AppActor errors — mark for retry with standard backoff
                 updated.phase = .needsPost
                 updated.nextRetryAt = Date().addingTimeInterval(Self.backoffDelay(attempt: updated.attemptCount))
                 updated.lastError = error.localizedDescription
@@ -604,6 +649,7 @@ actor AppActorPaymentProcessor {
     private func handleResponse(item: AppActorPaymentQueueItem, response: AppActorReceiptPostResponse) async {
         switch response.status {
         case "ok":
+            let verification = AppActorVerificationResult.from(signatureVerified: response.signatureVerified)
             let shouldFinish = response.finishTransaction ?? true
             if shouldFinish {
                 await markPostedFinishAndRemove(item)
@@ -616,7 +662,7 @@ actor AppActorPaymentProcessor {
             Log.receipts.info("[key=\(item.key)] Transaction \(item.transactionId) posted ok (request_id: \(response.requestId ?? "none"), finish: \(response.finishTransaction ?? true))")
             emitEvent(.postedOk(transactionId: item.transactionId), item: item)
             let customerInfo = response.customer.map {
-                AppActorCustomerInfo(dto: $0, appUserId: item.appUserId, requestDate: nil)
+                AppActorCustomerInfo(dto: $0, appUserId: item.appUserId, requestDate: nil).withVerification(verification)
             }
             rememberCompletedResult(key: item.key, result: .success(customerInfo))
             if let customerInfo {
@@ -655,8 +701,8 @@ actor AppActorPaymentProcessor {
             updated.attemptCount += 1
             let errorCode = response.error?.code
 
-            // Check for RATE_LIMIT — apply + persist cooldown (survives restart)
-            if errorCode == "RATE_LIMIT" {
+            // Check for rate limit — apply + persist cooldown (survives restart)
+            if Self.isRateLimitCode(errorCode) {
                 let cooldown = Self.retryDelay(attempt: updated.attemptCount, serverRetryAfter: response.retryAfterSeconds)
                 let cooldownDate = Date().addingTimeInterval(cooldown)
                 rateLimitCooldownUntil = cooldownDate
@@ -664,55 +710,27 @@ actor AppActorPaymentProcessor {
                 Log.receipts.debug("[key=\(item.key)] Rate-limit cooldown set until \(cooldownDate)")
             }
 
-            if updated.attemptCount >= Self.maxRetryAttempts {
-                let isExpired = item.firstSeenAt.addingTimeInterval(Self.retryLifetimeLimit) < Date()
+            let backoff = Self.retryDelay(
+                attempt: updated.attemptCount,
+                serverRetryAfter: response.retryAfterSeconds
+            )
+            updated.phase = .needsPost
+            updated.claimedAt = nil
+            updated.nextRetryAt = Date().addingTimeInterval(backoff)
+            updated.lastError = response.status == "retryable_error"
+                ? "retryable_error\(errorCode.map { ": \($0)" } ?? "")"
+                : "unknown status: \(response.status)"
+            store.update(updated)
 
-                updated.phase = .deadLettered
-                updated.claimedAt = nil
+            Log.receipts.debug("[key=\(item.key)] Retry scheduled (attempt \(updated.attemptCount), code: \(errorCode ?? "none"))")
 
-                if isExpired {
-                    // Item has been retrying across boots for 7+ days — give up permanently.
-                    store.markPosted(key: item.key)
-                    updated.lastError = "\(response.status)\(errorCode.map { ": \($0)" } ?? "") (expired after 7+ days)"
-                    store.update(updated)
-                    await finishTransaction(updated)
-                    Log.receipts.error("[key=\(item.key)] Retry lifetime expired — permanently dead-lettered")
-                } else {
-                    // Keep transaction unfinished for sweepUnfinished() recovery on next boot.
-                    updated.lastError = "\(response.status)\(errorCode.map { ": \($0)" } ?? "") (dead-lettered, will retry on next boot)"
-                    store.update(updated)
-                    Log.receipts.warn("[key=\(item.key)] Retryable exhausted after \(updated.attemptCount) attempts — keeping unfinished for next boot")
-                }
-
-                emitEvent(.deadLettered(
-                    transactionId: item.transactionId,
-                    attemptCount: updated.attemptCount,
-                    lastErrorCode: errorCode
-                ), item: item)
-                resumeContinuation(key: item.key, result: .queued)
-            } else {
-                let backoff = Self.retryDelay(
-                    attempt: updated.attemptCount,
-                    serverRetryAfter: response.retryAfterSeconds
-                )
-                updated.phase = .needsPost
-                updated.claimedAt = nil
-                updated.nextRetryAt = Date().addingTimeInterval(backoff)
-                updated.lastError = response.status == "retryable_error"
-                    ? "retryable_error\(errorCode.map { ": \($0)" } ?? "")"
-                    : "unknown status: \(response.status)"
-                store.update(updated)
-
-                Log.receipts.debug("[key=\(item.key)] Retry scheduled (attempt \(updated.attemptCount), code: \(errorCode ?? "none"))")
-
-                emitEvent(.retryScheduled(
-                    transactionId: item.transactionId,
-                    attempt: updated.attemptCount,
-                    nextAttemptAt: updated.nextRetryAt,
-                    errorCode: errorCode
-                ), item: item)
-                resumeContinuation(key: item.key, result: .queued)
-            }
+            emitEvent(.retryScheduled(
+                transactionId: item.transactionId,
+                attempt: updated.attemptCount,
+                nextAttemptAt: updated.nextRetryAt,
+                errorCode: errorCode
+            ), item: item)
+            resumeContinuation(key: item.key, result: .queued)
         }
     }
 
@@ -859,7 +877,7 @@ actor AppActorPaymentProcessor {
     }
 
     /// Backoff schedule: 3 retries (0s, 0.75s, 3s). Dead-lettered after 3 failed attempts.
-    /// All retries complete in ~4s, well within `purchaseAwaitTimeout` (10s).
+    /// All retries complete in ~4s, well within `purchaseAwaitTimeout` (35s).
     static func backoffDelay(attempt: Int) -> TimeInterval {
         switch attempt {
         case 0:  return 0       // Immediate
@@ -869,11 +887,12 @@ actor AppActorPaymentProcessor {
     }
 
     /// Computes retry delay, respecting server `retryAfterSeconds` if provided.
-    /// Cap at 30s to fit the 3-retry budget within a reasonable window.
+    /// Background queue retries should honor the server throttle contract even if
+    /// the delay exceeds the interactive purchase await timeout.
     static func retryDelay(attempt: Int, serverRetryAfter: Double?) -> TimeInterval {
         let backoff = backoffDelay(attempt: attempt)
         guard let serverDelay = serverRetryAfter,
-              serverDelay > 0, serverDelay <= 30 else {
+              serverDelay > 0 else {
             return backoff
         }
         return max(backoff, serverDelay)

@@ -15,7 +15,7 @@ final class PaymentProcessorTests: XCTestCase {
         store = InMemoryPaymentQueueStore()
         processor = AppActorPaymentProcessor(store: store, client: client)
         // Open the identity gate so drain() doesn't wait forever in tests.
-        await processor.confirmIdentity()
+        await processor.confirmIdentity(appUserId: "user_123")
     }
 
     // MARK: - Helpers
@@ -29,7 +29,7 @@ final class PaymentProcessorTests: XCTestCase {
             store: store ?? self.store,
             client: client ?? self.client
         )
-        await proc.confirmIdentity()
+        await proc.confirmIdentity(appUserId: "user_123")
         return proc
     }
 
@@ -39,6 +39,7 @@ final class PaymentProcessorTests: XCTestCase {
         phase: AppActorPaymentQueueItem.Phase = .needsPost,
         attemptCount: Int = 0,
         firstSeenAt: Date = Date(),
+        appUserId: String = "user_123",
         source: AppActorPaymentQueueItem.Source = .purchase,
         signedAppTransactionInfo: String? = nil
     ) -> AppActorPaymentQueueItem {
@@ -49,7 +50,7 @@ final class PaymentProcessorTests: XCTestCase {
             transactionId: transactionId,
             jws: "jws_payload",
             signedAppTransactionInfo: signedAppTransactionInfo,
-            appUserId: "user_123",
+            appUserId: appUserId,
             productId: "com.test.monthly",
             originalTransactionId: "12345",
             storefront: "USA",
@@ -171,7 +172,7 @@ final class PaymentProcessorTests: XCTestCase {
         client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
             AppActorReceiptPostResponse(
                 status: "retryable_error",
-                error: AppActorReceiptErrorInfo(code: "RATE_LIMIT", message: nil),
+                error: AppActorReceiptErrorInfo(code: "RATE_LIMIT_EXCEEDED", message: nil),
                 requestId: "req_1"
             )
         }
@@ -186,7 +187,7 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(items.first?.phase, .needsPost, "Retryable should transition to .needsPost")
         XCTAssertEqual(items.first?.attemptCount, 1)
         XCTAssertNotNil(items.first?.lastError)
-        XCTAssertTrue(items.first?.lastError?.contains("RATE_LIMIT") == true)
+        XCTAssertTrue(items.first?.lastError?.contains("RATE_LIMIT_EXCEEDED") == true)
     }
 
     func testOkTransitionsToRemovedViaNeedsFinish() async {
@@ -247,7 +248,7 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertNil(secondRead, "Result should be consumed once")
     }
 
-    func testDeadLetterAfterMaxAttempts() async {
+    func testRetryableRemainsQueuedAfterLegacyMaxAttempts() async {
         client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
             AppActorReceiptPostResponse(
                 status: "retryable_error",
@@ -263,8 +264,9 @@ final class PaymentProcessorTests: XCTestCase {
 
         let items = store.allItems()
         XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items.first?.phase, .deadLettered, "Should dead-letter after max attempts")
+        XCTAssertEqual(items.first?.phase, .needsPost, "Retryable receipts should stay queued even past the legacy max-attempt threshold")
         XCTAssertEqual(items.first?.attemptCount, AppActorPaymentProcessor.maxRetryAttempts)
+        XCTAssertFalse(store.isPosted(key: item.key), "Retryable receipts must not be marked as posted")
     }
 
     // MARK: - 6. POST-then-finish ordering
@@ -362,15 +364,15 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(AppActorPaymentProcessor.retryDelay(attempt: 1, serverRetryAfter: 0), 0.75)
         // Server says negative → ignore, use backoff
         XCTAssertEqual(AppActorPaymentProcessor.retryDelay(attempt: 1, serverRetryAfter: -10), 0.75)
-        // Server says > 30 → ignore, use backoff
-        XCTAssertEqual(AppActorPaymentProcessor.retryDelay(attempt: 1, serverRetryAfter: 60), 0.75)
+        // Server says 60s → honor server throttle window
+        XCTAssertEqual(AppActorPaymentProcessor.retryDelay(attempt: 1, serverRetryAfter: 60), 60)
     }
 
     func testRetryableRespectsRetryAfterSeconds() async {
         client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
             AppActorReceiptPostResponse(
                 status: "retryable_error",
-                error: AppActorReceiptErrorInfo(code: "RATE_LIMIT", message: nil),
+                error: AppActorReceiptErrorInfo(code: "RATE_LIMIT_EXCEEDED", message: nil),
                 retryAfterSeconds: 20,
                 requestId: "req_1"
             )
@@ -391,6 +393,32 @@ final class PaymentProcessorTests: XCTestCase {
 
     // MARK: - Network Error
 
+    func testHTTP429RetryRespectsRetryAfterAndPersistsCooldown() async {
+        client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
+            throw AppActorError.serverError(
+                httpStatus: 429,
+                code: "RATE_LIMIT_EXCEEDED",
+                message: "Slow down",
+                details: nil,
+                requestId: "req_http_429",
+                retryAfterSeconds: 45
+            )
+        }
+
+        let before = Date()
+        let item = makeItem()
+        store.upsert(item)
+        await processor.kick()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        let items = store.allItems()
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.phase, .needsPost)
+        XCTAssertEqual(items.first?.attemptCount, 1)
+        XCTAssertTrue(items.first!.nextRetryAt >= before.addingTimeInterval(44), "HTTP 429 should respect retryAfterSeconds")
+        XCTAssertNotNil(store.getRateLimitCooldown(), "HTTP 429 should persist the cooldown")
+    }
+
     func testNetworkErrorRetry() async {
         client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
             throw AppActorError.networkError(URLError(.notConnectedToInternet))
@@ -406,6 +434,194 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(items.first?.phase, .needsPost)
         XCTAssertEqual(items.first?.attemptCount, 1)
         XCTAssertNotNil(items.first?.lastError)
+    }
+
+    func testAllowListedReceiptClientErrorRetriesInsteadOfDeadLettering() async {
+        client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
+            throw AppActorError.serverError(
+                httpStatus: 404,
+                code: "USER_NOT_FOUND",
+                message: "identity not ready",
+                details: nil,
+                requestId: "req_user_not_found"
+            )
+        }
+
+        let item = makeItem()
+        store.upsert(item)
+        await processor.kick()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        let items = store.allItems()
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.phase, .needsPost)
+        XCTAssertEqual(items.first?.attemptCount, 1)
+        XCTAssertFalse(store.isPosted(key: item.key))
+    }
+
+    func testPermanentClientErrorsEmitRejectedAndDeadLetteredEvents() async {
+        let accumulator = PipelineEventAccumulator()
+        await processor.setPipelineEventHandler { accumulator.append($0) }
+
+        client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
+            throw AppActorError.serverError(
+                httpStatus: 403,
+                code: "FORBIDDEN",
+                message: "invalid credentials",
+                details: nil,
+                requestId: "req_forbidden"
+            )
+        }
+
+        store.upsert(makeItem())
+        await processor.kick()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(accumulator.events.count, 2)
+        if case .permanentlyRejected(let txId, let code) = accumulator.events.first?.event {
+            XCTAssertEqual(txId, "12345")
+            XCTAssertEqual(code, "FORBIDDEN")
+        } else {
+            XCTFail("Expected first event to be .permanentlyRejected")
+        }
+        if case .deadLettered(let txId, let attempts, let code) = accumulator.events.last?.event {
+            XCTAssertEqual(txId, "12345")
+            XCTAssertEqual(attempts, 1)
+            XCTAssertEqual(code, "FORBIDDEN")
+        } else {
+            XCTFail("Expected second event to be .deadLettered")
+        }
+    }
+
+    func testUnconfirmedIdentityDefersPostingUntilConfirmed() async {
+        let accumulator = PipelineEventAccumulator()
+        await processor.setPipelineEventHandler { accumulator.append($0) }
+
+        client.postReceiptHandler = { request in
+            XCTAssertEqual(request.appUserId, "user_waiting")
+            return AppActorReceiptPostResponse(status: "ok", requestId: "req_identity_release")
+        }
+
+        let item = makeItem(
+            key: "apple:waiting",
+            transactionId: "waiting",
+            appUserId: "user_waiting"
+        )
+        store.upsert(item)
+
+        await processor.kick()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(client.postReceiptCalls.count, 0, "Unconfirmed identities should not POST yet")
+        XCTAssertEqual(store.allItems().first?.phase, .waitingForIdentity)
+        XCTAssertTrue(accumulator.events.contains {
+            if case .deferredWaitingForIdentity(let txId) = $0.event {
+                return txId == "waiting"
+            }
+            return false
+        })
+
+        await processor.confirmIdentity(appUserId: "user_waiting")
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1, "Confirming the identity should release the queued receipt")
+        XCTAssertTrue(store.allItems().isEmpty)
+    }
+
+    func testRelaunchRecoveryMigratesWaitingReceiptToCurrentIdentity() async {
+        let relaunchStore = InMemoryPaymentQueueStore()
+        let relaunchClient = MockPaymentClient()
+        let relaunchProcessor = AppActorPaymentProcessor(store: relaunchStore, client: relaunchClient)
+
+        relaunchStore.upsert(
+            makeItem(
+                key: "apple:relaunch",
+                transactionId: "relaunch",
+                phase: .waitingForIdentity,
+                appUserId: "old_user"
+            )
+        )
+
+        await relaunchProcessor.confirmIdentity(appUserId: "current_user")
+
+        relaunchStore.upsert(
+            makeItem(
+                key: "apple:relaunch",
+                transactionId: "relaunch",
+                phase: .needsPost,
+                appUserId: "current_user",
+                source: .sweep
+            )
+        )
+
+        XCTAssertEqual(relaunchStore.allItems().first?.appUserId, "current_user")
+        XCTAssertTrue(
+            [.needsPost, .posting].contains(relaunchStore.allItems().first?.phase),
+            "Relaunch recovery may already have claimed the migrated receipt for posting"
+        )
+
+        relaunchClient.postReceiptHandler = { request in
+            XCTAssertEqual(request.appUserId, "current_user")
+            return AppActorReceiptPostResponse(status: "ok", requestId: "req_relaunch_recovered")
+        }
+
+        await relaunchProcessor.kick()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(relaunchClient.postReceiptCalls.count, 1,
+                       "Relaunch recovery should retry the receipt under the current confirmed identity")
+        XCTAssertTrue(relaunchStore.allItems().isEmpty)
+    }
+
+    func testRetryableReceiptRecoversInSameSession() async {
+        var callCount = 0
+        client.postReceiptHandler = { _ in
+            callCount += 1
+            if callCount == 1 {
+                return AppActorReceiptPostResponse(
+                    status: "retryable_error",
+                    error: AppActorReceiptErrorInfo(code: "INTERNAL", message: nil),
+                    requestId: "req_retry_1"
+                )
+            }
+            return AppActorReceiptPostResponse(status: "ok", requestId: "req_retry_2")
+        }
+
+        store.upsert(makeItem())
+        await processor.kick()
+        try? await Task.sleep(nanoseconds: 1_300_000_000)
+
+        XCTAssertEqual(callCount, 2, "Retry scheduler should re-attempt in the same session")
+        XCTAssertTrue(store.allItems().isEmpty, "Successful retry should remove the queued item")
+    }
+
+    func testSuccessfulReceiptPropagatesVerifiedCustomerInfo() async {
+        client.postReceiptHandler = { _ in
+            AppActorReceiptPostResponse(
+                status: "ok",
+                customer: AppActorCustomerDTO(
+                    entitlements: [
+                        "premium": AppActorEntitlementDTO(
+                            isActive: true,
+                            productId: "com.test.monthly"
+                        )
+                    ]
+                ),
+                requestId: "req_verified",
+                signatureVerified: true
+            )
+        }
+
+        let item = makeItem()
+        store.upsert(item)
+        await processor.drainAll()
+
+        guard case .success(let info)? = await processor.consumeCompletedResult(for: item.key) else {
+            return XCTFail("Expected successful completed result")
+        }
+
+        XCTAssertEqual(info?.verification, .verified)
+        XCTAssertEqual(info?.entitlements["premium"]?.isActive, true)
     }
 
     // MARK: - Request Construction
@@ -501,7 +717,7 @@ final class PaymentProcessorTests: XCTestCase {
         client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
             AppActorReceiptPostResponse(
                 status: "retryable_error",
-                error: AppActorReceiptErrorInfo(code: "RATE_LIMIT", message: nil),
+                error: AppActorReceiptErrorInfo(code: "RATE_LIMIT_EXCEEDED", message: nil),
                 requestId: "req_1"
             )
         }
@@ -514,7 +730,7 @@ final class PaymentProcessorTests: XCTestCase {
         if case .retryScheduled(let txId, let attempt, _, let code) = accumulator.events.first?.event {
             XCTAssertEqual(txId, "12345")
             XCTAssertEqual(attempt, 1)
-            XCTAssertEqual(code, "RATE_LIMIT")
+            XCTAssertEqual(code, "RATE_LIMIT_EXCEEDED")
         } else {
             XCTFail("Expected .retryScheduled event")
         }
@@ -545,7 +761,7 @@ final class PaymentProcessorTests: XCTestCase {
         }
     }
 
-    func testPipelineEventEmittedOnDeadLetter() async {
+    func testPipelineEventEmittedOnRetryAfterLegacyMaxAttempts() async {
         let accumulator = PipelineEventAccumulator()
         await processor.setPipelineEventHandler { accumulator.append($0) }
 
@@ -563,12 +779,12 @@ final class PaymentProcessorTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 200_000_000)
 
         XCTAssertEqual(accumulator.events.count, 1)
-        if case .deadLettered(let txId, let attempts, let code) = accumulator.events.first?.event {
+        if case .retryScheduled(let txId, let attempts, _, let code) = accumulator.events.first?.event {
             XCTAssertEqual(txId, "12345")
             XCTAssertEqual(attempts, AppActorPaymentProcessor.maxRetryAttempts)
             XCTAssertEqual(code, "INTERNAL")
         } else {
-            XCTFail("Expected .deadLettered event")
+            XCTFail("Expected .retryScheduled event")
         }
     }
 
@@ -798,7 +1014,7 @@ final class PaymentProcessorTests: XCTestCase {
         client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
             AppActorReceiptPostResponse(
                 status: "retryable_error",
-                error: AppActorReceiptErrorInfo(code: "RATE_LIMIT", message: nil),
+                error: AppActorReceiptErrorInfo(code: "RATE_LIMIT_EXCEEDED", message: nil),
                 retryAfterSeconds: 60,
                 requestId: "req_rl"
             )
@@ -1041,11 +1257,9 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(client.postReceiptCalls.count, 0)
     }
 
-    // MARK: - RCPT-02: Dead-letter paths populate posted ledger
+    // MARK: - RCPT-02: Terminal dead-letter paths populate posted ledger
 
-    /// RCPT-02 / F1: Retryable exhaustion (maxRetryAttempts reached) must write to posted ledger
-    /// before finishing the transaction. Verifies the fix applied in Plan 01-01.
-    func test_givenRetryableExhausted_whenDeadLettered_thenNotPostedWhenYoung() async {
+    func testRetryableExhaustionDoesNotDeadLetterOrMarkLedger() async {
         client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
             AppActorReceiptPostResponse(
                 status: "retryable_error",
@@ -1054,44 +1268,16 @@ final class PaymentProcessorTests: XCTestCase {
             )
         }
 
-        // Set attemptCount to maxRetryAttempts - 1 so the next attempt triggers dead-letter
         let item = makeItem(attemptCount: AppActorPaymentProcessor.maxRetryAttempts - 1)
         store.upsert(item)
         await processor.kick()
         try? await Task.sleep(nanoseconds: 300_000_000)
 
         let items = store.allItems()
-        XCTAssertEqual(items.count, 1, "Dead-lettered item should remain for diagnostics")
-        XCTAssertEqual(items.first?.phase, .deadLettered, "Item should be dead-lettered after max attempts")
-        // Young items (<7 days) must NOT be marked posted — sweepUnfinished() will recover them
+        XCTAssertEqual(items.count, 1, "Retryable item should stay queued")
+        XCTAssertEqual(items.first?.phase, .needsPost, "Retryable exhaustion should not dead-letter")
         XCTAssertFalse(store.isPosted(key: item.key),
-                       "Young dead-lettered items must NOT be in posted ledger to allow recovery on next boot")
-    }
-
-    func test_givenRetryableExhausted_whenDeadLettered_thenPostedWhenExpired() async {
-        client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
-            AppActorReceiptPostResponse(
-                status: "retryable_error",
-                error: AppActorReceiptErrorInfo(code: "INTERNAL", message: nil),
-                requestId: "req_retry"
-            )
-        }
-
-        // Create an item older than retryLifetimeLimit (7 days)
-        let item = makeItem(
-            attemptCount: AppActorPaymentProcessor.maxRetryAttempts - 1,
-            firstSeenAt: Date().addingTimeInterval(-(AppActorPaymentProcessor.retryLifetimeLimit + 24 * 60 * 60))
-        )
-        store.upsert(item)
-        await processor.kick()
-        try? await Task.sleep(nanoseconds: 300_000_000)
-
-        let items = store.allItems()
-        XCTAssertEqual(items.count, 1, "Dead-lettered item should remain for diagnostics")
-        XCTAssertEqual(items.first?.phase, .deadLettered)
-        // Expired items (>7 days) must be permanently dead-lettered
-        XCTAssertTrue(store.isPosted(key: item.key),
-                      "Expired dead-lettered items must be in posted ledger — no more recovery attempts")
+                       "Retryable exhaustion must not write to the posted ledger")
     }
 
     /// RCPT-02 / F2: Decode mismatch exhaustion (maxDecodeRetryAttempts reached) must also write

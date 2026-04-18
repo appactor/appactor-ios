@@ -292,7 +292,10 @@ extension AppActor {
         let verifiedInfo = result.customerInfo.withVerification(verification)
 
         if let manager = customerManager {
-            await manager.seedCache(info: result.customerInfo, eTag: result.customerETag, appUserId: result.appUserId, verified: result.signatureVerified)
+            await manager.seedCache(info: verifiedInfo, eTag: result.customerETag, appUserId: result.appUserId, verified: result.signatureVerified)
+        }
+        if let processor = paymentProcessor {
+            await processor.confirmIdentity(appUserId: result.appUserId)
         }
 
         self.paymentCurrentUser = verifiedInfo
@@ -392,7 +395,10 @@ extension AppActor {
 
         // Seed customer cache with the snapshot from login
         if let manager = customerManager {
-            await manager.seedCache(info: loginResult.customerInfo, eTag: loginResult.customerETag, appUserId: loginResult.appUserId, verified: loginResult.signatureVerified)
+            await manager.seedCache(info: verifiedLoginInfo, eTag: loginResult.customerETag, appUserId: loginResult.appUserId, verified: loginResult.signatureVerified)
+        }
+        if let processor = paymentProcessor {
+            await processor.confirmIdentity(appUserId: loginResult.appUserId)
         }
 
         self.paymentCurrentUser = verifiedLoginInfo

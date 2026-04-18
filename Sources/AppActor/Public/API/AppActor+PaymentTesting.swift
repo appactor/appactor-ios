@@ -50,9 +50,8 @@ extension AppActor {
 
         self.asaManager = nil
 
-        // Tests skip bootstrap, so open the identity gate on the processor
-        // immediately. Without this, drain() would wait forever for confirmIdentity().
-        Task { await processor.confirmIdentity() }
+        // Tests skip bootstrap, so mark the generated local user as confirmed.
+        Task { await processor.confirmIdentity(appUserId: storage.ensureAppUserId()) }
         self.isBootstrapComplete = true
 
         // Watcher setup and bootstrap handled by runStartupSequence().

@@ -210,11 +210,12 @@ public final class AppActorBridge {
     ///   - onSuccess: Called with the offerings on success.
     ///   - onError: Called with an ``AppActorBridgeError`` on failure.
     public func getOfferings(
+        fetchPolicy: AppActorOfferingsFetchPolicy = .freshIfStale,
         onSuccess: ((AppActorOfferings) -> Void)? = nil,
         onError: ((AppActorBridgeError) -> Void)? = nil
     ) {
         launchAsync(onSuccess: onSuccess, onError: onError) {
-            try await AppActor.shared.offerings()
+            try await AppActor.shared.offerings(fetchPolicy: fetchPolicy)
         }
     }
 

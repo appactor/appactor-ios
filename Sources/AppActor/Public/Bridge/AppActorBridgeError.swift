@@ -45,6 +45,18 @@ public struct AppActorBridgeError: Sendable, Equatable {
     /// Debug-level detail (server error code, request ID, etc.).
     public let debugMessage: String?
 
+    /// Backend-specific error code when available.
+    public let backendCode: String?
+
+    /// Server-assigned trace identifier when available.
+    public let requestId: String?
+
+    /// Rate-limit or backend scope when available.
+    public let scope: String?
+
+    /// Server-suggested retry delay in seconds when available.
+    public let retryAfterSeconds: Double?
+
     // MARK: - Init from Error
 
     public init(from error: Error) {
@@ -53,12 +65,20 @@ public struct AppActorBridgeError: Sendable, Equatable {
             self.message = appError.errorDescription ?? appError.message ?? "Unknown error"
             self.isTransient = appError.isTransient
             self.statusCode = appError.httpStatus
+            self.backendCode = appError.code
+            self.requestId = appError.requestId
+            self.scope = appError.scope
+            self.retryAfterSeconds = appError.retryAfterSeconds
             self.debugMessage = Self.buildDebugMessage(appError)
         } else {
             self.code = Self.CODE_UNKNOWN
             self.message = error.localizedDescription
             self.isTransient = false
             self.statusCode = nil
+            self.backendCode = nil
+            self.requestId = nil
+            self.scope = nil
+            self.retryAfterSeconds = nil
             self.debugMessage = String(describing: error)
         }
     }
@@ -70,13 +90,21 @@ public struct AppActorBridgeError: Sendable, Equatable {
         message: String,
         isTransient: Bool = false,
         statusCode: Int? = nil,
-        debugMessage: String? = nil
+        debugMessage: String? = nil,
+        backendCode: String? = nil,
+        requestId: String? = nil,
+        scope: String? = nil,
+        retryAfterSeconds: Double? = nil
     ) {
         self.code = code
         self.message = message
         self.isTransient = isTransient
         self.statusCode = statusCode
         self.debugMessage = debugMessage
+        self.backendCode = backendCode
+        self.requestId = requestId
+        self.scope = scope
+        self.retryAfterSeconds = retryAfterSeconds
     }
 
     // MARK: - Dictionary Serialization
@@ -90,6 +118,10 @@ public struct AppActorBridgeError: Sendable, Equatable {
         ]
         if let statusCode { dict["statusCode"] = statusCode }
         if let debugMessage { dict["debugMessage"] = debugMessage }
+        if let backendCode { dict["backendCode"] = backendCode }
+        if let requestId { dict["requestId"] = requestId }
+        if let scope { dict["scope"] = scope }
+        if let retryAfterSeconds { dict["retryAfterSeconds"] = retryAfterSeconds }
         return dict
     }
 

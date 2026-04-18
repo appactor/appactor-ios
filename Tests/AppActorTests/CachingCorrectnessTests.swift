@@ -107,15 +107,9 @@ final class CachingCorrectnessTests: XCTestCase {
         // Advance 6 minutes — past the 5-min foreground TTL
         clock.advance(by: 6 * 60)
 
-        // Second call: TTL expired → SWR returns stale cache immediately
+        // Second call: TTL expired → default freshIfStale policy waits for the 304 validation
         _ = try await manager.getOfferings()
-        XCTAssertEqual(networkCalls, 1, "Stale cache returns immediately (SWR), background refresh starts")
-
-        // Allow background refresh to complete
-        try await Task.sleep(nanoseconds: 50_000_000)
-
-        // Background refresh should have fired (304 from server)
-        XCTAssertEqual(networkCalls, 2, "Background refresh should have completed")
+        XCTAssertEqual(networkCalls, 2, "Stale cache should be revalidated immediately under .freshIfStale")
 
         // Third call: cache was refreshed by background 304, should be fresh
         _ = try await manager.getOfferings()
@@ -155,8 +149,7 @@ final class CachingCorrectnessTests: XCTestCase {
 
     // MARK: - CACH-02: Stale-While-Revalidate Tests
 
-    /// CACH-02: When TTL expires, getOfferings() returns stale data immediately
-    /// and refreshes in the background (stale-while-revalidate pattern).
+    /// CACH-02: `.returnCachedThenRefresh` returns stale data immediately and refreshes in the background.
     func testCACH02_staleCacheReturnsImmediatelyAndRefreshesInBackground() async throws {
         let firstDTO = AppActorOfferingsResponseDTO(
             currentOffering: nil,
@@ -187,14 +180,17 @@ final class CachingCorrectnessTests: XCTestCase {
         // Advance past TTL (6 min > 5 min foreground TTL)
         clock.advance(by: 6 * 60)
 
-        // Second call: TTL expired — SWR returns stale cache immediately
-        let result = try await manager.getOfferings()
+        // Second call: TTL expired — SWR policy returns stale cache immediately
+        let result = try await manager.getOfferings(fetchPolicy: .returnCachedThenRefresh)
 
         // Stale cache returned immediately — no additional network call blocked
         XCTAssertEqual(networkCalls, 1, "SWR: stale cache returns immediately, background refresh starts")
 
         // Result is from the stale cache, not a fresh fetch (no network blocked)
         XCTAssertNotNil(result, "Result must be from the stale cache")
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(networkCalls, 2, "Background refresh should still run after returning stale cache")
     }
 
     /// CACH-02: CustomerManager always makes a network request (ETag handles bandwidth).

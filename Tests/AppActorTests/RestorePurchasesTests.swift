@@ -114,7 +114,9 @@ final class RestorePurchasesTests: XCTestCase {
         let info = try await appactor.restorePurchases()
 
         XCTAssertEqual(info.appUserId, expected.appUserId)
+        XCTAssertEqual(info.verification, .verified)
         XCTAssertEqual(mockClient.postRestoreCalls.count, 1)
+        XCTAssertEqual(appactor.customerInfo.verification, .verified)
     }
 
     func testOnCustomerInfoChangedFiresWhenCustomerInfoRefreshes() async throws {

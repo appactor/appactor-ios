@@ -4,81 +4,151 @@ import Foundation
 /// In-memory implementation of `AppActorPaymentQueueStoreProtocol` for testing.
 /// Moved from PaymentProcessorTests to shared location.
 final class InMemoryPaymentQueueStore: AppActorPaymentQueueStoreProtocol, @unchecked Sendable {
+    private let lock = NSLock()
     private var items: [String: AppActorPaymentQueueItem] = [:]
     private var purgedDeadLetters: [AppActorPurgedDeadLetterSummary] = []
 
+    @discardableResult
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+
     func upsert(_ item: AppActorPaymentQueueItem) {
-        if var existing = items[item.key] {
-            existing.mergeFrom(item)
-            items[item.key] = existing
-        } else {
-            items[item.key] = item
+        withLock {
+            if var existing = items[item.key] {
+                existing.mergeFrom(item)
+                items[item.key] = existing
+            } else {
+                items[item.key] = item
+            }
         }
     }
 
     func claimReady(limit: Int, now: Date) -> [AppActorPaymentQueueItem] {
-        let staleThreshold = now.addingTimeInterval(-120)
-        var claimed: [AppActorPaymentQueueItem] = []
+        withLock {
+            let staleThreshold = now.addingTimeInterval(-120)
+            var claimed: [AppActorPaymentQueueItem] = []
 
-        for (key, item) in items {
-            guard claimed.count < limit else { break }
+            for (key, item) in items {
+                guard claimed.count < limit else { break }
 
-            let shouldClaim: Bool
-            switch item.phase {
-            case .needsPost:
-                shouldClaim = item.nextRetryAt <= now
-            case .posting:
-                shouldClaim = item.claimedAt.map { $0 < staleThreshold } ?? true
-            case .needsFinish:
-                shouldClaim = false
-            case .deadLettered:
-                shouldClaim = false
+                let shouldClaim: Bool
+                switch item.phase {
+                case .waitingForIdentity:
+                    shouldClaim = false
+                case .needsPost:
+                    shouldClaim = item.nextRetryAt <= now
+                case .posting:
+                    shouldClaim = item.claimedAt.map { $0 < staleThreshold } ?? true
+                case .needsFinish:
+                    shouldClaim = false
+                case .deadLettered:
+                    shouldClaim = false
+                }
+
+                if shouldClaim {
+                    var updated = item
+                    updated.phase = .posting
+                    updated.claimedAt = now
+                    items[key] = updated
+                    claimed.append(updated)
+                }
             }
 
-            if shouldClaim {
-                var updated = item
-                updated.phase = .posting
-                updated.claimedAt = now
-                items[key] = updated
-                claimed.append(updated)
-            }
+            return claimed
         }
+    }
 
-        return claimed
+    func deferReadyUntilIdentity(confirmedAppUserIds: Set<String>, now: Date) -> [AppActorPaymentQueueItem] {
+        withLock {
+            var deferred: [AppActorPaymentQueueItem] = []
+
+            for (key, item) in items where !confirmedAppUserIds.contains(item.appUserId) {
+                switch item.phase {
+                case .waitingForIdentity, .needsFinish, .deadLettered:
+                    continue
+                case .needsPost, .posting:
+                    var updated = item
+                    updated.phase = .waitingForIdentity
+                    updated.claimedAt = nil
+                    updated.lastSeenAt = now
+                    items[key] = updated
+                    deferred.append(updated)
+                }
+            }
+
+            return deferred
+        }
+    }
+
+    func releaseWaitingForIdentity(appUserId: String) -> [AppActorPaymentQueueItem] {
+        withLock {
+            var released: [AppActorPaymentQueueItem] = []
+
+            for (key, item) in items where item.appUserId == appUserId && item.phase == .waitingForIdentity {
+                var updated = item
+                updated.phase = .needsPost
+                updated.claimedAt = nil
+                items[key] = updated
+                released.append(updated)
+            }
+
+            return released
+        }
     }
 
     func update(_ item: AppActorPaymentQueueItem) {
-        items[item.key] = item
+        withLock {
+            items[item.key] = item
+        }
     }
 
     func remove(key: String) {
-        items.removeValue(forKey: key)
+        withLock {
+            items.removeValue(forKey: key)
+        }
     }
 
     func clear() {
-        items = [:]
+        withLock {
+            items = [:]
+        }
     }
 
     func pendingCount() -> Int {
-        items.values.filter { $0.phase == .needsPost || $0.phase == .posting }.count
+        withLock {
+            items.values.filter {
+                $0.phase == .waitingForIdentity || $0.phase == .needsPost || $0.phase == .posting
+            }.count
+        }
     }
 
     func deadLetteredCount() -> Int {
-        items.values.filter { $0.phase == .deadLettered }.count
+        withLock {
+            items.values.filter { $0.phase == .deadLettered }.count
+        }
     }
 
     func snapshot() -> [AppActorPaymentQueueItem] {
-        Array(items.values)
+        withLock {
+            Array(items.values)
+        }
     }
 
     private var rateLimitCooldown: Date?
 
     func getRateLimitCooldown() -> Date? {
-        rateLimitCooldown
+        withLock {
+            rateLimitCooldown
+        }
     }
 
     func setRateLimitCooldown(_ date: Date?) {
-        rateLimitCooldown = date
+        withLock {
+            rateLimitCooldown = date
+        }
     }
 
     // MARK: - Posted Ledger
@@ -86,11 +156,15 @@ final class InMemoryPaymentQueueStore: AppActorPaymentQueueStoreProtocol, @unche
     private var postedKeys: Set<String> = []
 
     func isPosted(key: String) -> Bool {
-        postedKeys.contains(key)
+        withLock {
+            postedKeys.contains(key)
+        }
     }
 
     func markPosted(key: String) {
-        postedKeys.insert(key)
+        withLock {
+            postedKeys.insert(key)
+        }
     }
 
     func purgeExpiredLedgerEntries(olderThan retention: TimeInterval) {
@@ -98,33 +172,44 @@ final class InMemoryPaymentQueueStore: AppActorPaymentQueueStoreProtocol, @unche
     }
 
     func consumePurgedDeadLetters() -> [AppActorPurgedDeadLetterSummary] {
-        let records = purgedDeadLetters
-        purgedDeadLetters.removeAll()
-        return records
+        withLock {
+            let records = purgedDeadLetters
+            purgedDeadLetters.removeAll()
+            return records
+        }
     }
 
     func markPostedAndUpdate(key: String, item: AppActorPaymentQueueItem) {
-        postedKeys.insert(key)
-        items[key] = item
+        withLock {
+            postedKeys.insert(key)
+            items[key] = item
+        }
     }
 
     func purgeExpiredDeadLetters() -> Int {
-        let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
-        var purgedCount = 0
-        for (key, item) in items where item.phase == .deadLettered && item.firstSeenAt < cutoff {
-            items.removeValue(forKey: key)
-            purgedCount += 1
+        withLock {
+            let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+            let keysToPurge = items.compactMap { key, item in
+                item.phase == .deadLettered && item.firstSeenAt < cutoff ? key : nil
+            }
+            keysToPurge.forEach { key in
+                items.removeValue(forKey: key)
+            }
+            return keysToPurge.count
         }
-        return purgedCount
     }
 
     // Test helper
     func allItems() -> [AppActorPaymentQueueItem] {
-        Array(items.values)
+        withLock {
+            Array(items.values)
+        }
     }
 
     func enqueuePurgedDeadLetter(_ record: AppActorPurgedDeadLetterSummary) {
-        purgedDeadLetters.append(record)
+        withLock {
+            purgedDeadLetters.append(record)
+        }
     }
 }
 

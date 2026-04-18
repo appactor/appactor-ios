@@ -242,7 +242,7 @@ extension AppActor {
     func queuedPurchaseOfflineCustomerInfo(appUserId: String) async -> AppActorCustomerInfo? {
         guard let manager = customerManager else { return nil }
         let offlineKeys = await manager.activeEntitlementKeysOffline(appUserId: appUserId)
-        guard let offlineInfo = offlineCustomerInfoIfIdentityMatches(
+        guard let offlineInfo = await offlineCustomerInfoIfIdentityMatches(
             expectedAppUserId: appUserId,
             offlineKeys: offlineKeys
         ) else {

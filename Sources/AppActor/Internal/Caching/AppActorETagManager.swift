@@ -5,9 +5,9 @@ import Foundation
 /// Provides a single point of ETag storage, retrieval, and 304-handling logic
 /// for all cacheable payment resources (offerings, customer).
 ///
-/// When `responseVerificationEnabled` is `true`, cached entries that were stored
-/// without response signature verification are treated as untrusted: their ETags
-/// are not reused and their data is not returned to callers.
+/// When `responseVerificationEnabled` is `true`, cache entries with failed
+/// verification are treated as untrusted and are not reused. Transitional
+/// `.notRequested` entries are still allowed through until the server signs them.
 actor AppActorETagManager {
 
     private let diskStore: AppActorCacheDiskStore
@@ -30,8 +30,8 @@ actor AppActorETagManager {
 
     /// Returns the stored ETag for the resource, or nil if none/forceRefresh.
     ///
-    /// When response verification is enabled, ETags from unverified cache entries
-    /// are not returned — this forces a fresh (verified) fetch instead of a 304.
+    /// When response verification is enabled, ETags from failed-verification cache
+    /// entries are not returned — this forces a fresh fetch instead of a 304.
     func eTag(for resource: AppActorCacheResource, forceRefresh: Bool = false) async -> String? {
         guard !forceRefresh else { return nil }
         guard let entry = await diskStore.load(resource) else { return nil }
@@ -111,11 +111,11 @@ actor AppActorETagManager {
 
     // MARK: - Verification-mode cache invalidation
 
-    /// Removes all unverified cache entries from disk when verification is enabled.
+    /// Removes all failed-verification cache entries from disk when verification is enabled.
     ///
-    /// Scans every cached file and removes entries that were stored without
-    /// response signature verification. This covers both offerings and all
-    /// per-user customer caches — no orphaned unverified data remains on disk.
+    /// Scans every cached file and removes entries whose verification result is
+    /// `.failed`. Transitional `.notRequested` entries remain available until the
+    /// server signs them. This covers both offerings and all per-user customer caches.
     func clearUnverifiedIfNeeded() async {
         guard responseVerificationEnabled else { return }
         await diskStore.clearAllUnverified()

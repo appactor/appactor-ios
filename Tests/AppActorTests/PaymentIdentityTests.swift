@@ -186,15 +186,14 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertEqual(storage.currentAppUserId, "new_user")
     }
 
-    func testLoginCallsIdentifyFirstIfNoCurrentUser() async throws {
-        // No app_user_id stored
-        XCTAssertNil(storage.currentAppUserId)
+    func testLogInUsesSeededAnonymousIdentityWhenTestingConfigSkipsBootstrap() async throws {
+        XCTAssertTrue(storage.currentAppUserId?.hasPrefix("appactor-anon-") == true)
 
         let info = try await appactor.logIn(newAppUserId: "target_user")
 
-        // Should have called identify first (to establish identity), then login
-        // Login now returns full customer info, so no post-login identify needed
-        XCTAssertEqual(mockClient.identifyCalls.count, 1) // 1 pre-login only
+        // configureForTesting seeds a local anonymous identity and confirms it for the processor,
+        // so logIn can go straight to the login call without a pre-login identify request.
+        XCTAssertEqual(mockClient.identifyCalls.count, 0)
         XCTAssertEqual(mockClient.loginCalls.count, 1)
         XCTAssertEqual(info.appUserId, "target_user")
     }
@@ -596,6 +595,28 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertEqual(response.requestId, "req_err_1")
     }
 
+    func testErrorResponsePromotesTopLevelRetryAfterSecondsIntoErrorPayload() throws {
+        let json = """
+        {
+            "status": "retryable_error",
+            "retryAfterSeconds": 47,
+            "error": {
+                "code": "RATE_LIMIT_EXCEEDED",
+                "message": "Too many requests"
+            },
+            "requestId": "req_err_429"
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        let response = try decoder.decode(AppActorErrorResponse.self, from: json)
+
+        XCTAssertEqual(response.error.code, "RATE_LIMIT_EXCEEDED")
+        XCTAssertEqual(response.error.message, "Too many requests")
+        XCTAssertEqual(response.error.retryAfterSeconds, 47)
+        XCTAssertEqual(response.requestId, "req_err_429")
+    }
+
     // MARK: - Accessors
 
     func testIsAnonymousWithAnonId() {
@@ -612,7 +633,7 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertTrue(appactor.isAnonymous)
     }
 
-    func testOfflineCustomerInfoHelperReturnsFreshSnapshotWhenIdentityMatches() {
+    func testOfflineCustomerInfoHelperReturnsFreshSnapshotWhenIdentityMatches() async {
         storage.setAppUserId("user_123")
         appactor.customerInfo = AppActorCustomerInfo(
             entitlements: [
@@ -621,7 +642,7 @@ final class PaymentIdentityTests: XCTestCase {
             appUserId: "user_123"
         )
 
-        let offlineInfo = appactor.offlineCustomerInfoIfIdentityMatches(
+        let offlineInfo = await appactor.offlineCustomerInfoIfIdentityMatches(
             expectedAppUserId: "user_123",
             offlineKeys: ["premium"]
         )
@@ -632,7 +653,7 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertEqual(offlineInfo?.activeEntitlementKeys, ["premium"])
     }
 
-    func testOfflineSnapshotExcludesStaleCachedEntitlements() {
+    func testOfflineSnapshotExcludesStaleCachedEntitlements() async {
         storage.setAppUserId("user_123")
         appactor.customerInfo = AppActorCustomerInfo(
             entitlements: [
@@ -642,7 +663,7 @@ final class PaymentIdentityTests: XCTestCase {
             appUserId: "user_123"
         )
 
-        let offlineInfo = appactor.offlineCustomerInfoIfIdentityMatches(
+        let offlineInfo = await appactor.offlineCustomerInfoIfIdentityMatches(
             expectedAppUserId: "user_123",
             offlineKeys: ["premium"]
         )
@@ -653,16 +674,56 @@ final class PaymentIdentityTests: XCTestCase {
                       "Offline snapshot must not carry stale subscriptions")
     }
 
-    func testOfflineCustomerInfoHelperReturnsNilWhenIdentityChanged() {
+    func testOfflineCustomerInfoHelperReturnsNilWhenIdentityChanged() async {
         storage.setAppUserId("user_123")
         storage.setAppUserId("other_user")
 
-        let offlineInfo = appactor.offlineCustomerInfoIfIdentityMatches(
+        let offlineInfo = await appactor.offlineCustomerInfoIfIdentityMatches(
             expectedAppUserId: "user_123",
             offlineKeys: ["premium"]
         )
 
         XCTAssertNil(offlineInfo)
+    }
+
+    func testOfflineCustomerInfoHelperIncludesDerivedOneTimePurchases() async throws {
+        storage.setAppUserId("user_123")
+        let etagManager = try XCTUnwrap(appactor.paymentETagManager)
+        let skChecker = MockStoreKitEntitlementChecker()
+        skChecker.productIds = ["com.app.coins.100"]
+        appactor.customerManager = AppActorCustomerManager(
+            client: mockClient,
+            etagManager: etagManager,
+            entitlementChecker: skChecker
+        )
+        appactor.offeringsManager = AppActorOfferingsManager(
+            client: mockClient,
+            productFetcher: MockStoreKitProductFetcher(),
+            etagManager: etagManager
+        )
+        await etagManager.storeFresh(
+            AppActorOfflineProductCatalog(
+                productEntitlements: [:],
+                oneTimeProductKinds: [
+                    AppActorOfflineProductCatalog.oneTimeKey(productId: "com.app.coins.100"): .consumable
+                ]
+            ),
+            for: .offlineProductCatalog,
+            eTag: nil,
+            verified: false
+        )
+
+        let offlineInfo = await appactor.offlineCustomerInfoIfIdentityMatches(
+            expectedAppUserId: "user_123",
+            offlineKeys: []
+        )
+
+        let purchases = try XCTUnwrap(offlineInfo?.nonSubscriptions["com.app.coins.100"])
+        XCTAssertEqual(offlineInfo?.verification, .verifiedOnDevice)
+        XCTAssertEqual(purchases.count, 1)
+        XCTAssertEqual(purchases[0].productIdentifier, "com.app.coins.100")
+        XCTAssertEqual(purchases[0].store, .appStore)
+        XCTAssertEqual(purchases[0].isConsumable, true)
     }
 
     func testConsumePurgedDeadLettersReturnsRecordsOnce() async {

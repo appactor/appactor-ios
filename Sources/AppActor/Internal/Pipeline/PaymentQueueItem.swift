@@ -29,8 +29,12 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Optional AppTransaction JWS used to enrich receipt posts with app-level metadata.
     var signedAppTransactionInfo: String?
 
-    /// The app user ID at the time of the transaction.
-    let appUserId: String
+    /// The app user ID currently associated with this receipt for server posting.
+    ///
+    /// This usually matches the user at the time the transaction was first observed,
+    /// but it may migrate to a newer current identity if the same unfinished
+    /// transaction is re-enqueued after an anon/login transition or app relaunch.
+    var appUserId: String
 
     /// The product identifier.
     let productId: String
@@ -48,7 +52,7 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Mutable so `mergeFrom` can adopt non-nil context from a richer incoming item.
     var offeringId: String?
 
-    /// The package identifier within the offering. `nil` for non-package purchases
+    /// The canonical backend package identifier. `nil` for non-package purchases
     /// or items persisted before this field was added.
     var packageId: String?
 
@@ -83,20 +87,22 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Processing phases for the payment queue state machine.
     ///
     /// ```
-    /// needsPost ──► posting ──► needsFinish ──► (removed)
-    ///     ▲             │
-    ///     └─ retryable ─┘
+    /// waitingForIdentity ──► needsPost ──► posting ──► needsFinish ──► (removed)
+    ///                           ▲             │
+    ///                           └─ retryable ─┘
     ///
-    /// needsPost ──► posting ──► deadLettered (after maxRetryAttempts)
+    /// needsPost ──► posting ──► deadLettered (terminal permanent/decode-mismatch paths)
     /// ```
     enum Phase: String, Codable, Sendable {
+        /// Persisted locally until the backend has seen this app user identity.
+        case waitingForIdentity
         /// Ready for POST (or waiting for backoff to expire).
         case needsPost
         /// Claimed and currently being POSTed.
         case posting
         /// POST succeeded or permanently rejected; transaction needs `.finish()`.
         case needsFinish
-        /// Exhausted all retry attempts.
+        /// Terminal item kept only for diagnostics after a permanent/decode-mismatch failure.
         case deadLettered
     }
 
@@ -134,10 +140,25 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         // re-enqueuing an item that arrived earlier via sweep with nil context).
         if offeringId == nil { offeringId = incoming.offeringId }
         if packageId == nil { packageId = incoming.packageId }
+
+        // If the same unfinished transaction is observed again under a newer app user,
+        // adopt that identity so relaunch recovery doesn't strand the queued receipt
+        // behind an identity gate for a stale user ID.
+        if appUserId != incoming.appUserId, phase != .posting, phase != .needsFinish {
+            appUserId = incoming.appUserId
+            nextRetryAt = min(nextRetryAt, incoming.nextRetryAt)
+            claimedAt = nil
+        }
+
         if phase == .deadLettered {
             phase = .needsPost
             attemptCount = 0
             nextRetryAt = incoming.nextRetryAt
+            claimedAt = nil
+        } else if phase == .waitingForIdentity, incoming.phase == .needsPost {
+            // A fresh re-enqueue from the currently confirmed user can release this item.
+            phase = .needsPost
+            nextRetryAt = min(nextRetryAt, incoming.nextRetryAt)
             claimedAt = nil
         }
     }

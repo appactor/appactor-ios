@@ -144,7 +144,7 @@ public struct AppActorOfferings: Sendable, Codable {
     // MARK: - Internal Init
 
     private enum CodingKeys: String, CodingKey {
-        case current, all, productEntitlements
+        case current, all, productEntitlements, verification
     }
 
     public init(from decoder: Decoder) throws {
@@ -152,7 +152,15 @@ public struct AppActorOfferings: Sendable, Codable {
         self.current = try container.decodeIfPresent(AppActorOffering.self, forKey: .current)
         self.all = try container.decode([String: AppActorOffering].self, forKey: .all)
         self.productEntitlements = try container.decodeIfPresent([String: [String]].self, forKey: .productEntitlements)
-        self.verification = .notRequested  // Set by SDK after decode
+        self.verification = (try? container.decodeIfPresent(AppActorVerificationResult.self, forKey: .verification)) ?? .notRequested
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(current, forKey: .current)
+        try container.encode(all, forKey: .all)
+        try container.encodeIfPresent(productEntitlements, forKey: .productEntitlements)
+        try container.encode(verification, forKey: .verification)
     }
 
     init(

@@ -9,11 +9,11 @@ final class SecurityAuditTests: XCTestCase {
     /// Verifies that identity log messages containing appUserId are at DEBUG level,
     /// not INFO or higher. Uses AppActorLogger.testSink to capture log output.
     func testAppUserIdNotLoggedAtInfoLevel() {
-        var capturedLogs: [(level: String, message: String)] = []
+        let capturedLogs = LockedLogCollector()
 
         // Install test sink to capture all log output
         AppActorLogger.testSink = { level, message in
-            capturedLogs.append((level: level, message: message))
+            capturedLogs.append(level: level, message: message)
         }
         defer { AppActorLogger.testSink = nil }
 
@@ -31,7 +31,7 @@ final class SecurityAuditTests: XCTestCase {
         Log.identity.info("Logout complete — new anonymous ID assigned")
 
         // Verify: no INFO-level message contains an appUserId-like string
-        let infoMessages = capturedLogs.filter { $0.level == "info" }
+        let infoMessages = capturedLogs.snapshot().filter { $0.level == "info" }
         for log in infoMessages {
             XCTAssertFalse(
                 log.message.contains("test_user_") || log.message.contains("anon_"),
@@ -40,7 +40,7 @@ final class SecurityAuditTests: XCTestCase {
         }
 
         // Verify: DEBUG-level messages DO contain the user IDs (proving the sink works)
-        let debugMessages = capturedLogs.filter { $0.level == "debug" }
+        let debugMessages = capturedLogs.snapshot().filter { $0.level == "debug" }
         let debugTexts = debugMessages.map(\.message).joined(separator: " ")
         XCTAssertTrue(debugTexts.contains("test_user_123"), "DEBUG log should contain appUserId")
         XCTAssertTrue(debugTexts.contains("test_user_456"), "DEBUG log should contain appUserId")

@@ -181,11 +181,13 @@ public final class AppActor: ObservableObject {
                     hasOverflow: false,
                     customerManager: customerManager
                 )
+                await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
                 setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
                 Log.sdk.info("✅ Purchases restored via AppTransaction fallback")
                 return info
             }
             let info = try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
+            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (no transactions)")
             return info
@@ -240,8 +242,9 @@ public final class AppActor: ObservableObject {
             }
 
             // Step 7: Seed customer cache for ETag reuse
+            let restoreVerification = AppActorVerificationResult.from(signatureVerified: result.signatureVerified)
             await customerManager.seedCache(
-                info: result.customerInfo,
+                info: result.customerInfo.withVerification(restoreVerification),
                 eTag: result.customerETag,
                 appUserId: appUserId,
                 verified: result.signatureVerified
@@ -255,6 +258,7 @@ public final class AppActor: ObservableObject {
                 hasOverflow: !overflow.isEmpty,
                 customerManager: customerManager
             )
+            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(finalInfo, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (bulk: \(result.restoredCount) restored, transferred=\(result.transferred))")
             return finalInfo
@@ -264,6 +268,7 @@ public final class AppActor: ObservableObject {
             await watcher.scanCurrentEntitlements()
             await processor.drainAll()
             let info = try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
+            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (fallback)")
             return info
@@ -342,6 +347,7 @@ public final class AppActor: ObservableObject {
                 appUserId: appUserId,
                 customerManager: customerManager
             )
+            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             return info
         }
@@ -357,6 +363,7 @@ public final class AppActor: ObservableObject {
                 appUserId: appUserId,
                 customerManager: customerManager
             )
+            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             return info
         }
@@ -369,6 +376,7 @@ public final class AppActor: ObservableObject {
         }
 
         let info = try await customerManager.getCustomerInfo(appUserId: appUserId)
+        await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
         setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
         return info
     }
@@ -440,11 +448,13 @@ public final class AppActor: ObservableObject {
         appUserId: String,
         customerManager: AppActorCustomerManager
     ) async throws -> AppActorCustomerInfo {
+        let verification = AppActorVerificationResult.from(signatureVerified: response.signatureVerified)
         switch response.status {
         case "ok":
             if let customer = response.customer {
                 let info = AppActorCustomerInfo(dto: customer, appUserId: appUserId, requestDate: nil)
-                await customerManager.seedCache(info: info, eTag: nil, appUserId: appUserId)
+                    .withVerification(verification)
+                await customerManager.seedCache(info: info, eTag: nil, appUserId: appUserId, verified: response.signatureVerified)
                 return info
             }
 

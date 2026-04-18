@@ -43,5 +43,6 @@
       "store" : "app_store",
       "subscriptionKey" : "com.app.annual"
     }
-  }
+  },
+  "verification" : "notRequested"
 }

@@ -16,7 +16,7 @@ struct AppActorReceiptPostRequest: Encodable, Sendable {
     let originalTransactionId: String?
     /// The offering that contained the purchased package (analytics attribution).
     let offeringId: String?
-    /// The package identifier within the offering (analytics attribution).
+    /// The canonical backend package identifier for analytics attribution.
     let packageId: String?
 }
 
@@ -55,6 +55,8 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
     /// Server-driven finish decision. `nil` when field is absent (older API or retryable status).
     /// When `nil`, SDK falls back to previous behavior (finish on ok/permanent_error).
     let finishTransaction: Bool?
+    /// Whether this response passed SDK response-signature verification.
+    let signatureVerified: Bool
 
     init(
         status: String,
@@ -62,7 +64,8 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
         error: AppActorReceiptErrorInfo? = nil,
         retryAfterSeconds: Double? = nil,
         requestId: String? = nil,
-        finishTransaction: Bool? = nil
+        finishTransaction: Bool? = nil,
+        signatureVerified: Bool = false
     ) {
         self.status = status
         self.customer = customer
@@ -70,6 +73,27 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
         self.retryAfterSeconds = retryAfterSeconds
         self.requestId = requestId
         self.finishTransaction = finishTransaction
+        self.signatureVerified = signatureVerified
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case customer
+        case error
+        case retryAfterSeconds
+        case requestId
+        case finishTransaction
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(String.self, forKey: .status)
+        customer = try container.decodeIfPresent(AppActorCustomerDTO.self, forKey: .customer)
+        error = try container.decodeIfPresent(AppActorReceiptErrorInfo.self, forKey: .error)
+        retryAfterSeconds = try container.decodeIfPresent(Double.self, forKey: .retryAfterSeconds)
+        requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
+        finishTransaction = try container.decodeIfPresent(Bool.self, forKey: .finishTransaction)
+        signatureVerified = false
     }
 }
 
@@ -87,7 +111,7 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
 /// - `VALIDATION_ERROR` — general payload validation failure.
 /// - `APP_NOT_FOUND` — no app registered for the given bundle ID.
 /// - `USER_NOT_FOUND` — app user ID not recognized.
-/// - `RATE_LIMIT` — too many requests.
+/// - `RATE_LIMIT_EXCEEDED` — too many requests.
 /// - `INTERNAL` — server-side error.
 /// - `DUPLICATE_TRANSACTION` — transaction already processed.
 struct AppActorReceiptErrorInfo: Decodable, Sendable, Equatable {
@@ -148,6 +172,8 @@ struct AppActorPurgedDeadLetterSummary: Sendable, Equatable {
 public enum AppActorReceiptPipelineEvent: Sendable {
     /// Receipt was accepted by the server. Transaction finished and removed from queue.
     case postedOk(transactionId: String)
+    /// Receipt was persisted but deferred until the backend has seen this app user identity.
+    case deferredWaitingForIdentity(transactionId: String)
     /// Receipt will be retried after a backoff delay.
     case retryScheduled(transactionId: String, attempt: Int, nextAttemptAt: Date, errorCode: String?)
     /// Receipt was permanently rejected by the server. Transaction finished.

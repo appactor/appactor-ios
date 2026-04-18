@@ -8,6 +8,35 @@ final class BootstrapTests: XCTestCase {
     private var mockClient: MockPaymentClient!
     private var storage: InMemoryPaymentStorage!
 
+    private func makeQueueItem(
+        appUserId: String,
+        transactionId: String,
+        phase: AppActorPaymentQueueItem.Phase = .needsPost
+    ) -> AppActorPaymentQueueItem {
+        AppActorPaymentQueueItem(
+            key: AppActorPaymentQueueItem.makeKey(transactionId: transactionId),
+            bundleId: "com.test",
+            environment: "sandbox",
+            transactionId: transactionId,
+            jws: "jws_\(transactionId)",
+            signedAppTransactionInfo: nil,
+            appUserId: appUserId,
+            productId: "com.test.monthly",
+            originalTransactionId: transactionId,
+            storefront: "USA",
+            offeringId: nil,
+            packageId: nil,
+            phase: phase,
+            attemptCount: 0,
+            nextRetryAt: Date(),
+            firstSeenAt: Date(),
+            lastSeenAt: Date(),
+            lastError: nil,
+            sources: [.purchase],
+            claimedAt: nil
+        )
+    }
+
     override func setUp() {
         super.setUp()
         appactor = AppActor.shared
@@ -117,6 +146,122 @@ final class BootstrapTests: XCTestCase {
                       "Offerings API warm-up should still run even when identify fails")
         XCTAssertNil(appactor.paymentCurrentUser,
                      "No user should be set when identify failed")
+    }
+
+    func testSuccessfulCustomerFetchAfterIdentifyFailureReleasesWaitingReceipts() async throws {
+        storage.setAppUserId("current_user")
+        let queueStore = InMemoryPaymentQueueStore()
+        let unconfirmedProcessor = AppActorPaymentProcessor(store: queueStore, client: mockClient)
+        let watcher = AppActorTransactionWatcher(
+            processor: unconfirmedProcessor,
+            storage: storage,
+            silentSyncFetcher: AppActorStoreKitSilentSyncFetcher()
+        )
+
+        queueStore.upsert(makeQueueItem(appUserId: "current_user", transactionId: "tx_waiting"))
+
+        mockClient.identifyHandler = { _ in
+            throw AppActorError.networkError(URLError(.notConnectedToInternet))
+        }
+        mockClient.getCustomerHandler = { appUserId, _ in
+            .fresh(
+                AppActorCustomerInfo(
+                    entitlements: ["premium": AppActorEntitlementInfo(id: "premium", isActive: true)],
+                    appUserId: appUserId
+                ),
+                eTag: "cust_hash",
+                requestId: "req_customer_success",
+                signatureVerified: false
+            )
+        }
+        mockClient.postReceiptHandler = { request in
+            XCTAssertEqual(request.appUserId, "current_user")
+            return AppActorReceiptPostResponse(status: "ok", requestId: "req_receipt_release")
+        }
+
+        let config = AppActorPaymentConfiguration(
+            apiKey: "pk_test_identify_fail_release",
+            baseURL: URL(string: "https://api.test.appactor.com")!
+        )
+        appactor.configureForTesting(config: config, client: mockClient, storage: storage)
+        appactor.paymentQueueStore = queueStore
+        appactor.paymentProcessor = unconfirmedProcessor
+        appactor.transactionWatcher = watcher
+
+        await appactor.runStartupSequence()
+        try await Task.sleep(nanoseconds: 400_000_000)
+
+        XCTAssertEqual(mockClient.postReceiptCalls.count, 1,
+                       "A successful customer fetch should confirm the identity and release queued receipts in the same session")
+        XCTAssertTrue(queueStore.allItems().isEmpty)
+    }
+
+    func testReceiptForOldIdentityRefreshesCurrentCustomerState() async throws {
+        storage.setAppUserId("current_user")
+        let queueStore = InMemoryPaymentQueueStore()
+        var customerFetchCount = 0
+
+        mockClient.identifyHandler = { request in
+            AppActorIdentifyResult(
+                appUserId: request.appUserId,
+                customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
+                customerETag: "identify_hash",
+                requestId: "req_identify_current",
+                signatureVerified: false
+            )
+        }
+        mockClient.getCustomerHandler = { appUserId, _ in
+            customerFetchCount += 1
+            let entitlementId = customerFetchCount == 1 ? "stale" : "fresh"
+            return .fresh(
+                AppActorCustomerInfo(
+                    entitlements: [entitlementId: AppActorEntitlementInfo(id: entitlementId, isActive: true)],
+                    appUserId: appUserId
+                ),
+                eTag: "customer_hash_\(customerFetchCount)",
+                requestId: "req_customer_\(customerFetchCount)",
+                signatureVerified: false
+            )
+        }
+        mockClient.postReceiptHandler = { request in
+            XCTAssertEqual(request.appUserId, "old_user")
+            return AppActorReceiptPostResponse(
+                status: "ok",
+                customer: AppActorCustomerDTO(
+                    entitlements: [
+                        "legacy": AppActorEntitlementDTO(
+                            isActive: true,
+                            productId: "com.test.monthly"
+                        )
+                    ]
+                ),
+                requestId: "req_old_receipt"
+            )
+        }
+
+        let config = AppActorPaymentConfiguration(
+            apiKey: "pk_test_old_receipt_refresh",
+            baseURL: URL(string: "https://api.test.appactor.com")!
+        )
+        appactor.configureForTesting(
+            config: config,
+            client: mockClient,
+            storage: storage,
+            paymentQueueStore: queueStore
+        )
+        await appactor.runStartupSequence()
+        let baselineCustomerFetches = mockClient.getCustomerCalls.count
+
+        await appactor.paymentProcessor?.confirmIdentity(appUserId: "old_user")
+        queueStore.upsert(makeQueueItem(appUserId: "old_user", transactionId: "tx_old"))
+        await appactor.paymentProcessor?.kick()
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertEqual(mockClient.getCustomerCalls.count, baselineCustomerFetches + 1,
+                       "An old-identity receipt should trigger a refresh for the current user")
+        XCTAssertEqual(appactor.customerInfo.appUserId, "current_user")
+        XCTAssertNotNil(appactor.customerInfo.entitlements["fresh"])
+        XCTAssertTrue(queueStore.allItems().isEmpty)
     }
 
     // MARK: - Lazy offerings fetch

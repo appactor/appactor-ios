@@ -87,6 +87,24 @@ final class PackageUnificationTests: XCTestCase {
         XCTAssertNil(decoded.offerId)
     }
 
+    func testLegacyServerBackedPackageDecodesCanonicalIdFromServerId() throws {
+        let json = """
+        {
+            "id": "default_monthly",
+            "packageType": "monthly",
+            "productId": "com.app.monthly",
+            "localizedPriceString": "$9.99",
+            "offeringId": "off_default",
+            "serverId": "pkg_123e4567-e89b-12d3-a456-426614174000"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try decoder.decode(AppActorPackage.self, from: json)
+
+        XCTAssertEqual(decoded.id, "pkg_123e4567-e89b-12d3-a456-426614174000")
+        XCTAssertEqual(decoded.offeringId, "off_default")
+    }
+
     func testPackageHashableByIdOnly() {
         let lhs = makePackage(id: "same_id", productId: "com.app.monthly")
         let rhs = makePackage(id: "same_id", store: .playStore, productId: "com.app.annual")
@@ -122,7 +140,6 @@ final class PackageUnificationTests: XCTestCase {
             basePlanId: basePlanId,
             offerId: offerId,
             localizedPriceString: localizedPriceString,
-            serverId: "srv_123",
             displayName: displayName,
             metadata: metadata,
             tokenAmount: nil,

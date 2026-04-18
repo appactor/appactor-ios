@@ -38,7 +38,13 @@ enum AppActorLogger {
 
     /// Synchronous test hook for capturing logs in unit tests.
     /// Same `(level, message)` signature as the old `logSink` for minimal test migration.
-    static var testSink: ((_ level: String, _ message: String) -> Void)?
+    private static let testSinkLock = NSLock()
+    nonisolated(unsafe) private static var _testSink: ((_ level: String, _ message: String) -> Void)?
+
+    static var testSink: ((_ level: String, _ message: String) -> Void)? {
+        get { testSinkLock.withLock { _testSink } }
+        set { testSinkLock.withLock { _testSink = newValue } }
+    }
 
     // MARK: - Level Check
 
@@ -52,6 +58,7 @@ enum AppActorLogger {
     /// Writes a record through the pipeline: testSink (sync) → os.log → handler (detached).
     static func write(record: AppActorLogRecord) {
         // Synchronous test hook (for test capture without async)
+        let testSink = self.testSink
         testSink?(record.level.name.lowercased(), record.message)
 
         // os.log integration (direct, same thread for reliability)

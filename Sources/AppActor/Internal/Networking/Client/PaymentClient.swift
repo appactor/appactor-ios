@@ -353,17 +353,41 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
         // Single attempt — no HTTP-level retry. Retry is handled by ReceiptProcessor queue.
         do {
-            let (data, http, _) = try await performRawRequest(urlRequest, path: path, sentNonce: nonce)
+            let (data, http, signatureVerified) = try await performRawRequest(urlRequest, path: path, sentNonce: nonce)
             let requestId = extractRequestId(from: data)
 
             switch http.statusCode {
             case 200..<300:
                 do {
-                    return try decoder.decode(AppActorReceiptPostResponse.self, from: data)
+                    let decoded = try decoder.decode(AppActorReceiptPostResponse.self, from: data)
+                    return AppActorReceiptPostResponse(
+                        status: decoded.status,
+                        customer: decoded.customer,
+                        error: decoded.error,
+                        retryAfterSeconds: decoded.retryAfterSeconds,
+                        requestId: decoded.requestId,
+                        finishTransaction: decoded.finishTransaction,
+                        signatureVerified: signatureVerified
+                    )
                 } catch {
                     Log.network.error("Decode failed for \(path): \(error)")
                     throw AppActorError.decodingError(error, requestId: requestId)
                 }
+
+            case 429:
+                let errorInfo = parseErrorEnvelope(from: data)
+                let retryAfter = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
+                    ?? errorInfo?.retryAfterSeconds
+                Log.network.warn("Rate limited on \(path), retryAfter=\(retryAfter.map { "\($0)s" } ?? "–")")
+                throw AppActorError.serverError(
+                    httpStatus: 429,
+                    code: errorInfo?.code ?? "RATE_LIMIT_EXCEEDED",
+                    message: errorInfo?.message ?? "Rate limited",
+                    details: errorInfo?.details,
+                    requestId: requestId,
+                    scope: errorInfo?.scope,
+                    retryAfterSeconds: retryAfter
+                )
 
             case 400..<500:
                 let errorInfo = parseErrorEnvelope(from: data)
@@ -829,7 +853,17 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
     private func parseErrorEnvelope(from data: Data) -> AppActorErrorResponse.ErrorPayload? {
         guard let parsed = try? JSONDecoder().decode(AppActorErrorResponse.self, from: data) else {
-            return nil
+            guard let receiptResponse = try? JSONDecoder().decode(AppActorReceiptPostResponse.self, from: data),
+                  let receiptError = receiptResponse.error else {
+                return nil
+            }
+            return AppActorErrorResponse.ErrorPayload(
+                code: receiptError.code,
+                message: receiptError.message,
+                details: nil,
+                scope: nil,
+                retryAfterSeconds: receiptResponse.retryAfterSeconds
+            )
         }
         return parsed.error
     }

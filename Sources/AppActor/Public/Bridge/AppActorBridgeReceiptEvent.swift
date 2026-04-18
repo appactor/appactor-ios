@@ -9,6 +9,7 @@ public struct AppActorBridgeReceiptEvent: Sendable, Equatable {
     // MARK: - Type Constants
 
     public static let TYPE_POSTED_OK = "POSTED_OK"
+    public static let TYPE_DEFERRED_WAITING_FOR_IDENTITY = "DEFERRED_WAITING_FOR_IDENTITY"
     public static let TYPE_RETRY_SCHEDULED = "RETRY_SCHEDULED"
     public static let TYPE_PERMANENTLY_REJECTED = "PERMANENTLY_REJECTED"
     public static let TYPE_DEAD_LETTERED = "DEAD_LETTERED"
@@ -57,6 +58,14 @@ public struct AppActorBridgeReceiptEvent: Sendable, Equatable {
         switch detail.event {
         case .postedOk(let txId):
             self.type = Self.TYPE_POSTED_OK
+            self.transactionId = txId
+            self.retryCount = nil
+            self.nextAttemptAt = nil
+            self.errorCode = nil
+            self.key = nil
+
+        case .deferredWaitingForIdentity(let txId):
+            self.type = Self.TYPE_DEFERRED_WAITING_FOR_IDENTITY
             self.transactionId = txId
             self.retryCount = nil
             self.nextAttemptAt = nil

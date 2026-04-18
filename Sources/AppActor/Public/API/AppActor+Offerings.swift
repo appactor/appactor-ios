@@ -6,23 +6,26 @@ extension AppActor {
 
     /// Returns server-driven offerings enriched with StoreKit products.
     ///
-    /// Behaviour (strict TTL):
-    /// - If a fresh in-memory cache exists (within TTL) → returns immediately.
-    /// - If cache is stale or missing → blocks until a fresh network fetch completes.
-    /// - If no cache at all → awaits network + StoreKit enrichment, then returns.
+    /// Behaviour depends on ``AppActorOfferingsFetchPolicy``:
+    /// - `.freshIfStale` → stale or missing cache waits for a fresh network fetch.
+    /// - `.returnCachedThenRefresh` → suitable cached offerings return immediately and refresh in background.
+    /// - `.cacheOnly` → returns only a locale-compatible cache, otherwise throws `OFFERINGS_CACHE_MISS`.
     ///
     /// Multiple concurrent calls are coalesced into a single network request.
     ///
+    /// - Parameter fetchPolicy: Controls whether stale cache is returned or refreshed eagerly.
     /// - Returns: The resolved `AppActorOfferings` with StoreKit-enriched products.
     /// - Throws: `AppActorError` on network, decode, or StoreKit failures.
-    public func offerings() async throws -> AppActorOfferings {
+    public func offerings(
+        fetchPolicy: AppActorOfferingsFetchPolicy = .freshIfStale
+    ) async throws -> AppActorOfferings {
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
         }
         guard let manager = offeringsManager else {
             throw AppActorError.notConfigured
         }
-        let result = try await manager.getOfferings()
+        let result = try await manager.getOfferings(fetchPolicy: fetchPolicy)
         self.paymentOfferings = result
         if let rid = await manager.requestId {
             paymentStorage?.setLastRequestId(rid)

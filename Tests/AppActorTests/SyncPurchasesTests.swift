@@ -107,7 +107,8 @@ final class SyncPurchasesTests: XCTestCase {
                         )
                     ]
                 ),
-                requestId: "req_sync"
+                requestId: "req_sync",
+                signatureVerified: true
             )
         }
 
@@ -127,7 +128,9 @@ final class SyncPurchasesTests: XCTestCase {
         XCTAssertEqual(mockClient.getCustomerCalls.count, 0)
         XCTAssertEqual(info.appUserId, expectedUserId)
         XCTAssertEqual(info.entitlements["premium"]?.isActive, true)
+        XCTAssertEqual(info.verification, .verified)
         XCTAssertEqual(appactor.customerInfo.entitlements["premium"]?.isActive, true)
+        XCTAssertEqual(appactor.customerInfo.verification, .verified)
     }
 
     func testSyncPurchasesFallsBackToAppTransactionWhenNoVerifiedTransactionExists() async throws {

@@ -23,13 +23,15 @@ extension AppActor {
         let appUserId = storage.ensureAppUserId()
         do {
             let info = try await manager.getCustomerInfo(appUserId: appUserId)
+            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+            await paymentProcessor?.kick()
             return info
         } catch let appError as AppActorError where appError.isTransient {
             // Clear cache timestamp so staleness timer/foreground handler retries immediately
             await manager.clearCache(appUserId: appUserId)
             let offlineKeys = await manager.activeEntitlementKeysOffline(appUserId: appUserId)
-            if let offlineInfo = offlineCustomerInfoIfIdentityMatches(
+            if let offlineInfo = await offlineCustomerInfoIfIdentityMatches(
                 expectedAppUserId: appUserId,
                 offlineKeys: offlineKeys
             ) {
@@ -64,9 +66,15 @@ extension AppActor {
     func offlineCustomerInfoIfIdentityMatches(
         expectedAppUserId: String,
         offlineKeys: Set<String>
-    ) -> AppActorCustomerInfo? {
-        guard !offlineKeys.isEmpty,
-              paymentStorage?.currentAppUserId == expectedAppUserId else {
+    ) async -> AppActorCustomerInfo? {
+        guard paymentStorage?.currentAppUserId == expectedAppUserId else {
+            return nil
+        }
+
+        let offlineNonSubscriptions = await customerManager?.derivedNonSubscriptionsFromStoreKit(
+            offeringsManager: offeringsManager
+        ) ?? [:]
+        guard !offlineKeys.isEmpty || !offlineNonSubscriptions.isEmpty else {
             return nil
         }
 
@@ -79,7 +87,7 @@ extension AppActor {
         return AppActorCustomerInfo(
             entitlements: offlineEntitlements,
             subscriptions: [:],
-            nonSubscriptions: [:],
+            nonSubscriptions: offlineNonSubscriptions,
             snapshotDate: Date(),
             appUserId: expectedAppUserId,
             isComputedOffline: true,
@@ -91,6 +99,11 @@ extension AppActor {
 // MARK: - Identity-Safe Customer Info Assignment
 
 extension AppActor {
+    func confirmReceiptPipelineIdentityIfCurrent(appUserId: String) async {
+        guard paymentStorage?.currentAppUserId == appUserId else { return }
+        await paymentProcessor?.confirmIdentity(appUserId: appUserId)
+    }
+
     /// Sets `customerInfo` only if the current user still matches the expected identity.
     /// Discards stale results from async calls that completed after a login/logout.
     func setCustomerInfoIfIdentityMatches(_ info: AppActorCustomerInfo, expectedAppUserId: String) {

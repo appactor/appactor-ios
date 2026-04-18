@@ -194,6 +194,25 @@ final class BridgeErrorTests: XCTestCase {
         XCTAssertEqual(dict["debugMessage"] as? String, "code=INTERNAL")
     }
 
+    func testToDictionaryIncludesStructuredFields() {
+        let bridge = AppActorBridgeError(
+            code: "SERVER",
+            message: "too many requests",
+            isTransient: true,
+            statusCode: 429,
+            debugMessage: "code=RATE_LIMIT_EXCEEDED, requestId=req_123",
+            backendCode: "RATE_LIMIT_EXCEEDED",
+            requestId: "req_123",
+            scope: "app",
+            retryAfterSeconds: 12.5
+        )
+        let dict = bridge.toDictionary()
+        XCTAssertEqual(dict["backendCode"] as? String, "RATE_LIMIT_EXCEEDED")
+        XCTAssertEqual(dict["requestId"] as? String, "req_123")
+        XCTAssertEqual(dict["scope"] as? String, "app")
+        XCTAssertEqual(dict["retryAfterSeconds"] as? Double, 12.5)
+    }
+
     func testToDictionaryOmitsNilFields() {
         let bridge = AppActorBridgeError(
             code: "NETWORK",
@@ -250,6 +269,23 @@ final class BridgeReceiptEventTests: XCTestCase {
         XCTAssertEqual(bridge.transactionId, "tx_123")
         XCTAssertEqual(bridge.productId, "com.app.monthly")
         XCTAssertEqual(bridge.appUserId, "user_1")
+        XCTAssertNil(bridge.retryCount)
+        XCTAssertNil(bridge.nextAttemptAt)
+        XCTAssertNil(bridge.errorCode)
+        XCTAssertNil(bridge.key)
+    }
+
+    func testDeferredWaitingForIdentityMapping() {
+        let detail = AppActorReceiptPipelineEventDetail(
+            event: .deferredWaitingForIdentity(transactionId: "tx_wait"),
+            productId: "com.app.monthly",
+            appUserId: "user_waiting"
+        )
+        let bridge = AppActorBridgeReceiptEvent(from: detail)
+        XCTAssertEqual(bridge.type, AppActorBridgeReceiptEvent.TYPE_DEFERRED_WAITING_FOR_IDENTITY)
+        XCTAssertEqual(bridge.transactionId, "tx_wait")
+        XCTAssertEqual(bridge.productId, "com.app.monthly")
+        XCTAssertEqual(bridge.appUserId, "user_waiting")
         XCTAssertNil(bridge.retryCount)
         XCTAssertNil(bridge.nextAttemptAt)
         XCTAssertNil(bridge.errorCode)

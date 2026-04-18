@@ -203,15 +203,47 @@ actor AppActorCustomerManager {
 
     private func derivedEntitlementKeysFromStoreKit() async -> Set<String> {
         let activeIds = await entitlementChecker.activeProductIds()
-        guard !activeIds.isEmpty,
-              let entry = await etagManager.cached(AppActorOfferingsResponseDTO.self, for: .offerings) else {
+        guard !activeIds.isEmpty else {
             return []
         }
 
-        let mapping = entry.value.productEntitlements ?? [:]
+        let mapping: [String: [String]]
+        if let offlineCatalog = await etagManager.cached(AppActorOfflineProductCatalog.self, for: .offlineProductCatalog) {
+            mapping = offlineCatalog.value.productEntitlements
+        } else if let entry = await etagManager.cached(AppActorOfferingsManager.CachedPayload.self, for: .offerings) {
+            mapping = entry.value.dto.productEntitlements ?? [:]
+        } else {
+            return []
+        }
         return Set(activeIds.flatMap { productId in
             mapping["ios:\(productId)"] ?? mapping[productId] ?? []
         })
+    }
+
+    func derivedNonSubscriptionsFromStoreKit(
+        offeringsManager: AppActorOfferingsManager?
+    ) async -> [String: [AppActorNonSubscription]] {
+        guard let offeringsManager else { return [:] }
+
+        let activeIds = await entitlementChecker.activeProductIds()
+        guard !activeIds.isEmpty else {
+            return [:]
+        }
+
+        var nonSubscriptions: [String: [AppActorNonSubscription]] = [:]
+        for productId in activeIds.sorted() {
+            guard let kind = await offeringsManager.currentOneTimeProductKind(productId: productId) else {
+                continue
+            }
+            nonSubscriptions[productId, default: []].append(
+                AppActorNonSubscription(
+                    productIdentifier: productId,
+                    store: .appStore,
+                    isConsumable: kind == .consumable
+                )
+            )
+        }
+        return nonSubscriptions
     }
 
     private static func shouldFallbackToCache(_ error: Error) -> Bool {

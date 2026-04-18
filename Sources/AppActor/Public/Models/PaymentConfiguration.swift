@@ -10,6 +10,18 @@ public typealias AppActorOptions = AppActorPaymentConfiguration.Options
 
 // MARK: - Configuration
 
+/// Canonical wrapper-platform metadata used by bridge/plugin consumers.
+public struct AppActorPlatformInfo: Sendable, Equatable, Codable {
+
+    public var flavor: String
+    public var version: String?
+
+    public init(flavor: String, version: String? = nil) {
+        self.flavor = flavor
+        self.version = version
+    }
+}
+
 /// Configuration for the AppActor Payment identity module.
 public struct AppActorPaymentConfiguration: Sendable {
 
@@ -68,22 +80,49 @@ public struct AppActorPaymentConfiguration: Sendable {
         /// Set to a specific level (e.g. `.debug`) to escalate logging for payment mode.
         public var logLevel: AppActorLogLevel?
 
-        /// Platform flavor for hybrid wrappers (e.g. "flutter", "react-native").
-        /// `nil` for native iOS consumers.
-        public var platformFlavor: String?
+        /// Canonical wrapper-platform metadata for bridge/plugin consumers.
+        public var platformInfo: AppActorPlatformInfo?
 
-        /// Platform wrapper version (e.g. "1.0.0").
-        /// `nil` for native iOS consumers.
-        public var platformVersion: String?
+        /// Legacy flat bridge field kept for native ergonomics and one migration window.
+        public var platformFlavor: String? {
+            get { platformInfo?.flavor }
+            set {
+                if let flavor = newValue?.trimmingCharacters(in: .whitespacesAndNewlines), !flavor.isEmpty {
+                    platformInfo = AppActorPlatformInfo(flavor: flavor, version: platformInfo?.version)
+                } else if platformInfo?.version == nil {
+                    platformInfo = nil
+                }
+            }
+        }
+
+        /// Legacy flat bridge field kept for native ergonomics and one migration window.
+        public var platformVersion: String? {
+            get { platformInfo?.version }
+            set {
+                if let existingFlavor = platformInfo?.flavor {
+                    platformInfo = AppActorPlatformInfo(flavor: existingFlavor, version: newValue)
+                } else if let newValue {
+                    platformInfo = AppActorPlatformInfo(flavor: "flutter", version: newValue)
+                }
+            }
+        }
 
         public init(
             logLevel: AppActorLogLevel? = nil,
+            platformInfo: AppActorPlatformInfo? = nil,
             platformFlavor: String? = nil,
             platformVersion: String? = nil
         ) {
             self.logLevel = logLevel
-            self.platformFlavor = platformFlavor
-            self.platformVersion = platformVersion
+            if let platformInfo {
+                self.platformInfo = platformInfo
+            } else if let platformFlavor, !platformFlavor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.platformInfo = AppActorPlatformInfo(flavor: platformFlavor, version: platformVersion)
+            } else if let platformVersion {
+                self.platformInfo = AppActorPlatformInfo(flavor: "flutter", version: platformVersion)
+            } else {
+                self.platformInfo = nil
+            }
         }
     }
 

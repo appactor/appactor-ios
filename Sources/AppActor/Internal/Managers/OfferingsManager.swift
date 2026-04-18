@@ -6,14 +6,63 @@ import StoreKit
 ///
 /// Features:
 /// - **Single-flight**: concurrent `getOfferings()` calls coalesce into one network request.
-/// - **TTL + SWR**: in-memory cache with foreground (5 min) / background (24 hr) TTL. Stale cache returns immediately while a background refresh runs (stale-while-revalidate). Cold cache blocks until fresh data arrives.
-/// - **Disk cache**: persists raw DTO via centralized ETagManager for cold-start; re-enriches on load.
+/// - **Explicit fetch policy**: callers choose whether stale cache blocks for freshness or returns immediately while revalidating.
+/// - **Disk cache**: persists DTO + locale metadata via the centralized ETagManager for cold-start; re-enriches on load.
 actor AppActorOfferingsManager {
 
     private struct NetworkStagePayload {
         let dto: AppActorOfferingsResponseDTO?
         let cacheDate: Date?
         let verification: AppActorVerificationResult
+    }
+
+    /// Stored in the shared ETag cache so offerings can remain locale-safe across app launches.
+    struct CachedPayload: Codable, Sendable {
+        let dto: AppActorOfferingsResponseDTO
+        let preferredLocales: [String]
+
+        private enum CodingKeys: String, CodingKey {
+            case dto
+            case preferredLocales
+            case currentOffering
+            case offerings
+            case productEntitlements
+        }
+
+        init(dto: AppActorOfferingsResponseDTO, preferredLocales: [String]) {
+            self.dto = dto
+            self.preferredLocales = preferredLocales
+        }
+
+        init(from decoder: Decoder) throws {
+            struct Wrapped: Decodable {
+                let dto: AppActorOfferingsResponseDTO
+                let preferredLocales: [String]?
+            }
+
+            if let wrapped = try? Wrapped(from: decoder) {
+                self.dto = wrapped.dto
+                self.preferredLocales = wrapped.preferredLocales ?? Locale.preferredLanguages
+                return
+            }
+
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.dto = AppActorOfferingsResponseDTO(
+                currentOffering: try container.decodeIfPresent(AppActorOfferingDTO.self, forKey: .currentOffering),
+                offerings: try container.decode([AppActorOfferingDTO].self, forKey: .offerings),
+                productEntitlements: try container.decodeIfPresent([String: [String]].self, forKey: .productEntitlements)
+            )
+            self.preferredLocales = try container.decodeIfPresent([String].self, forKey: .preferredLocales)
+                ?? Locale.preferredLanguages
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(dto.currentOffering, forKey: .currentOffering)
+            try container.encode(dto.offerings, forKey: .offerings)
+            try container.encodeIfPresent(dto.productEntitlements, forKey: .productEntitlements)
+            try container.encode(preferredLocales, forKey: .preferredLocales)
+        }
     }
 
     // MARK: - Dependencies
@@ -68,37 +117,72 @@ actor AppActorOfferingsManager {
     // MARK: - Cache Freshness
 
     /// Returns `true` when the in-memory cache exists, is within TTL, and locale hasn't changed.
+    private func currentPreferredLocales() -> [String] {
+        Locale.preferredLanguages
+    }
+
+    private func isLocaleCompatible(_ locales: [String]) -> Bool {
+        !locales.isEmpty && locales == currentPreferredLocales()
+    }
+
+    private func suitableInMemoryCache() -> AppActorOfferings? {
+        guard let cached = cachedOfferings, cachedLocales == currentPreferredLocales() else { return nil }
+        return cached
+    }
+
     private func isCacheFresh() -> Bool {
-        guard cachedOfferings != nil, let at = cachedAt else { return false }
+        guard suitableInMemoryCache() != nil, let at = cachedAt else { return false }
         let ttl = isBackground ? Self.backgroundTTL : Self.foregroundTTL
         let age = dateProvider().timeIntervalSince(at)
-        guard age < ttl else { return false }
-        return cachedLocales == Locale.preferredLanguages
+        return age < ttl
+    }
+
+    private func startRevalidationIfNeeded() {
+        guard revalidationTask == nil, inFlightTask == nil else { return }
+        revalidationTask = Task { [weak self] in
+            guard let self else { return }
+            _ = try? await self.fetchCoalesced()
+            await self.clearRevalidationTask()
+        }
     }
 
     // MARK: - Public API
 
-    /// Returns offerings, using cache when fresh or fetching from network.
-    ///
-    /// - If memory cache is fresh → returns immediately.
-    /// - If stale cache exists → returns stale immediately, refreshes in background (SWR).
-    /// - If no cache → awaits network + StoreKit enrichment.
-    func getOfferings() async throws -> AppActorOfferings {
+    /// Returns offerings, using the requested fetch policy to decide how stale cache is handled.
+    func getOfferings(
+        fetchPolicy: AppActorOfferingsFetchPolicy = .freshIfStale
+    ) async throws -> AppActorOfferings {
         // Fresh cache → return immediately
-        if let cached = cachedOfferings, isCacheFresh() {
+        if let cached = suitableInMemoryCache(), isCacheFresh() {
             return cached
         }
 
-        // Stale cache exists → return it immediately, refresh in background
-        if let cached = cachedOfferings {
-            if revalidationTask == nil {
-                revalidationTask = Task { [weak self] in
-                    guard let self else { return }
-                    _ = try? await self.fetchCoalesced()
-                    await self.clearRevalidationTask()
-                }
+        switch fetchPolicy {
+        case .freshIfStale:
+            // No suitable fresh cache → wait for a fresh fetch.
+            if let enrichmentTask = enrichmentTask {
+                return try await enrichmentTask.value
             }
-            return cached
+            return try await fetchCoalesced()
+
+        case .returnCachedThenRefresh:
+            if let cached = suitableInMemoryCache() {
+                startRevalidationIfNeeded()
+                return cached
+            }
+            if let disk = await loadFromDiskCache() {
+                startRevalidationIfNeeded()
+                return disk
+            }
+
+        case .cacheOnly:
+            if let cached = suitableInMemoryCache() {
+                return cached
+            }
+            if let disk = await loadFromDiskCache() {
+                return disk
+            }
+            throw AppActorError.offeringsCacheMiss()
         }
 
         // No cache at all → must wait
@@ -142,6 +226,32 @@ actor AppActorOfferingsManager {
         cachedAt = nil
         cachedLocales = []
         await etagManager.clear(.offerings)
+        await etagManager.clear(.offlineProductCatalog)
+    }
+
+    func currentProductEntitlements() async -> [String: [String]] {
+        if let cached = cachedOfferings?.productEntitlements, !cached.isEmpty {
+            return cached
+        }
+        if let entry = await etagManager.cached(AppActorOfflineProductCatalog.self, for: .offlineProductCatalog),
+           !entry.value.productEntitlements.isEmpty {
+            return entry.value.productEntitlements
+        }
+        if let entry = await loadCachedPayload() {
+            return entry.value.dto.productEntitlements ?? [:]
+        }
+        return [:]
+    }
+
+    func currentOneTimeProductKind(productId: String) async -> AppActorOfflineProductCatalog.OneTimeProductKind? {
+        guard !productId.isEmpty else { return nil }
+        if let entry = await etagManager.cached(AppActorOfflineProductCatalog.self, for: .offlineProductCatalog) {
+            return entry.value.oneTimeProductKind(productId: productId)
+        }
+        if let entry = await loadCachedPayload() {
+            return entry.value.dto.toOfflineProductCatalog().oneTimeProductKind(productId: productId)
+        }
+        return nil
     }
 
     /// Bootstrap fast path: wait for the offerings API response so product-entitlement
@@ -160,8 +270,8 @@ actor AppActorOfferingsManager {
         } catch is CancellationError {
             return
         } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
-            if let entry = await etagManager.cached(AppActorOfferingsResponseDTO.self, for: .offerings) {
-                startEnrichmentTaskIfNeeded(dto: entry.value, cacheDate: entry.cachedAt, generation: gen, verification: entry.verification)
+            if let entry = await loadCachedPayload(), isLocaleCompatible(entry.value.preferredLocales) {
+                startEnrichmentTaskIfNeeded(dto: entry.value.dto, cacheDate: entry.cachedAt, generation: gen, verification: entry.verification)
             } else if let fallback = fallbackDTO {
                 Log.offerings.debug("Bootstrap prefetch — using bundled fallback offerings")
                 startEnrichmentTaskIfNeeded(dto: fallback, cacheDate: dateProvider(), generation: gen)
@@ -256,7 +366,7 @@ actor AppActorOfferingsManager {
 
     /// Returns the first available fallback: in-memory cache → disk cache → bundled fallback DTO.
     private func fallbackOfferings(generation: UInt64) async -> AppActorOfferings? {
-        if let existing = cachedOfferings { return existing }
+        if let existing = suitableInMemoryCache() { return existing }
         if let disk = await loadFromDiskCache(generation: generation) { return disk }
         if let fallback = await loadFromFallbackDTO(generation: generation) { return fallback }
         return nil
@@ -290,7 +400,7 @@ actor AppActorOfferingsManager {
 
     private func executeNetworkStage(generation: UInt64) async throws -> NetworkStagePayload {
         let pipelineStart = CFAbsoluteTimeGetCurrent()
-        let lastETag = await etagManager.eTag(for: .offerings)
+        let lastETag = await currentLocaleCompatibleETag()
         let result = try await client.getOfferings(eTag: lastETag)
         let apiMs = Int((CFAbsoluteTimeGetCurrent() - pipelineStart) * 1000)
 
@@ -299,7 +409,8 @@ actor AppActorOfferingsManager {
             Log.offerings.info("  ⏱ offerings/api: \(apiMs) ms (200 fresh)")
             let verification = AppActorVerificationResult.from(signatureVerified: signatureVerified)
             if cacheGeneration == generation {
-                await etagManager.storeFresh(dto, for: .offerings, eTag: eTag, verified: signatureVerified)
+                let payload = CachedPayload(dto: dto, preferredLocales: currentPreferredLocales())
+                await etagManager.storeFresh(payload, for: .offerings, eTag: eTag, verified: signatureVerified)
                 lastRequestId = requestId
             }
             return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), verification: verification)
@@ -310,22 +421,20 @@ actor AppActorOfferingsManager {
                 lastRequestId = requestId
             }
 
-            if cachedOfferings != nil {
+            if let cached = suitableInMemoryCache() {
                 if cacheGeneration == generation {
-                    _ = await etagManager.handleNotModified(
-                        AppActorOfferingsResponseDTO.self, for: .offerings, rotatedETag: eTag
-                    )
+                    _ = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag)
                     cachedAt = dateProvider()
                 }
                 Log.offerings.debug("Offerings not modified (304), using in-memory cache")
                 Log.offerings.info("  ⏱ offerings/storekit: 0 ms (memory cache hit)")
-                return NetworkStagePayload(dto: nil, cacheDate: nil, verification: cachedOfferings?.verification ?? .notRequested)
+                return NetworkStagePayload(dto: nil, cacheDate: nil, verification: cached.verification)
             }
 
-            if cacheGeneration == generation, let result = await etagManager.handleNotModified(
-                AppActorOfferingsResponseDTO.self, for: .offerings, rotatedETag: eTag
-            ) {
-                return NetworkStagePayload(dto: result.value, cacheDate: dateProvider(), verification: result.verification)
+            if cacheGeneration == generation,
+               let result = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag),
+               isLocaleCompatible(result.value.preferredLocales) {
+                return NetworkStagePayload(dto: result.value.dto, cacheDate: dateProvider(), verification: result.verification)
             }
 
             Log.offerings.debug("Cache miss on 304, refreshing offerings")
@@ -342,7 +451,8 @@ actor AppActorOfferingsManager {
 
             let retryVerification = AppActorVerificationResult.from(signatureVerified: retryVerified)
             if cacheGeneration == generation {
-                await etagManager.storeFresh(dto, for: .offerings, eTag: retryETag, verified: retryVerified)
+                let payload = CachedPayload(dto: dto, preferredLocales: currentPreferredLocales())
+                await etagManager.storeFresh(payload, for: .offerings, eTag: retryETag, verified: retryVerified)
                 lastRequestId = retryReqId
             }
             return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), verification: retryVerification)
@@ -470,7 +580,7 @@ actor AppActorOfferingsManager {
 
                 let pkgType = AppActorPackageType(serverString: packageDTO.packageType)
                 let customIdentifier: String? = (pkgType == .custom) ? packageDTO.packageType : nil
-                let packageId = "\(offeringDTO.id)_\(packageDTO.packageType)"
+                let packageId = packageDTO.id ?? "\(offeringDTO.id)_\(packageDTO.packageType)"
 
                 let currencyCode: String?
                 if #available(iOS 16.0, macOS 13.0, *) {
@@ -492,7 +602,6 @@ actor AppActorOfferingsManager {
                     offerId: productRef.offerId,
                     localizedPriceString: skProduct.displayPrice,
                     offeringId: offeringDTO.id,
-                    serverId: packageDTO.id,
                     displayName: packageDTO.displayName,
                     metadata: packageDTO.metadata,
                     tokenAmount: packageDTO.tokenAmount,
@@ -545,13 +654,26 @@ actor AppActorOfferingsManager {
 
     // MARK: - Cold Start (Disk Cache)
 
+    private func loadCachedPayload() async -> (value: CachedPayload, eTag: String?, cachedAt: Date, verification: AppActorVerificationResult)? {
+        await etagManager.cached(CachedPayload.self, for: .offerings)
+    }
+
+    private func currentLocaleCompatibleETag() async -> String? {
+        guard let entry = await loadCachedPayload(),
+              isLocaleCompatible(entry.value.preferredLocales) else {
+            return nil
+        }
+        return entry.eTag
+    }
+
     /// Attempts to load offerings from disk cache and enrich with StoreKit products.
     /// Returns `nil` if no cache or enrichment fails. Does not throw.
     func loadFromDiskCache(generation: UInt64? = nil) async -> AppActorOfferings? {
-        guard let entry = await etagManager.cached(AppActorOfferingsResponseDTO.self, for: .offerings) else {
+        guard let entry = await loadCachedPayload(),
+              isLocaleCompatible(entry.value.preferredLocales) else {
             return nil
         }
-        return await enrichAndCache(dto: entry.value, cacheDate: entry.cachedAt, context: "disk cache", generation: generation, verification: entry.verification)
+        return await enrichAndCache(dto: entry.value.dto, cacheDate: entry.cachedAt, context: "disk cache", generation: generation, verification: entry.verification)
     }
 
     /// Attempts to load offerings from the bundled fallback DTO and enrich with StoreKit products.
@@ -579,6 +701,12 @@ actor AppActorOfferingsManager {
     ) async -> AppActorOfferings? {
         do {
             let offerings = try await enrich(dto: dto, verification: verification)
+            await etagManager.storeFresh(
+                dto.toOfflineProductCatalog(),
+                for: .offlineProductCatalog,
+                eTag: nil,
+                verified: verification == .verified
+            )
             if generation == nil || cacheGeneration == generation {
                 cachedOfferings = offerings
                 cachedAt = cacheDate

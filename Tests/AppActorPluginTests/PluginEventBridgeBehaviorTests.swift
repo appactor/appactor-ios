@@ -94,6 +94,46 @@ final class PluginEventBridgeBehaviorTests: XCTestCase {
         XCTAssertEqual(receiptPayload["app_user_id"] as? String, "user_123")
     }
 
+    func testReceiptPipelineEventUsesDeferredWaitingForIdentityType() async throws {
+        let appActor = AppActor.shared
+        let originalCustomerListener = appActor.onCustomerInfoChanged
+        let originalReceiptListener = appActor.onReceiptPipelineEvent
+        let originalPurchaseIntentStorage = appActor._onPurchaseIntent
+        let delegate = RecordingPluginDelegate()
+        let expectation = XCTestExpectation(description: "plugin delegate receives deferred receipt event")
+
+        defer {
+            AppActorPlugin.shared.stopEventListening()
+            appActor.onCustomerInfoChanged = originalCustomerListener
+            appActor.onReceiptPipelineEvent = originalReceiptListener
+            appActor._onPurchaseIntent = originalPurchaseIntentStorage
+            AppActorPlugin.shared.delegate = nil
+        }
+
+        delegate.onEvent = { name, _ in
+            if name == "receipt_pipeline_event" {
+                expectation.fulfill()
+            }
+        }
+        AppActorPlugin.shared.delegate = delegate
+        AppActorPlugin.shared.startEventListening()
+
+        let receiptDetail = AppActorReceiptPipelineEventDetail(
+            event: .deferredWaitingForIdentity(transactionId: "tx_wait"),
+            productId: "com.app.monthly",
+            appUserId: "user_waiting"
+        )
+        appActor.onReceiptPipelineEvent?(receiptDetail)
+
+        await fulfillment(of: [expectation], timeout: 5.0)
+
+        let receiptPayload = try parseJSON(delegate.events.last!.json)
+        XCTAssertEqual(receiptPayload["type"] as? String, "deferred_waiting_for_identity")
+        XCTAssertEqual(receiptPayload["transaction_id"] as? String, "tx_wait")
+        XCTAssertEqual(receiptPayload["product_id"] as? String, "com.app.monthly")
+        XCTAssertEqual(receiptPayload["app_user_id"] as? String, "user_waiting")
+    }
+
     private func parseJSON(_ json: String) throws -> [String: Any] {
         let data = Data(json.utf8)
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])

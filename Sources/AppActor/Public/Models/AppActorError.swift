@@ -161,6 +161,18 @@ public struct AppActorError: Error, Sendable, LocalizedError {
             && httpStatus != 429
     }
 
+    /// Receipt POST-specific 4xx codes that should be treated as transient until
+    /// the backend has finished establishing the local identity.
+    var isRetryableReceiptClientError: Bool {
+        guard isPermanentClientError else { return false }
+        switch code {
+        case "USER_NOT_FOUND", "PROFILE_NOT_READY", "IDENTITY_NOT_PROPAGATED":
+            return true
+        default:
+            return false
+        }
+    }
+
     // MARK: - Convenience Factories
 
     /// Internal helper for errors without HTTP/server metadata.
@@ -189,6 +201,14 @@ public struct AppActorError: Error, Sendable, LocalizedError {
 
     static func validationError(_ message: String) -> AppActorError {
         .clientError(kind: .validation, code: "VALIDATION_ERROR", message: message)
+    }
+
+    static func offeringsCacheMiss() -> AppActorError {
+        .clientError(
+            kind: .validation,
+            code: "OFFERINGS_CACHE_MISS",
+            message: "No locale-compatible cached offerings are available."
+        )
     }
 
     static func networkError(_ error: Error) -> AppActorError {

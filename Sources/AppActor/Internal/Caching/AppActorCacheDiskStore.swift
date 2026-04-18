@@ -88,9 +88,9 @@ actor AppActorCacheDiskStore {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Removes all cache files that were stored without response verification.
-    /// Keeps verified entries intact. Used for hygiene cleanup at bootstrap
-    /// when verification mode is enabled.
+    /// Removes all cache files whose verification result resolved to `.failed`.
+    /// Keeps `.verified` and transitional `.notRequested` entries intact.
+    /// Used for hygiene cleanup at bootstrap when verification mode is enabled.
     func clearAllUnverified() {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }

@@ -4,6 +4,7 @@ import CryptoKit
 /// Identifies a cacheable resource in the centralized ETag cache.
 enum AppActorCacheResource: Hashable, Sendable {
     case offerings
+    case offlineProductCatalog
     case customer(appUserId: String)
     case remoteConfigs(appUserId: String?)
     case experiments(appUserId: String)
@@ -13,6 +14,8 @@ enum AppActorCacheResource: Hashable, Sendable {
         switch self {
         case .offerings:
             return "offerings"
+        case .offlineProductCatalog:
+            return "offline_product_catalog"
         case .customer(let appUserId):
             // SHA-256 truncated to 16 hex chars — collision-safe and filesystem-safe
             let digest = SHA256.hash(data: Data(appUserId.utf8))

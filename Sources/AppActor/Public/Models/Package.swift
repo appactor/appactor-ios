@@ -7,7 +7,10 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
 
     // MARK: - Identity
 
-    /// Unique identifier: `"{offeringId}_{packageType}"`.
+    /// Canonical package identifier.
+    ///
+    /// For server-backed offerings this is the backend package UUID.
+    /// For local or direct-purchase flows it remains the caller-provided identifier.
     public let id: String
 
     /// The role of this package (e.g. `.monthly`, `.annual`).
@@ -42,9 +45,6 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
 
     /// The offering identifier this package belongs to. `nil` in local mode or direct product purchases.
     public let offeringId: String?
-
-    /// Server-assigned package UUID. `nil` in local mode.
-    public let serverId: String?
 
     /// Display name for this package.
     public let displayName: String?
@@ -89,7 +89,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         case offerId
         case localizedPriceString
         case offeringId
-        case serverId
+        case legacyServerId = "serverId"
         case displayName
         case metadata
         case tokenAmount
@@ -106,7 +106,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
+        let decodedId = try container.decode(String.self, forKey: .id)
         packageType = try container.decode(AppActorPackageType.self, forKey: .packageType)
         customTypeIdentifier = try container.decodeIfPresent(String.self, forKey: .customTypeIdentifier)
         store = (try? container.decodeIfPresent(AppActorStore.self, forKey: .store)) ?? .appStore
@@ -116,7 +116,15 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         offerId = try container.decodeIfPresent(String.self, forKey: .offerId)
         localizedPriceString = try container.decode(String.self, forKey: .localizedPriceString)
         offeringId = try container.decodeIfPresent(String.self, forKey: .offeringId)
-        serverId = try container.decodeIfPresent(String.self, forKey: .serverId)
+        let legacyServerId = try container.decodeIfPresent(String.self, forKey: .legacyServerId)
+        if offeringId != nil,
+           UUID(uuidString: decodedId) == nil,
+           let legacyServerId,
+           !legacyServerId.isEmpty {
+            id = legacyServerId
+        } else {
+            id = decodedId
+        }
         displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata)
         tokenAmount = try container.decodeIfPresent(Int.self, forKey: .tokenAmount)
@@ -127,6 +135,30 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         productName = try container.decodeIfPresent(String.self, forKey: .productName)
         productDescription = try container.decodeIfPresent(String.self, forKey: .productDescription)
         subscriptionGroupId = try container.decodeIfPresent(String.self, forKey: .subscriptionGroupId)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(packageType, forKey: .packageType)
+        try container.encodeIfPresent(customTypeIdentifier, forKey: .customTypeIdentifier)
+        try container.encode(store, forKey: .store)
+        try container.encode(productId, forKey: .productId)
+        try container.encodeIfPresent(storeProductId, forKey: .storeProductId)
+        try container.encodeIfPresent(basePlanId, forKey: .basePlanId)
+        try container.encodeIfPresent(offerId, forKey: .offerId)
+        try container.encode(localizedPriceString, forKey: .localizedPriceString)
+        try container.encodeIfPresent(offeringId, forKey: .offeringId)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+        try container.encodeIfPresent(metadata, forKey: .metadata)
+        try container.encodeIfPresent(tokenAmount, forKey: .tokenAmount)
+        try container.encodeIfPresent(position, forKey: .position)
+        try container.encodeIfPresent(price, forKey: .price)
+        try container.encodeIfPresent(currencyCode, forKey: .currencyCode)
+        try container.encodeIfPresent(productType, forKey: .productType)
+        try container.encodeIfPresent(productName, forKey: .productName)
+        try container.encodeIfPresent(productDescription, forKey: .productDescription)
+        try container.encodeIfPresent(subscriptionGroupId, forKey: .subscriptionGroupId)
     }
 
     // MARK: - Hashable / Equatable
@@ -152,7 +184,6 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         offerId: String? = nil,
         localizedPriceString: String,
         offeringId: String? = nil,
-        serverId: String?,
         displayName: String?,
         metadata: [String: String]?,
         tokenAmount: Int? = nil,
@@ -174,7 +205,6 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         self.offerId = offerId
         self.localizedPriceString = localizedPriceString
         self.offeringId = offeringId
-        self.serverId = serverId
         self.displayName = displayName
         self.metadata = metadata
         self.tokenAmount = tokenAmount
@@ -194,7 +224,6 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         productId: String,
         localizedPriceString: String,
         product: Any? = nil,
-        serverId: String?,
         displayName: String?,
         metadata: [String: String]?,
         tokenAmount: Int? = nil,
@@ -220,7 +249,6 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
             productId: productId,
             storeProductId: productId,
             localizedPriceString: localizedPriceString,
-            serverId: serverId,
             displayName: displayName,
             metadata: metadata,
             tokenAmount: tokenAmount,

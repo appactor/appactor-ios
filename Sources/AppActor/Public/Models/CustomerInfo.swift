@@ -173,7 +173,7 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
         case consumableBalances, tokenBalance, snapshotDate
         case appUserId, requestId
         case requestDate, firstSeen, lastSeen, managementUrl
-        case isComputedOffline, productEntitlements, activeEntitlementKeys
+        case isComputedOffline, verification, productEntitlements, activeEntitlementKeys
     }
 
     public init(from decoder: Decoder) throws {
@@ -229,7 +229,7 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
         self.lastSeen = try? container.decodeIfPresent(String.self, forKey: .lastSeen)
         self.managementUrl = try? container.decodeIfPresent(String.self, forKey: .managementUrl)
         self.isComputedOffline = false  // Transient in-memory state — always false when decoded
-        self.verification = .notRequested  // Set by SDK after decode, not from server JSON
+        self.verification = (try? container.decodeIfPresent(AppActorVerificationResult.self, forKey: .verification)) ?? .notRequested
         self.productEntitlements = try? container.decodeIfPresent([String: [String]].self, forKey: .productEntitlements)
     }
 
@@ -248,6 +248,7 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
         try container.encodeIfPresent(lastSeen, forKey: .lastSeen)
         try container.encodeIfPresent(managementUrl, forKey: .managementUrl)
         try container.encode(isComputedOffline, forKey: .isComputedOffline)
+        try container.encode(verification, forKey: .verification)
         try container.encodeIfPresent(productEntitlements, forKey: .productEntitlements)
         try container.encode(activeEntitlementKeys, forKey: .activeEntitlementKeys)
     }

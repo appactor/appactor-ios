@@ -5,6 +5,32 @@ private func dateString(_ date: Date?) -> String? {
     date.map { AppActorPluginCoder.isoDateFormatter.string(from: $0) }
 }
 
+private func subscriptionStatusWireValue(_ value: AppActorSubscriptionStatus?) -> String? {
+    guard let value else { return nil }
+    switch value {
+    case .active: return "active"
+    case .gracePeriod: return "grace_period"
+    case .billingRetry: return "billing_retry"
+    case .expired: return "expired"
+    case .revoked: return "revoked"
+    case .upgraded: return "upgraded"
+    case .unknown: return "unknown"
+    }
+}
+
+private func entitlementStatus(_ entitlement: AppActorEntitlementInfo) -> String? {
+    subscriptionStatusWireValue(entitlement.subscriptionStatus)
+        ?? (entitlement.isActive ? "active" : nil)
+}
+
+private func entitlementPurchaseDate(_ entitlement: AppActorEntitlementInfo) -> String? {
+    dateString(entitlement.originalPurchaseDate ?? entitlement.renewedAt ?? entitlement.startsAt)
+}
+
+private func entitlementLatestPurchaseDate(_ entitlement: AppActorEntitlementInfo) -> String? {
+    dateString(entitlement.renewedAt ?? entitlement.originalPurchaseDate ?? entitlement.startsAt)
+}
+
 // MARK: - CustomerInfo Surrogate
 
 /// Encodable surrogate that maps `AppActorCustomerInfo` to the wire format
@@ -79,21 +105,21 @@ struct PluginEntitlementInfo: Encodable, Sendable {
     init(from e: AppActorEntitlementInfo) {
         self.identifier = e.id
         self.isActive = e.isActive
-        self.status = nil // Flutter reads this; iOS model doesn't have a separate status string
+        self.status = entitlementStatus(e)
         self.productIdentifier = e.productID
         self.grantedBy = e.grantedBy
         self.ownershipType = e.ownershipType.rawValue
         self.periodType = e.periodType.rawValue
         self.willRenew = e.willRenew
-        self.subscriptionStatus = e.subscriptionStatus?.rawValue
+        self.subscriptionStatus = subscriptionStatusWireValue(e.subscriptionStatus)
         self.store = e.store?.rawValue
         self.basePlanId = e.basePlanId
         self.offerId = e.offerId
         self.isSandbox = e.isSandbox
         self.cancellationReason = e.cancellationReason?.rawValue
-        self.purchaseDate = nil // iOS model doesn't have purchaseDate; uses originalPurchaseDate
+        self.purchaseDate = entitlementPurchaseDate(e)
         self.startsAt = dateString(e.startsAt)
-        self.latestPurchaseDate = nil // iOS model doesn't have latestPurchaseDate
+        self.latestPurchaseDate = entitlementLatestPurchaseDate(e)
         self.originalPurchaseDate = dateString(e.originalPurchaseDate)
         self.expirationDate = dateString(e.expirationDate)
         self.gracePeriodExpiresAt = dateString(e.gracePeriodExpiresAt)

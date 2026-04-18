@@ -23,7 +23,6 @@ private func makePackage(
         productId: productId,
         localizedPriceString: localizedPriceString,
         product: nil,
-        serverId: nil,
         displayName: displayName,
         metadata: nil,
         position: position,
@@ -41,6 +40,7 @@ private func makePackage(
 /// Creates a simple `OfferingsResponseDTO` for testing.
 private func makeDTO(
     offeringId: String = "default",
+    packageId: String = "pkg_monthly",
     productIds: [String] = ["com.app.monthly"],
     isCurrent: Bool = true,
     productEntitlements: [String: [String]]? = nil
@@ -49,7 +49,7 @@ private func makeDTO(
         AppActorProductRefDTO(id: nil, storeProductId: $0, productType: "auto_renewable", displayName: nil)
     }
     let package = AppActorPackageDTO(
-        id: nil, packageType: "monthly", displayName: "Monthly",
+        id: packageId, packageType: "monthly", displayName: "Monthly",
         position: 0, isActive: true, metadata: nil, products: products
     )
     let offering = AppActorOfferingDTO(
@@ -273,10 +273,12 @@ final class OfferingsManagerTests: XCTestCase {
         }
         fetcher.fetchHandler = { _ in [:] }
 
-        var capturedErrors: [String] = []
+        let capturedErrors = LockedLogCollector()
         AppActorLogger.level = .debug
         AppActorLogger.testSink = { level, message in
-            if level == "error" { capturedErrors.append(message) }
+            if level == "error" {
+                capturedErrors.append(level: level, message: message)
+            }
         }
         defer {
             AppActorLogger.testSink = nil
@@ -294,7 +296,7 @@ final class OfferingsManagerTests: XCTestCase {
             XCTAssertEqual(error.kind, .storeKitProductsMissing)
         }
 
-        let allMissingLog = capturedErrors.first { $0.contains("All StoreKit products missing") }
+        let allMissingLog = capturedErrors.snapshot().map(\.message).first { $0.contains("All StoreKit products missing") }
         XCTAssertNotNil(allMissingLog, "Should log error when all products missing")
         XCTAssertTrue(allMissingLog?.contains("com.app.missing1") == true)
         XCTAssertTrue(allMissingLog?.contains("com.app.missing2") == true)
@@ -356,7 +358,7 @@ final class OfferingsManagerTests: XCTestCase {
         XCTAssertEqual(fetcher.fetchCalls[0], Set(["com.app.monthly", "com.app.annual"]))
     }
 
-    // MARK: - Cache TTL (Fresh -> No Network)
+    // MARK: - Cache TTL / Fetch Policy
 
     func testCacheFreshSkipsNetwork() async throws {
         let emptyDto = AppActorOfferingsResponseDTO(currentOffering: nil, offerings: [])
@@ -382,10 +384,82 @@ final class OfferingsManagerTests: XCTestCase {
         _ = try await manager.getOfferings()
         XCTAssertEqual(networkCalls, 1, "Fresh cache should skip network")
 
-        // Third call 6 minutes after first (past TTL) -- SWR: returns stale, refreshes in background
+        // Third call 6 minutes after first (past TTL) -- default policy waits for fresh data
         clock.advance(by: 5 * 60)
         _ = try await manager.getOfferings()
-        XCTAssertEqual(networkCalls, 1, "Stale cache returns immediately (SWR), background refresh starts")
+        XCTAssertEqual(networkCalls, 2, "Default .freshIfStale policy should fetch again once cache is stale")
+    }
+
+    func testReturnCachedThenRefreshReturnsStaleImmediately() async throws {
+        let emptyDto = AppActorOfferingsResponseDTO(currentOffering: nil, offerings: [])
+
+        var networkCalls = 0
+        client.getOfferingsHandler = { _ in
+            networkCalls += 1
+            if networkCalls == 1 {
+                return .fresh(emptyDto, eTag: nil, requestId: "req_1", signatureVerified: false)
+            }
+            try await Task.sleep(nanoseconds: 300_000_000)
+            return .fresh(emptyDto, eTag: nil, requestId: "req_2", signatureVerified: false)
+        }
+
+        let clock = MockDateProvider()
+        let manager = AppActorOfferingsManager(
+            client: client, productFetcher: fetcher, etagManager: etagManager,
+            dateProvider: { clock.now }
+        )
+
+        _ = try await manager.getOfferings()
+        XCTAssertEqual(networkCalls, 1)
+
+        clock.advance(by: 10 * 60)
+        let start = Date()
+        _ = try await manager.getOfferings(fetchPolicy: .returnCachedThenRefresh)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertLessThan(elapsed, 0.1, "SWR policy should return stale cache without waiting for revalidation")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(networkCalls, 2, "Background revalidation should still happen after returning stale cache")
+    }
+
+    func testCacheOnlyThrowsWhenNoSuitableCacheExists() async {
+        let manager = AppActorOfferingsManager(
+            client: client, productFetcher: fetcher, etagManager: etagManager
+        )
+
+        do {
+            _ = try await manager.getOfferings(fetchPolicy: .cacheOnly)
+            XCTFail("Expected cache-only miss to throw")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .validation)
+            XCTAssertEqual(error.code, "OFFERINGS_CACHE_MISS")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testCacheOnlyRejectsWrongLocaleDiskCache() async {
+        let dto = makeDTO(offeringId: "wrong-locale")
+        let payload = AppActorOfferingsManager.CachedPayload(
+            dto: dto,
+            preferredLocales: ["fr-FR"]
+        )
+        await etagManager.storeFresh(payload, for: .offerings, eTag: "fr_hash")
+
+        let manager = AppActorOfferingsManager(
+            client: client, productFetcher: fetcher, etagManager: etagManager
+        )
+
+        do {
+            _ = try await manager.getOfferings(fetchPolicy: .cacheOnly)
+            XCTFail("Expected locale-mismatched cache to be rejected")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .validation)
+            XCTAssertEqual(error.code, "OFFERINGS_CACHE_MISS")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     // MARK: - Single-Flight (N Calls -> 1 Network)
@@ -442,6 +516,82 @@ final class OfferingsManagerTests: XCTestCase {
         _ = try await manager.getOfferings()
         let rid = await manager.requestId
         XCTAssertEqual(rid, "req_offerings_42")
+    }
+
+    func testLoadFromDiskCacheStoresOfflineCatalogWithMatchingVerification() async throws {
+        let dto = AppActorOfferingsResponseDTO(
+            currentOffering: nil,
+            offerings: [],
+            productEntitlements: ["com.app.monthly": ["premium"]]
+        )
+        let payload = AppActorOfferingsManager.CachedPayload(
+            dto: dto,
+            preferredLocales: Locale.preferredLanguages
+        )
+        let manager = AppActorOfferingsManager(
+            client: client,
+            productFetcher: fetcher,
+            etagManager: etagManager
+        )
+
+        await etagManager.storeFresh(payload, for: .offerings, eTag: "etag_unsigned", verified: false)
+        _ = await manager.loadFromDiskCache()
+
+        let unsignedCatalog = await etagManager.cached(AppActorOfflineProductCatalog.self, for: .offlineProductCatalog)
+        XCTAssertEqual(unsignedCatalog?.verification, .notRequested)
+
+        await etagManager.clear(.offlineProductCatalog)
+        await etagManager.storeFresh(payload, for: .offerings, eTag: "etag_verified", verified: true)
+        _ = await manager.loadFromDiskCache()
+
+        let verifiedCatalog = await etagManager.cached(AppActorOfflineProductCatalog.self, for: .offlineProductCatalog)
+        XCTAssertEqual(verifiedCatalog?.verification, .verified)
+    }
+
+    func testCurrentOneTimeProductKindFallsBackToCachedOfferingsPayload() async {
+        let lifetimeProduct = AppActorProductRefDTO(
+            id: nil,
+            storeProductId: "com.app.lifetime",
+            productType: "non_consumable",
+            displayName: nil
+        )
+        let lifetimePackage = AppActorPackageDTO(
+            id: nil,
+            packageType: "lifetime",
+            displayName: "Lifetime",
+            position: 0,
+            isActive: true,
+            metadata: nil,
+            products: [lifetimeProduct]
+        )
+        let dto = AppActorOfferingsResponseDTO(
+            currentOffering: nil,
+            offerings: [
+                AppActorOfferingDTO(
+                    id: "default",
+                    lookupKey: "default",
+                    displayName: "Default",
+                    isCurrent: true,
+                    metadata: nil,
+                    packages: [lifetimePackage]
+                )
+            ],
+            productEntitlements: [:]
+        )
+        let payload = AppActorOfferingsManager.CachedPayload(
+            dto: dto,
+            preferredLocales: Locale.preferredLanguages
+        )
+        await etagManager.storeFresh(payload, for: .offerings, eTag: "hash_one_time", verified: false)
+
+        let manager = AppActorOfferingsManager(
+            client: client,
+            productFetcher: fetcher,
+            etagManager: etagManager
+        )
+
+        let kind = await manager.currentOneTimeProductKind(productId: "com.app.lifetime")
+        XCTAssertEqual(kind, .nonConsumable)
     }
 
     func testServerFilteredSingleProductContractRemainsStable() {
@@ -644,10 +794,10 @@ final class OfferingsManagerTests: XCTestCase {
         _ = try await manager.getOfferings()
         XCTAssertEqual(networkCalls, 1, "Background TTL (24h) should keep cache fresh at 6 min")
 
-        // 25 hours later (past background TTL) -- SWR: returns stale, refreshes in background
+        // 25 hours later (past background TTL) -- default policy waits for fresh data
         clock.advance(by: 25 * 60 * 60)
         _ = try await manager.getOfferings()
-        XCTAssertEqual(networkCalls, 1, "Stale cache returns immediately (SWR), background refresh starts")
+        XCTAssertEqual(networkCalls, 2, "Default .freshIfStale policy should refetch once background TTL expires")
     }
 
     // MARK: - Foreground/Background TTL Toggle
@@ -682,9 +832,9 @@ final class OfferingsManagerTests: XCTestCase {
         // Switch back to foreground
         await manager.setBackground(false)
 
-        // Same 10-minute-old cache is now stale for foreground TTL (5m) -- SWR: returns stale
+        // Same 10-minute-old cache is now stale for foreground TTL (5m) -- default policy waits for fresh data
         _ = try await manager.getOfferings()
-        XCTAssertEqual(networkCalls, 1, "Stale cache returns immediately (SWR), background refresh starts")
+        XCTAssertEqual(networkCalls, 2, "Switching back to foreground should make stale cache fetch fresh data")
     }
 
     // MARK: - AppActorOfferings Model

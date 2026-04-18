@@ -243,6 +243,30 @@ struct AppActorErrorResponse: Decodable {
     let error: ErrorPayload
     let requestId: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case error
+        case requestId
+        case retryAfterSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let topLevelRetryAfter = try container.decodeIfPresent(Double.self, forKey: .retryAfterSeconds)
+        let decodedError = try container.decode(ErrorPayload.self, forKey: .error)
+        if decodedError.retryAfterSeconds == nil, let topLevelRetryAfter {
+            self.error = ErrorPayload(
+                code: decodedError.code,
+                message: decodedError.message,
+                details: decodedError.details,
+                scope: decodedError.scope,
+                retryAfterSeconds: topLevelRetryAfter
+            )
+        } else {
+            self.error = decodedError
+        }
+        self.requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
+    }
+
     struct ErrorPayload: Decodable {
         let code: String?
         let message: String?
