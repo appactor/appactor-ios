@@ -109,12 +109,11 @@ final class ASAEnableTests: XCTestCase {
         XCTAssertNotNil(appactor.asaManager)
     }
 
-    func testForegroundRetriesDeferredAttributionAfterIdentityRecovers() async throws {
+    func testForegroundRetriesDeferredAttributionAfterLocalIdentityRecovers() async throws {
         let config = AppActorPaymentConfiguration(apiKey: "pk_test_asa_retry")
         appactor.configureForTesting(config: config, client: mockClient, storage: storage)
 
-        storage.setServerUserId(nil)
-        storage.setNeedsReidentify(true)
+        storage.remove(forKey: AppActorPaymentStorageKey.appUserId)
 
         let manager = AppActorASAManager(
             client: mockClient,
@@ -127,23 +126,17 @@ final class ASAEnableTests: XCTestCase {
         appactor.asaManager = manager
 
         let deferred = await manager.performAttributionIfNeeded()
-        XCTAssertNil(deferred, "Initial attribution should defer while identity is unavailable")
+        XCTAssertNil(deferred, "Initial attribution should defer while appUserId is unavailable")
         XCTAssertEqual(mockClient.attributionCalls.count, 0)
+        XCTAssertEqual(mockClient.identifyCalls.count, 0)
 
-        mockClient.identifyHandler = { request in
-            AppActorIdentifyResult(
-                appUserId: request.appUserId,
-                serverUserId: "server-recovered-user",
-                customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
-                customerETag: nil,
-                requestId: "req_asa_retry_identify",
-                signatureVerified: false
-            )
-        }
+        storage.setAppUserId("recovered-user")
 
         await appactor.runForegroundMaintenance()
 
-        XCTAssertEqual(mockClient.attributionCalls.count, 1, "Foreground maintenance should retry deferred attribution once identity is ready")
-        XCTAssertEqual(storage.serverUserId, "server-recovered-user")
+        XCTAssertEqual(mockClient.attributionCalls.count, 1, "Foreground maintenance should retry deferred attribution once appUserId is available")
+        XCTAssertEqual(mockClient.identifyCalls.count, 0, "Foreground retry should not re-enter identify under RC-style identity")
+        XCTAssertEqual(mockClient.attributionCalls.first?.userId, "recovered-user")
     }
+
 }

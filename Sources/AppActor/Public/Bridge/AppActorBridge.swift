@@ -24,11 +24,6 @@ public final class AppActorBridge {
 
     // MARK: - Synchronous Accessors (nonisolated)
 
-    /// Whether the SDK is ready for identity-dependent network APIs.
-    public nonisolated var isReady: Bool {
-        AppActorPaymentContext._isReady
-    }
-
     /// The current app user ID, or `nil` if the SDK is not configured.
     public nonisolated var appUserId: String? {
         guard AppActorPaymentContext._lifecycle == .configured else { return nil }
@@ -85,24 +80,26 @@ public final class AppActorBridge {
     ///
     /// - Parameters:
     ///   - apiKey: Your AppActor API key (e.g. `"pk_YOUR_PUBLIC_API_KEY"`).
+    ///   - appUserId: Optional app user ID. Pass `nil`, `""`, or whitespace to let
+    ///     the SDK reuse a cached ID or generate a new anonymous one.
     ///   - options: Optional configuration options.
-    ///   - onComplete: Called on the main thread when configuration finishes. Check `isReady`
-    ///     if you need a confirmed server identity immediately after startup.
+    ///   - onComplete: Called on the main thread when configuration finishes.
     ///   - onError: Called with an ``AppActorBridgeError`` when validation fails.
     public func configure(
         apiKey: String,
+        appUserId: String? = nil,
         options: AppActorOptions = .init(),
         onComplete: (() -> Void)? = nil,
         onError: ((AppActorBridgeError) -> Void)? = nil
     ) {
-        if let validationError = AppActorPaymentConfiguration.validationError(apiKey: apiKey) {
+        if let validationError = AppActorPaymentConfiguration.validationError(apiKey: apiKey, appUserId: appUserId) {
             Log.sdk.error("Bridge configure validation failed: \(validationError.localizedDescription)")
             onError?(AppActorBridgeError(from: validationError))
             return
         }
 
         Task { @MainActor in
-            await AppActor.configure(apiKey: apiKey, options: options)
+            await AppActor.configure(apiKey: apiKey, appUserId: appUserId, options: options)
             onComplete?()
         }
     }

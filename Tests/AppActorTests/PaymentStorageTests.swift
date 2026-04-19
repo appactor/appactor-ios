@@ -60,21 +60,44 @@ final class PaymentStorageTests: XCTestCase {
         XCTAssertEqual(storage.currentAppUserId, "custom_user")
     }
 
-    // MARK: - Server User ID
-
-    func testServerUserIdIsNilInitially() {
-        XCTAssertNil(storage.serverUserId)
+    func testResolveAppUserIdPrefersExplicitValue() {
+        let resolved = storage.resolveAppUserId(explicit: "custom_user")
+        XCTAssertEqual(resolved, "custom_user")
+        XCTAssertEqual(storage.currentAppUserId, "custom_user")
     }
 
-    func testSetServerUserId() {
-        storage.setServerUserId("550e8400-e29b-41d4-a716-446655440000")
-        XCTAssertEqual(storage.serverUserId, "550e8400-e29b-41d4-a716-446655440000")
+    func testResolveAppUserIdTreatsWhitespaceExplicitValueAsMissingAndReusesCachedValue() {
+        storage.setAppUserId("cached_user")
+
+        let resolved = storage.resolveAppUserId(explicit: "   ")
+
+        XCTAssertEqual(resolved, "cached_user")
+        XCTAssertEqual(storage.currentAppUserId, "cached_user")
     }
 
-    func testClearServerUserId() {
-        storage.setServerUserId("some-uuid")
-        storage.setServerUserId(nil)
-        XCTAssertNil(storage.serverUserId)
+    func testResolveAppUserIdTreatsWhitespaceExplicitValueAsMissingAndGeneratesAnonymousValue() {
+        let resolved = storage.resolveAppUserId(explicit: "   ")
+
+        XCTAssertTrue(resolved.hasPrefix("appactor-anon-"))
+        XCTAssertEqual(storage.currentAppUserId, resolved)
+    }
+
+    func testPaymentConfigurationTreatsWhitespaceAppUserIdAsOmitted() {
+        let config = AppActorPaymentConfiguration(apiKey: "pk_test_123", appUserId: "   ")
+
+        XCTAssertNil(config.appUserId)
+    }
+
+    // MARK: - Legacy Identity Cleanup
+
+    func testClearLegacyIdentityStateRemovesLegacyKeys() {
+        storage.set("legacy-server", forKey: AppActorPaymentStorageKey.legacyServerUserId)
+        storage.set("1", forKey: AppActorPaymentStorageKey.legacyNeedsReidentify)
+
+        storage.clearLegacyIdentityState()
+
+        XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.legacyServerUserId))
+        XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.legacyNeedsReidentify))
     }
 
     // MARK: - Last Request ID
@@ -92,13 +115,13 @@ final class PaymentStorageTests: XCTestCase {
 
     func testClearAllKeepsLastRequestId() {
         storage.setAppUserId("user")
-        storage.setServerUserId("uuid")
+        storage.set("legacy-server", forKey: AppActorPaymentStorageKey.legacyServerUserId)
         storage.setLastRequestId("req_xyz")
 
         storage.clearAll()
 
         XCTAssertNil(storage.currentAppUserId)
-        XCTAssertNil(storage.serverUserId)
+        XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.legacyServerUserId))
         XCTAssertEqual(storage.lastRequestId, "req_xyz", "lastRequestId should survive clearAll")
     }
 }

@@ -6,7 +6,7 @@ final class AppState: ObservableObject {
 
     // MARK: - Configuration
 
-    let apiKey = "pk_YOUR_PUBLIC_API_KEY"
+    let apiKey = "pk_live_7ec893603ab8ef7196b259667062d347d472ac56a762865808b7f22c2f1a8937"
 
     // MARK: - Shared State
 

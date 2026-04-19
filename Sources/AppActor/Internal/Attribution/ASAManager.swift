@@ -5,13 +5,12 @@ import Foundation
 /// Manages:
 /// - One-time attribution via `AAAttribution.attributionToken()` + `POST /v1/asa/attribution`
 /// - Purchase event tracking via `POST /v1/asa/purchase-event`
-/// - User ID migration via `POST /v1/asa/update-user-id`
 ///
 /// Created when `enableAppleSearchAdsTracking()` is called.
 /// Lifecycle is managed by `AppActor+Payment.swift`.
 ///
 /// Actor isolation guarantees:
-/// - No data races on mutable state (`isPerformingAttribution`, `isFlushingPurchaseEvents`, `isFlushingUserIdChange`)
+/// - No data races on mutable state (`isPerformingAttribution`, `isFlushingPurchaseEvents`)
 /// - Re-entrancy guards prevent overlapping calls at `await` suspension points
 actor AppActorASAManager {
 
@@ -34,7 +33,6 @@ actor AppActorASAManager {
     /// Actor isolation ensures check-and-set is atomic (no `await` between guard and flag set).
     private var isPerformingAttribution = false
     private var isFlushingPurchaseEvents = false
-    private var isFlushingUserIdChange = false
     private var needsAnotherPurchaseFlushPass = false
 
     init(
@@ -56,11 +54,11 @@ actor AppActorASAManager {
     // MARK: - Attribution
 
     /// Performs ASA attribution if not already completed for this install.
-    /// Called once during bootstrap after identify.
+    /// Called once during bootstrap after local identity is established.
     ///
     /// Flow:
     /// 1. Get attribution token from AdServices
-    /// 2. Validate a confirmed userId exists (captured once — update-user-id mechanism handles changes)
+    /// 2. Validate a local app user ID exists
     /// 3. Call Apple AdServices API for raw attribution data (graceful degradation on failure)
     /// 4. Build request with token + Apple response + device info
     /// 5. POST with retry for transient failures (up to 3 times with exponential backoff)
@@ -110,11 +108,9 @@ actor AppActorASAManager {
             Log.attribution.debug("Got attribution token (\(token.prefix(20))...)")
         }
 
-        // 2. Require a confirmed server identity before making the attribution call.
-        guard let userId = storage.currentAppUserId,
-              storage.serverUserId != nil,
-              !storage.needsReidentify else {
-            Log.attribution.info("Server identity not ready, deferring ASA attribution.")
+        // 2. Require only a local app user ID under the RC-style identity model.
+        guard let userId = storage.currentAppUserId else {
+            Log.attribution.info("App user ID unavailable, deferring ASA attribution.")
             return nil
         }
 
@@ -144,9 +140,6 @@ actor AppActorASAManager {
         }
 
         // 4. Build request once — userId is captured once and NOT re-read during retries.
-        // If userId changes during backoff (login/logout), the update-user-id mechanism
-        // (enqueueUserIdChange → flushPendingUserIdChange on next bootstrap) handles
-        // transferring the attribution to the new user on the backend.
         let request = AppActorASAAttributionRequest(
             userId: userId,
             attributionToken: token,
@@ -257,122 +250,6 @@ actor AppActorASAManager {
         // All retries exhausted — do NOT mark completed, will retry on next bootstrap
         Log.attribution.warn("Attribution failed after \(Self.maxAttributionAttempts) attempts, will retry on next launch.")
         return nil
-    }
-
-    // MARK: - User ID Change
-
-    /// Flushes any pending user ID change to the server.
-    ///
-    /// Called during bootstrap BEFORE attribution and purchase flush,
-    /// so the server always has the correct user identity.
-    ///
-    /// - Success (status == "ok") → clear pending
-    /// - Permanent 4xx → clear pending (prevent infinite loop)
-    /// - Transient error → leave pending for next bootstrap
-    /// - Cancellation → return without clearing
-    func flushPendingUserIdChange() async {
-        // Re-entrancy guard: actor isolation ensures this check-and-set is atomic
-        // (no suspension point between guard and flag set)
-        guard !Task.isCancelled else { return }
-
-        guard !isFlushingUserIdChange else {
-            if options.debugMode {
-                Log.attribution.debug("User ID change flush already in-flight, skipping.")
-            }
-            return
-        }
-        isFlushingUserIdChange = true
-        defer { isFlushingUserIdChange = false }
-
-        guard let pending = storage.asaPendingUserIdChange else { return }
-
-        // Skip no-op changes
-        if pending.oldUserId == pending.newUserId {
-            if options.debugMode {
-                Log.attribution.debug("User ID change is no-op (same ID), clearing.")
-            }
-            storage.clearAsaPendingUserIdChange()
-            return
-        }
-
-        if options.debugMode {
-            Log.attribution.debug("Flushing pending user ID change: \(pending.oldUserId) → \(pending.newUserId)")
-        }
-
-        let request = AppActorASAUpdateUserIdRequest(
-            oldUserId: pending.oldUserId,
-            newUserId: pending.newUserId
-        )
-
-        do {
-            let response = try await client.postASAUpdateUserId(request)
-
-            // [M3] Validate response status
-            guard response.status == "ok" else {
-                Log.attribution.warn("User ID change response status: \(response.status), will retry next launch.")
-                return
-            }
-
-            // [N1] Compare-and-clear: only clear if pending hasn't been replaced during await
-            clearPendingIfUnchanged(old: pending.oldUserId, new: pending.newUserId)
-            Log.attribution.info("User ID change synced: \(pending.oldUserId) → \(pending.newUserId)")
-
-        } catch let error as AppActorError {
-            if error.isPermanentClientError {
-                // [N1] Compare-and-clear: only clear if pending hasn't been replaced during await
-                Log.attribution.error("User ID change permanent error (\(error.httpStatus ?? 0)), clearing pending.")
-                clearPendingIfUnchanged(old: pending.oldUserId, new: pending.newUserId)
-            } else {
-                // Transient — leave for next bootstrap
-                Log.attribution.warn("User ID change transient error, will retry next launch: \(error.localizedDescription)")
-            }
-
-        } catch is CancellationError {
-            Log.attribution.debug("User ID change cancelled.")
-
-        } catch {
-            // Unknown error — leave for next bootstrap
-            Log.attribution.warn("User ID change error, will retry next launch: \(error.localizedDescription)")
-        }
-    }
-
-    /// [N1] Clears pending user ID change only if it still matches the snapshotted values.
-    /// Prevents wiping a newer enqueue that arrived during the network await.
-    private func clearPendingIfUnchanged(old: String, new: String) {
-        if let current = storage.asaPendingUserIdChange,
-           current.oldUserId == old, current.newUserId == new {
-            storage.clearAsaPendingUserIdChange()
-        }
-    }
-
-    /// Enqueues a user ID change for ASA sync.
-    ///
-    /// **Chain-aware**: If a pending change already exists (A→B), and a new
-    /// change arrives (B→C), the result is A→C — preserving the original
-    /// user ID so the backend can transfer attribution from the very first user.
-    /// If chaining would result in a no-op (A→B then B→A), the pending is cleared.
-    func enqueueUserIdChange(oldUserId: String, newUserId: String) {
-        let effectiveOld: String
-        if let existing = storage.asaPendingUserIdChange {
-            // Chain: existing A→B + new B→C = A→C
-            effectiveOld = existing.oldUserId
-        } else {
-            effectiveOld = oldUserId
-        }
-
-        // No-op: chaining resolved to same user (e.g. A→B then B→A)
-        if effectiveOld == newUserId {
-            storage.clearAsaPendingUserIdChange()
-            if options.debugMode {
-                Log.attribution.debug("User ID change is no-op after chaining (\(effectiveOld) → \(newUserId)), cleared.")
-            }
-            return
-        }
-
-        storage.setAsaPendingUserIdChange(oldUserId: effectiveOld, newUserId: newUserId)
-        if options.debugMode {
-            Log.attribution.debug("User ID change enqueued: \(effectiveOld) → \(newUserId)")
-        }
     }
 
     // MARK: - Purchase Events
@@ -504,14 +381,9 @@ actor AppActorASAManager {
 
     /// Returns a point-in-time snapshot of all ASA state for debugging.
     func diagnostics() -> AppActorASADiagnostics {
-        let pending = storage.asaPendingUserIdChange
         return AppActorASADiagnostics(
             attributionCompleted: storage.asaAttributionCompleted,
             pendingPurchaseEventCount: eventStore.count(),
-            hasPendingUserIdChange: pending != nil,
-            pendingUserIdChange: pending.map {
-                .init(oldUserId: $0.oldUserId, newUserId: $0.newUserId)
-            },
             debugMode: options.debugMode,
             autoTrackPurchases: options.autoTrackPurchases,
             trackInSandbox: options.trackInSandbox

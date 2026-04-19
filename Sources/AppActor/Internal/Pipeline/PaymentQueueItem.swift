@@ -87,15 +87,13 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Processing phases for the payment queue state machine.
     ///
     /// ```
-    /// waitingForIdentity ──► needsPost ──► posting ──► needsFinish ──► (removed)
-    ///                           ▲             │
-    ///                           └─ retryable ─┘
+    /// needsPost ──► posting ──► needsFinish ──► (removed)
+    ///     ▲             │
+    ///     └─ retryable ─┘
     ///
     /// needsPost ──► posting ──► deadLettered (terminal permanent/decode-mismatch paths)
     /// ```
     enum Phase: String, Codable, Sendable {
-        /// Persisted locally until the backend has seen this app user identity.
-        case waitingForIdentity
         /// Ready for POST (or waiting for backoff to expire).
         case needsPost
         /// Claimed and currently being POSTed.
@@ -154,11 +152,6 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
             phase = .needsPost
             attemptCount = 0
             nextRetryAt = incoming.nextRetryAt
-            claimedAt = nil
-        } else if phase == .waitingForIdentity, incoming.phase == .needsPost {
-            // A fresh re-enqueue from the currently confirmed user can release this item.
-            phase = .needsPost
-            nextRetryAt = min(nextRetryAt, incoming.nextRetryAt)
             claimedAt = nil
         }
     }

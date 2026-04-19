@@ -19,14 +19,6 @@ protocol AppActorPaymentQueueStoreProtocol: AnyObject, Sendable {
     /// Sets `phase = .posting` and `claimedAt = now`, persists, then returns.
     func claimReady(limit: Int, now: Date) -> [AppActorPaymentQueueItem]
 
-    /// Moves queued items for unconfirmed identities into `.waitingForIdentity`.
-    /// Returns the items that were transitioned in this pass.
-    func deferReadyUntilIdentity(confirmedAppUserIds: Set<String>, now: Date) -> [AppActorPaymentQueueItem]
-
-    /// Releases waiting items for a newly confirmed identity back to `.needsPost`.
-    /// Returns the items that were transitioned in this pass.
-    func releaseWaitingForIdentity(appUserId: String) -> [AppActorPaymentQueueItem]
-
     /// Updates an existing item in the store.
     func update(_ item: AppActorPaymentQueueItem)
 
@@ -36,7 +28,7 @@ protocol AppActorPaymentQueueStoreProtocol: AnyObject, Sendable {
     /// Removes all items.
     func clear()
 
-    /// Number of items in `.waitingForIdentity`, `.needsPost`, or `.posting` phase.
+    /// Number of items in `.needsPost` or `.posting` phase.
     func pendingCount() -> Int
 
     /// Number of items in `.deadLettered` phase.
@@ -165,8 +157,6 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
 
             let shouldClaim: Bool
             switch item.phase {
-            case .waitingForIdentity:
-                shouldClaim = false
             case .needsPost:
                 shouldClaim = item.nextRetryAt <= now
             case .posting:
@@ -196,52 +186,6 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         return claimed
     }
 
-    func deferReadyUntilIdentity(confirmedAppUserIds: Set<String>, now: Date) -> [AppActorPaymentQueueItem] {
-        var map = loadFromDisk()
-        var deferred: [AppActorPaymentQueueItem] = []
-
-        for (key, item) in map where !confirmedAppUserIds.contains(item.appUserId) {
-            switch item.phase {
-            case .waitingForIdentity, .needsFinish, .deadLettered:
-                continue
-            case .needsPost, .posting:
-                var updated = item
-                updated.phase = .waitingForIdentity
-                updated.claimedAt = nil
-                updated.lastSeenAt = now
-                map[key] = updated
-                deferred.append(updated)
-            }
-        }
-
-        if !deferred.isEmpty {
-            items = map
-            writeToDisk(map)
-        }
-
-        return deferred
-    }
-
-    func releaseWaitingForIdentity(appUserId: String) -> [AppActorPaymentQueueItem] {
-        var map = loadFromDisk()
-        var released: [AppActorPaymentQueueItem] = []
-
-        for (key, item) in map where item.appUserId == appUserId && item.phase == .waitingForIdentity {
-            var updated = item
-            updated.phase = .needsPost
-            updated.claimedAt = nil
-            map[key] = updated
-            released.append(updated)
-        }
-
-        if !released.isEmpty {
-            items = map
-            writeToDisk(map)
-        }
-
-        return released
-    }
-
     func update(_ item: AppActorPaymentQueueItem) {
         var map = loadFromDisk()
         map[item.key] = item
@@ -268,7 +212,7 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
     func pendingCount() -> Int {
         let map = loadFromDisk()
         return map.values.filter {
-            $0.phase == .waitingForIdentity || $0.phase == .needsPost || $0.phase == .posting
+            $0.phase == .needsPost || $0.phase == .posting
         }.count
     }
 

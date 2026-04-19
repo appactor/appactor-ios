@@ -172,8 +172,6 @@ struct AppActorPurgedDeadLetterSummary: Sendable, Equatable {
 public enum AppActorReceiptPipelineEvent: Sendable {
     /// Receipt was accepted by the server. Transaction finished and removed from queue.
     case postedOk(transactionId: String)
-    /// Receipt was persisted but deferred until the backend has seen this app user identity.
-    case deferredWaitingForIdentity(transactionId: String)
     /// Receipt will be retried after a backoff delay.
     case retryScheduled(transactionId: String, attempt: Int, nextAttemptAt: Date, errorCode: String?)
     /// Receipt was permanently rejected by the server. Transaction finished.

@@ -42,7 +42,7 @@ extension AppActor {
             return
         }
 
-        // ── Phase 2: Bootstrap (sequential: identify → offerings(api) → sweep → drain+refresh) ──
+        // ── Phase 2: Bootstrap (sequential: offerings(api) → sweep → drain+refresh) ──
         await self.runBootstrap(verboseBootstrap: verboseBootstrap)
 
         // If bootstrap was cancelled mid-way, revert lifecycle so configure() can be retried.
@@ -114,11 +114,8 @@ extension AppActor {
     private func revertLifecycleIfCancelled() async {
         guard paymentLifecycle == .configured else { return }
         offeringsPrefetchTask?.cancel()
-        identityReadyTask?.cancel()
         await offeringsPrefetchTask?.value
-        _ = try? await identityReadyTask?.value
         offeringsPrefetchTask = nil
-        identityReadyTask = nil
         await transactionWatcher?.stop()
         await paymentProcessor?.stop()
         transactionWatcher = nil
@@ -189,35 +186,22 @@ extension AppActor {
         }
         logStep("setup")
 
-        // 1. Identify first so the payment identity is established deterministically.
-        do {
-            _ = try await self.identify()
-            // Clear re-identify flag if it was set by a previous failed logOut()
-            self.paymentStorage?.setNeedsReidentify(false)
-        } catch is CancellationError {
-            return
-        } catch {
-            if verboseBootstrap {
-                Log.sdk.warn("Bootstrap identify failed: \(error.localizedDescription)")
-            }
-        }
-
-        // 2. Fire-and-forget: warm offerings cache in the background.
+        // 1. Fire-and-forget: warm offerings cache in the background.
         // getOfferings() will coalesce with this in-flight request if called early.
         if let manager = self.offeringsManager {
             self.offeringsPrefetchTask = Task { await manager.prefetchForBootstrap() }
         }
-        logStep("identify")
+        logStep("offerings/api")
         guard !Task.isCancelled else { return }
 
-        // 3. Sweep unfinished transactions from previous sessions.
+        // 2. Sweep unfinished transactions from previous sessions.
         if let watcher = self.transactionWatcher {
             await watcher.sweepUnfinished()
         }
         logStep("sweepUnfinished")
         guard !Task.isCancelled else { return }
 
-        // 4+5. Drain pending receipts and refresh customer info in one step.
+        // 3+4. Drain pending receipts and refresh customer info in one step.
         // drainReceiptQueueAndRefreshCustomer() preserves the previous preload
         // behavior. The new syncPurchases() is reserved for explicit quiet SK2 sync.
         // If the drain+refresh step fails, fall back to a standalone customerInfo refresh.

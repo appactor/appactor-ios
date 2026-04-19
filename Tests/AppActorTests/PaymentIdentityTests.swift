@@ -39,6 +39,7 @@ final class PaymentIdentityTests: XCTestCase {
         appactor.paymentETagManager = nil
         appactor.offeringsManager = nil
         appactor.customerManager = nil
+        appactor.asaManager = nil
         appactor.remoteConfigManager = nil
         appactor.experimentManager = nil
         appactor.paymentProcessor = nil
@@ -76,7 +77,6 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { _ in
             AppActorIdentifyResult(
                 appUserId: "server_normalized_id",
-                serverUserId: "server-normalized-uuid",
                 customerInfo: AppActorCustomerInfo(appUserId: "server_normalized_id"),
                 customerETag: nil,
                 requestId: "req_1",
@@ -95,7 +95,6 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
-                serverUserId: "server-cache-uuid",
                 customerInfo: AppActorCustomerInfo(
                     entitlements: ["premium": entitlement],
                     appUserId: request.appUserId
@@ -136,7 +135,6 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
-                serverUserId: "server-request-tracking-uuid",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: nil,
                 requestId: "req_tracked_123",
@@ -151,12 +149,14 @@ final class PaymentIdentityTests: XCTestCase {
     }
 
     func testPurchaseOptionsAlwaysEnsureAppAccountToken() {
-        XCTAssertNil(storage.appAccountToken)
+        let existingToken = storage.appAccountToken
+        XCTAssertNotNil(existingToken)
 
         let prepared = appactor.attachAppAccountToken(to: [], storage: storage)
 
         XCTAssertEqual(storage.appAccountToken, prepared.token)
         XCTAssertEqual(prepared.token.uuidString.lowercased(), storage.appAccountToken?.uuidString.lowercased())
+        XCTAssertEqual(prepared.token, existingToken)
         XCTAssertEqual(prepared.options.count, 1)
     }
 
@@ -270,64 +270,60 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertNotNil(storage.lastRequestId)
     }
 
+    func testLoginDoesNotPostASAUserIdUpdate() async throws {
+        storage.setAppUserId("old_user")
+        appactor.asaManager = AppActorASAManager(
+            client: mockClient,
+            storage: storage,
+            eventStore: InMemoryASAEventStore(),
+            tokenProvider: MockASATokenProvider(),
+            options: AppActorASAOptions(),
+            sdkVersion: "1.0.0-test"
+        )
+
+        let _ = try await appactor.logIn(newAppUserId: "new_user")
+
+    }
+
     // MARK: - Logout
 
-    func testLogoutResetsToAnonymousAndCallsIdentify() async throws {
+    func testLogoutResetsToAnonymousLocally() async throws {
         storage.setAppUserId("logged_in_user")
-        storage.setServerUserId("some-uuid")
 
         let result = try await appactor.logOut()
 
         XCTAssertTrue(result)
-
-        // Should have called logout on server
-        XCTAssertEqual(mockClient.logoutCalls.count, 1)
-        XCTAssertEqual(mockClient.logoutCalls[0].appUserId, "logged_in_user")
 
         // Should have generated a new anonymous ID
         let newId = storage.currentAppUserId
         XCTAssertNotNil(newId)
         XCTAssertTrue(newId!.hasPrefix("appactor-anon-"))
         XCTAssertNotEqual(newId, "logged_in_user")
-
-        // Should have called identify with the new anonymous ID
-        XCTAssertGreaterThanOrEqual(mockClient.identifyCalls.count, 1)
+        XCTAssertEqual(mockClient.logoutCalls.count, 0)
+        XCTAssertEqual(mockClient.identifyCalls.count, 0)
     }
 
-    func testLogoutIgnoresServerFailure() async throws {
+    func testLogoutReturnsTrueWithoutServerCall() async throws {
         storage.setAppUserId("user_to_logout")
-
-        mockClient.logoutHandler = { _ in
-            throw AppActorError.networkError(URLError(.notConnectedToInternet))
-        }
-
-        // Should not throw (server logout is best-effort)
         let result = try await appactor.logOut()
-
-        XCTAssertFalse(result, "Should return false when server logout fails")
-
-        // Should still have reset to anonymous
+        XCTAssertTrue(result)
         let newId = storage.currentAppUserId
         XCTAssertNotNil(newId)
         XCTAssertTrue(newId!.hasPrefix("appactor-anon-"))
+        XCTAssertEqual(mockClient.logoutCalls.count, 0)
     }
 
     func testLogoutGeneratesNewAnonId() async throws {
         // Must be identified (non-anonymous) to logout — matches RC/Adapty behavior
         storage.setAppUserId("real-user-123")
-        let _ = try await appactor.identify()
-
         let _ = try await appactor.logOut()
 
-        // identify() is called again post-logout with a new anonymous ID
-        let postLogoutIdentify = mockClient.identifyCalls.last!
-        XCTAssertTrue(postLogoutIdentify.appUserId.hasPrefix("appactor-anon-"),
+        XCTAssertTrue(storage.currentAppUserId?.hasPrefix("appactor-anon-") == true,
                       "logOut() should generate a new anonymous app_user_id")
     }
 
     func testLogoutThrowsForAnonymousUser() async throws {
         // Anonymous user should not be able to logout
-        let _ = try await appactor.identify()
         XCTAssertTrue(appactor.isAnonymous)
 
         do {
@@ -340,55 +336,34 @@ final class PaymentIdentityTests: XCTestCase {
 
     func testLogoutClearsCurrentUser() async throws {
         storage.setAppUserId("user")
-
-        mockClient.identifyHandler = { request in
-            AppActorIdentifyResult(
-                appUserId: request.appUserId,
-                serverUserId: "server-logout-clear-uuid",
-                customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
-                customerETag: nil,
-                requestId: "req_id",
-                signatureVerified: false
-            )
-        }
-
-        let _ = try await appactor.identify()
         XCTAssertNotNil(appactor.customerInfo.appUserId)
 
         let _ = try await appactor.logOut()
 
-        // customerInfo gets set by the post-logout identify call
-        // but the server user ID should have been cleared before re-identify
         XCTAssertTrue(appactor.isAnonymous)
+        XCTAssertEqual(appactor.customerInfo, .empty)
     }
 
-    func testLogoutThrowsWhenPostIdentifyFails() async {
+    func testLogoutDoesNotDependOnIdentify() async throws {
         storage.setAppUserId("user")
+        let result = try await appactor.logOut()
+        XCTAssertTrue(result)
+        XCTAssertEqual(mockClient.identifyCalls.count, 0)
+    }
 
-        // First identify call (in logOut's post-logout identify) fails
-        var callCount = 0
-        mockClient.identifyHandler = { request in
-            callCount += 1
-            if callCount > 0 {
-                // All identify calls fail (the one in logOut)
-                throw AppActorError.networkError(URLError(.notConnectedToInternet))
-            }
-            return AppActorIdentifyResult(
-                appUserId: request.appUserId,
-                serverUserId: "server-logout-failure-uuid",
-                customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
-                customerETag: nil,
-                requestId: nil,
-                signatureVerified: false
-            )
-        }
+    func testLogoutDoesNotPostASAUserIdUpdate() async throws {
+        storage.setAppUserId("identified_user")
+        appactor.asaManager = AppActorASAManager(
+            client: mockClient,
+            storage: storage,
+            eventStore: InMemoryASAEventStore(),
+            tokenProvider: MockASATokenProvider(),
+            options: AppActorASAOptions(),
+            sdkVersion: "1.0.0-test"
+        )
 
-        do {
-            let _ = try await appactor.logOut()
-            XCTFail("Should have thrown when post-logout identify fails")
-        } catch {
-            // Expected — post-logout identify failure propagates
-        }
+        let _ = try await appactor.logOut()
+
     }
 
     // MARK: - JSON Decoding (contract verification)
@@ -531,7 +506,6 @@ final class PaymentIdentityTests: XCTestCase {
         let response = try decoder.decode(AppActorLoginResponseDTO.self, from: json)
 
         XCTAssertEqual(response.appUserId, "new_logged_in_user")
-        XCTAssertEqual(response.serverUserId, "new-uuid")
         XCTAssertEqual(response.requestId, "req_login_1")
         XCTAssertNotNil(response.customer)
     }
@@ -559,7 +533,6 @@ final class PaymentIdentityTests: XCTestCase {
 
         let response = try JSONDecoder().decode(AppActorLoginResponseDTO.self, from: json)
         XCTAssertEqual(response.appUserId, "new_logged_in_user")
-        XCTAssertEqual(response.serverUserId, "server_uuid_1")
         XCTAssertEqual(response.requestId, "req_login_v2")
         XCTAssertNil(response.customer.tokenBalance)
         XCTAssertEqual(response.customer.firstSeen, "2026-01-15T00:00:00.000Z")
@@ -779,7 +752,7 @@ final class PaymentIdentityTests: XCTestCase {
         await appactor.reset()
 
         XCTAssertNil(storage.currentAppUserId)
-        XCTAssertNil(storage.serverUserId)
+        XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.legacyServerUserId))
         XCTAssertNil(storage.lastRequestId)
     }
 
@@ -876,7 +849,6 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
-                serverUserId: "server-identify-etag-uuid",
                 customerInfo: AppActorCustomerInfo(
                     entitlements: ["premium": entitlement],
                     appUserId: request.appUserId
@@ -916,7 +888,6 @@ final class PaymentIdentityTests: XCTestCase {
         mockClient.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
-                serverUserId: "server-empty-customer-uuid",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: "empty_customer_hash",
                 requestId: "req_empty",

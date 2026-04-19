@@ -19,12 +19,6 @@ public struct AppActorASADiagnostics: Sendable {
     /// Number of purchase events waiting to be flushed to the server.
     public let pendingPurchaseEventCount: Int
 
-    /// Whether a user ID change is pending server sync.
-    public let hasPendingUserIdChange: Bool
-
-    /// The pending user ID change details, if any.
-    public let pendingUserIdChange: PendingUserIdChange?
-
     /// Whether ASA debug mode is enabled.
     public let debugMode: Bool
 
@@ -33,11 +27,4 @@ public struct AppActorASADiagnostics: Sendable {
 
     /// Whether sandbox/StoreKit Testing transactions are tracked.
     public let trackInSandbox: Bool
-
-    /// Pending user ID change details.
-    public struct PendingUserIdChange: Sendable {
-        public let oldUserId: String
-        public let newUserId: String
-    }
 }
-

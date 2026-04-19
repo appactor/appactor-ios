@@ -5,6 +5,7 @@ struct ConfigureRequest: AppActorPluginRequest {
     static let method = "configure"
 
     let apiKey: String
+    let appUserId: String?
     let options: OptionsPayload?
     let logLevel: String?
     let platformFlavor: String?
@@ -13,13 +14,13 @@ struct ConfigureRequest: AppActorPluginRequest {
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
-        let config = AppActorPaymentConfiguration(apiKey: apiKey)
+        let config = AppActorPaymentConfiguration(apiKey: apiKey, appUserId: appUserId)
         if let validationError = config.validationError {
             throw AppActorPluginError(from: validationError)
         }
 
         let options = resolvedOptions()
-        await AppActor.configure(apiKey: apiKey, options: options)
+        await AppActor.configure(apiKey: apiKey, appUserId: appUserId, options: options)
         return .successVoid
     }
 

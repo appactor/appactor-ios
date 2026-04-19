@@ -72,10 +72,6 @@ actor AppActorPaymentProcessor {
     /// Rate limit cooldown: skip POSTs until this time.
     private var rateLimitCooldownUntil: Date?
 
-    /// App user IDs that have been established with the backend in this app session.
-    /// Receipts for other users are persisted locally but held in `.waitingForIdentity`.
-    private var confirmedAppUserIds: Set<String> = []
-
     /// Callback for pipeline events with product and user context.
     var onPipelineEvent: (@Sendable (AppActorReceiptPipelineEventDetail) -> Void)?
 
@@ -134,25 +130,6 @@ actor AppActorPaymentProcessor {
         }
     }
 
-    // MARK: - Identity Gate
-
-    /// Marks an app user ID as backend-confirmed and releases any queued receipts for it.
-    func confirmIdentity(appUserId: String) {
-        let (inserted, released) = (
-            confirmedAppUserIds.insert(appUserId).inserted,
-            store.releaseWaitingForIdentity(appUserId: appUserId)
-        )
-        if inserted {
-            Log.identity.debug("Receipt pipeline identity confirmed for \(String(appUserId.prefix(8)))…")
-        }
-        if !released.isEmpty {
-            Log.receipts.debug("Released \(released.count) queued receipt(s) for confirmed identity")
-        }
-        if inserted || !released.isEmpty {
-            kick()
-        }
-    }
-
     // MARK: - Public API
 
     /// Enqueues a payment queue item (fire-and-forget). Used by background callers
@@ -168,16 +145,9 @@ actor AppActorPaymentProcessor {
             await transaction.finish()
             return
         }
-        var storedItem = item
-        if !confirmedAppUserIds.contains(item.appUserId) {
-            storedItem.phase = .waitingForIdentity
-            emitEvent(.deferredWaitingForIdentity(transactionId: item.transactionId), item: item)
-        }
-        store.upsert(storedItem)
+        store.upsert(item)
         transactionMap[item.key] = transaction
-        if confirmedAppUserIds.contains(item.appUserId) {
-            kick()
-        }
+        kick()
     }
 
     /// Enqueues a payment queue item and awaits the server result. Used by the
@@ -196,12 +166,7 @@ actor AppActorPaymentProcessor {
             await transaction.finish()
             return consumeCompletedResult(for: item.key) ?? .alreadyPosted
         }
-        var storedItem = item
-        if !confirmedAppUserIds.contains(item.appUserId) {
-            storedItem.phase = .waitingForIdentity
-            emitEvent(.deferredWaitingForIdentity(transactionId: item.transactionId), item: item)
-        }
-        store.upsert(storedItem)
+        store.upsert(item)
         transactionMap[item.key] = transaction
 
         let timeoutNanos = UInt64(Self.purchaseAwaitTimeout * 1_000_000_000)
@@ -214,9 +179,7 @@ actor AppActorPaymentProcessor {
                 Log.receipts.debug("[key=\(key)] Overwriting pending continuation")
             }
             pendingResults[key] = continuation
-            if confirmedAppUserIds.contains(item.appUserId) {
-                kick()
-            }
+            kick()
 
             // Hard timeout: guarantee purchase() never blocks longer than 35s
             // F5 fix: store the timeout task so it can be cancelled on normal completion
@@ -455,14 +418,7 @@ actor AppActorPaymentProcessor {
                 }
             }
 
-            // Step 3: Move items for unconfirmed users into a holding phase.
-            let deferred = store.deferReadyUntilIdentity(confirmedAppUserIds: confirmedAppUserIds, now: now)
-            for item in deferred {
-                didWork = true
-                emitEvent(.deferredWaitingForIdentity(transactionId: item.transactionId), item: item)
-            }
-
-            // Step 4: Claim ready items — claimReady sets phase=.posting and persists
+            // Step 3: Claim ready items — claimReady sets phase=.posting and persists
             let claimed = store.claimReady(limit: maxConcurrentPosts, now: now)
 
             if !claimed.isEmpty {

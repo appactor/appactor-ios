@@ -14,8 +14,6 @@ final class PaymentProcessorTests: XCTestCase {
         client = MockPaymentClient()
         store = InMemoryPaymentQueueStore()
         processor = AppActorPaymentProcessor(store: store, client: client)
-        // Open the identity gate so drain() doesn't wait forever in tests.
-        await processor.confirmIdentity(appUserId: "user_123")
     }
 
     // MARK: - Helpers
@@ -25,12 +23,10 @@ final class PaymentProcessorTests: XCTestCase {
         store: InMemoryPaymentQueueStore? = nil,
         client: MockPaymentClient? = nil
     ) async -> AppActorPaymentProcessor {
-        let proc = AppActorPaymentProcessor(
+        AppActorPaymentProcessor(
             store: store ?? self.store,
             client: client ?? self.client
         )
-        await proc.confirmIdentity(appUserId: "user_123")
-        return proc
     }
 
     private func makeItem(
@@ -512,37 +508,38 @@ final class PaymentProcessorTests: XCTestCase {
         await processor.kick()
         try? await Task.sleep(nanoseconds: 200_000_000)
 
-        XCTAssertEqual(client.postReceiptCalls.count, 0, "Unconfirmed identities should not POST yet")
-        XCTAssertEqual(store.allItems().first?.phase, .waitingForIdentity)
-        XCTAssertTrue(accumulator.events.contains {
-            if case .deferredWaitingForIdentity(let txId) = $0.event {
-                return txId == "waiting"
-            }
-            return false
-        })
-
-        await processor.confirmIdentity(appUserId: "user_waiting")
+        XCTAssertEqual(client.postReceiptCalls.count, 1, "Receipts should post immediately with the captured local appUserId")
         try? await Task.sleep(nanoseconds: 300_000_000)
 
-        XCTAssertEqual(client.postReceiptCalls.count, 1, "Confirming the identity should release the queued receipt")
         XCTAssertTrue(store.allItems().isEmpty)
+        XCTAssertTrue(
+            accumulator.events.contains {
+                if case .postedOk(transactionId: "waiting") = $0.event {
+                    return true
+                }
+                return false
+            },
+            "RC-style identity should post immediately instead of deferring by identity"
+        )
     }
 
-    func testRelaunchRecoveryMigratesWaitingReceiptToCurrentIdentity() async {
+    func testRelaunchRecoveryMigratesReceiptToCurrentIdentity() async {
         let relaunchStore = InMemoryPaymentQueueStore()
         let relaunchClient = MockPaymentClient()
         let relaunchProcessor = AppActorPaymentProcessor(store: relaunchStore, client: relaunchClient)
+        relaunchClient.postReceiptHandler = { request in
+            XCTAssertEqual(request.appUserId, "current_user")
+            return AppActorReceiptPostResponse(status: "ok", requestId: "req_relaunch")
+        }
 
         relaunchStore.upsert(
             makeItem(
                 key: "apple:relaunch",
                 transactionId: "relaunch",
-                phase: .waitingForIdentity,
+                phase: .needsPost,
                 appUserId: "old_user"
             )
         )
-
-        await relaunchProcessor.confirmIdentity(appUserId: "current_user")
 
         relaunchStore.upsert(
             makeItem(
@@ -554,22 +551,9 @@ final class PaymentProcessorTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(relaunchStore.allItems().first?.appUserId, "current_user")
-        XCTAssertTrue(
-            [.needsPost, .posting].contains(relaunchStore.allItems().first?.phase),
-            "Relaunch recovery may already have claimed the migrated receipt for posting"
-        )
-
-        relaunchClient.postReceiptHandler = { request in
-            XCTAssertEqual(request.appUserId, "current_user")
-            return AppActorReceiptPostResponse(status: "ok", requestId: "req_relaunch_recovered")
-        }
-
         await relaunchProcessor.kick()
         try? await Task.sleep(nanoseconds: 300_000_000)
-
-        XCTAssertEqual(relaunchClient.postReceiptCalls.count, 1,
-                       "Relaunch recovery should retry the receipt under the current confirmed identity")
+        XCTAssertEqual(relaunchClient.postReceiptCalls.count, 1)
         XCTAssertTrue(relaunchStore.allItems().isEmpty)
     }
 

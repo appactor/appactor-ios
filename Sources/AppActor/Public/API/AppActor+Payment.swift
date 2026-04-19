@@ -11,25 +11,26 @@ extension AppActor {
 
     /// Configures the AppActor Payment identity module and runs the full bootstrap sequence.
     ///
-    /// Performs local setup (storage, client, managers) synchronously, then awaits
-    /// the bootstrap sequence: watcher start → identify → offerings → sweep → drain+refresh.
-    /// Identity-dependent APIs still apply an internal server-identity readiness
-    /// barrier when bootstrap identity establishment must be retried later.
+    /// Performs local setup (storage, client, managers) synchronously, immediately
+    /// establishes a local app user ID, then awaits the bootstrap sequence:
+    /// watcher start → offerings warm-up → sweep → drain+refresh.
     ///
     /// ASA attribution runs independently in the background and does **not** block this call.
     ///
     /// ```swift
     /// await AppActor.configure(apiKey: "pk_YOUR_PUBLIC_API_KEY")
-    /// // Startup is complete here. Identity-dependent APIs retry identify internally if needed.
+    /// // Startup is complete here. A cached appUserId was reused or a new anonymous one was created.
     /// ```
     public static func configure(
         apiKey: String,
+        appUserId: String? = nil,
         options: AppActorOptions = .init()
     ) async {
         let config = AppActorPaymentConfiguration(
             apiKey: apiKey,
             baseURL: AppActorPaymentConfiguration.defaultBaseURL,
             headerMode: .bearer,
+            appUserId: appUserId,
             options: options
         )
         guard shared.configureInternal(config) else { return }
@@ -118,11 +119,11 @@ extension AppActor {
         )
         self.storeKitSilentSyncFetcher = silentSyncFetcher
 
-        // Eagerly ensure userId exists BEFORE any async tasks start.
-        // Both bootstrap (identify) and ASA (attribution) need userId.
-        // Doing this synchronously here prevents a race where both tasks
-        // call ensureAppUserId() concurrently and generate different IDs.
-        storage.ensureAppUserId()
+        // Establish the canonical local identity synchronously so configure()
+        // returns with appUserId/isAnonymous immediately usable.
+        storage.resolveAppUserId(explicit: config.appUserId)
+        storage.ensureAppAccountToken()
+        storage.clearLegacyIdentityState()
 
         self.asaManager = nil
 
@@ -206,31 +207,11 @@ extension AppActor {
     /// Runs the foreground maintenance sequence shared by lifecycle notifications
     /// and tests that need to validate foreground behavior without UIKit hooks.
     func runForegroundMaintenance() async {
-        // Retry server identity establishment before any foreground work that depends on it.
-        if let storage = self.paymentStorage,
-           storage.needsReidentify || storage.serverUserId == nil {
-            do {
-                _ = try await self.ensureServerIdentityReady()
-                Log.identity.info("Foreground: server identity ready")
-            } catch {
-                Log.identity.debug("Foreground: ensureServerIdentityReady failed: \(error.localizedDescription)")
-            }
-        }
-        guard !Task.isCancelled else { return }
-
-        // Retry deferred ASA attribution once identity becomes ready, then flush
-        // any queued follow-up events that depend on the attributed identity.
+        // Retry deferred ASA work using the current local app user ID.
         if let asaManager = self.asaManager {
-            do {
-                _ = try await self.ensureServerIdentityReady()
-                await asaManager.flushPendingUserIdChange()
-                guard !Task.isCancelled else { return }
-                await asaManager.performAttributionIfNeeded()
-                guard !Task.isCancelled else { return }
-                await asaManager.flushPendingPurchaseEvents()
-            } catch {
-                Log.attribution.debug("Foreground: server identity not ready, skipping ASA work: \(error.localizedDescription)")
-            }
+            await asaManager.performAttributionIfNeeded()
+            guard !Task.isCancelled else { return }
+            await asaManager.flushPendingPurchaseEvents()
         }
         guard !Task.isCancelled else { return }
 
@@ -303,8 +284,6 @@ extension AppActor {
         if result.appUserId != currentId {
             storage.setAppUserId(result.appUserId)
         }
-        storage.setServerUserId(result.serverUserId)
-        storage.setNeedsReidentify(false)
 
         // Seed customer cache with the snapshot from identify
         // so that subsequent calls can benefit from ETag/304 responses
@@ -314,9 +293,6 @@ extension AppActor {
         if let manager = customerManager {
             await manager.seedCache(info: verifiedInfo, eTag: result.customerETag, appUserId: result.appUserId, verified: result.signatureVerified)
         }
-        if let processor = paymentProcessor {
-            await processor.confirmIdentity(appUserId: result.appUserId)
-        }
 
         self.paymentCurrentUser = verifiedInfo
         self.customerInfo = verifiedInfo
@@ -325,51 +301,11 @@ extension AppActor {
         return verifiedInfo
     }
 
-    /// Ensures the current local `app_user_id` has been confirmed by the backend.
-    /// Concurrent callers coalesce onto a single in-flight `identify()` task.
-    func ensureServerIdentityReady() async throws -> String {
-        guard paymentLifecycle == .configured else {
-            throw AppActorError.notConfigured
-        }
-        guard let storage = paymentStorage else {
-            throw AppActorError.notConfigured
-        }
-
-        if let appUserId = storage.currentAppUserId,
-           storage.serverUserId != nil,
-           !storage.needsReidentify {
-            return appUserId
-        }
-
-        if let task = identityReadyTask {
-            return try await task.value
-        }
-
-        let task = Task<String, Error> { @MainActor [weak self] in
-            guard let self else { throw AppActorError.notConfigured }
-            let info = try await self.identify()
-            guard let readyAppUserId = self.paymentStorage?.currentAppUserId ?? info.appUserId else {
-                throw AppActorError.notConfigured
-            }
-            return readyAppUserId
-        }
-        identityReadyTask = task
-
-        do {
-            let appUserId = try await task.value
-            identityReadyTask = nil
-            return appUserId
-        } catch {
-            identityReadyTask = nil
-            throw error
-        }
-    }
-
     // MARK: - Login
 
     /// Switches the identity to a new app user ID.
     ///
-    /// Uses the stored `current_app_user_id` internally. If none exists, calls `identify()` first.
+    /// Uses the stored local `current_app_user_id` directly.
     ///
     /// - Parameter newAppUserId: The new user identifier (e.g. your backend user ID).
     /// - Returns: The server-authoritative `AppActorCustomerInfo` with entitlements and subscriptions.
@@ -385,7 +321,7 @@ extension AppActor {
 
         try AppActorPaymentValidation.validateAppUserId(newAppUserId)
 
-        let currentId = try await ensureServerIdentityReady()
+        let currentId = storage.ensureAppUserId()
 
         let request = AppActorLoginRequest(
             currentAppUserId: currentId,
@@ -429,14 +365,8 @@ extension AppActor {
         // Track request_id
         storage.setLastRequestId(loginResult.requestId)
 
-        // Enqueue ASA user ID change before overwriting local identity
-        if currentId != loginResult.appUserId, let asaManager = self.asaManager {
-            await asaManager.enqueueUserIdChange(oldUserId: currentId, newUserId: loginResult.appUserId)
-        }
-
         // Overwrite local identity
         storage.setAppUserId(loginResult.appUserId)
-        storage.setServerUserId(loginResult.serverUserId)
 
         // Rotate appAccountToken for new identity
         storage.clearAppAccountToken()
@@ -448,9 +378,6 @@ extension AppActor {
         // Seed customer cache with the snapshot from login
         if let manager = customerManager {
             await manager.seedCache(info: verifiedLoginInfo, eTag: loginResult.customerETag, appUserId: loginResult.appUserId, verified: loginResult.signatureVerified)
-        }
-        if let processor = paymentProcessor {
-            await processor.confirmIdentity(appUserId: loginResult.appUserId)
         }
 
         self.paymentCurrentUser = verifiedLoginInfo
@@ -470,18 +397,17 @@ extension AppActor {
 
     /// Logs out the current user and resets to an anonymous identity.
     ///
-    /// 1. Best-effort server logout call (failures ignored).
-    /// 2. Generates a new anonymous `app_user_id`.
-    /// 3. Clears cached user.
-    /// 4. Calls `identify()` — throws if post-logout identify fails.
+    /// 1. Generates a new anonymous `app_user_id`.
+    /// 2. Clears user-scoped caches.
+    /// 3. Rotates the appAccountToken for the new local identity.
     ///
-    /// - Returns: `true` if the server acknowledged the logout (or no server call was needed).
+    /// - Returns: `true` on success.
     @discardableResult
     public func logOut() async throws -> Bool {
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
         }
-        guard let client = paymentClient, let storage = paymentStorage else {
+        guard let storage = paymentStorage else {
             throw AppActorError.notConfigured
         }
 
@@ -502,21 +428,6 @@ extension AppActor {
             await processor.drainAll()
         }
 
-        var serverAcknowledged = true
-
-        // Best-effort server logout
-        if let currentId = storage.currentAppUserId {
-            let request = AppActorLogoutRequest(appUserId: currentId)
-            do {
-                let result = try await client.logout(request)
-                storage.setLastRequestId(result.requestId)
-                serverAcknowledged = result.value
-            } catch {
-                Log.identity.debug("Server logout failed (ignored): \(error)")
-                serverAcknowledged = false
-            }
-        }
-
         // Clear user-specific caches on identity switch.
         // Offerings are project-level and preserved across identity changes.
         let currentId = storage.currentAppUserId ?? ""
@@ -531,44 +442,25 @@ extension AppActor {
         }
         self.paymentRemoteConfigs = nil
 
-        // Clear appAccountToken — new one will be generated during post-logout identify()
+        // Rotate appAccountToken for the new local identity.
         storage.clearAppAccountToken()
 
-        // Enqueue ASA user ID change before generating new anonymous ID
-        let oldUserId = storage.currentAppUserId
         storage.generateAnonymousAppUserId()
-        if let oldId = oldUserId, let newId = storage.currentAppUserId, oldId != newId,
-           let asaManager = self.asaManager {
-            await asaManager.enqueueUserIdChange(oldUserId: oldId, newUserId: newId)
-        }
 
-        storage.setServerUserId(nil)
+        storage.ensureAppAccountToken()
+        storage.clearLegacyIdentityState()
         self.paymentCurrentUser = nil
         self.customerInfo = .empty
 
         Log.identity.debug("Logged out. New anonymous ID: \(String((storage.currentAppUserId ?? "nil").prefix(8)))…")
         Log.identity.info("👤 Logout complete")
 
-        // Re-identify with new anonymous ID.
-        // On failure: set needsReidentify flag for retry on next foreground, then rethrow.
-        do {
-            try await identify()
-        } catch {
-            storage.setNeedsReidentify(true)
-            Log.identity.warn("Post-logout identify failed: \(error.localizedDescription). Will retry on next foreground.")
-            // Flush buffered transactions with their captured (old) appUserId before rethrowing
-            if let watcher = transactionWatcher {
-                await watcher.endIdentityTransition()
-            }
-            throw error
-        }
-
         // End identity transition — flush buffered transactions with their captured appUserId
         if let watcher = transactionWatcher {
             await watcher.endIdentityTransition()
         }
 
-        return serverAcknowledged
+        return true
     }
 
     // MARK: - Reset
@@ -609,17 +501,14 @@ extension AppActor {
         foregroundTask?.cancel()
         stalenessTimerTask?.cancel()
         offeringsPrefetchTask?.cancel()
-        identityReadyTask?.cancel()
         await asaTask?.value
         await foregroundTask?.value
         await stalenessTimerTask?.value
         await offeringsPrefetchTask?.value
-        _ = try? await identityReadyTask?.value
         asaTask = nil
         foregroundTask = nil
         stalenessTimerTask = nil
         offeringsPrefetchTask = nil
-        identityReadyTask = nil
 
         // Stop transaction watcher and payment processor explicitly.
         // The supervisor started them but stop() requires deterministic await.
@@ -645,15 +534,13 @@ extension AppActor {
         // ── Phase 3: Clear persisted + in-memory state ──
         if let storage = paymentStorage {
             storage.remove(forKey: AppActorPaymentStorageKey.appUserId)
-            storage.remove(forKey: AppActorPaymentStorageKey.serverUserId)
             storage.remove(forKey: AppActorPaymentStorageKey.lastRequestId)
             storage.clearAppAccountToken()
             storage.setAsaAttributionCompleted(false)
-            storage.clearAsaPendingUserIdChange()
             storage.clearAsaSentOriginalTransactionIds()
             storage.remove(forKey: AppActorPaymentStorageKey.asaInstallDate)
             storage.clearAsaTokenOnlyAttempts()
-            storage.setNeedsReidentify(false)
+            storage.clearLegacyIdentityState()
         }
 
         await paymentETagManager?.clearAll()

@@ -36,8 +36,6 @@ final class InMemoryPaymentQueueStore: AppActorPaymentQueueStoreProtocol, @unche
 
                 let shouldClaim: Bool
                 switch item.phase {
-                case .waitingForIdentity:
-                    shouldClaim = false
                 case .needsPost:
                     shouldClaim = item.nextRetryAt <= now
                 case .posting:
@@ -58,44 +56,6 @@ final class InMemoryPaymentQueueStore: AppActorPaymentQueueStoreProtocol, @unche
             }
 
             return claimed
-        }
-    }
-
-    func deferReadyUntilIdentity(confirmedAppUserIds: Set<String>, now: Date) -> [AppActorPaymentQueueItem] {
-        withLock {
-            var deferred: [AppActorPaymentQueueItem] = []
-
-            for (key, item) in items where !confirmedAppUserIds.contains(item.appUserId) {
-                switch item.phase {
-                case .waitingForIdentity, .needsFinish, .deadLettered:
-                    continue
-                case .needsPost, .posting:
-                    var updated = item
-                    updated.phase = .waitingForIdentity
-                    updated.claimedAt = nil
-                    updated.lastSeenAt = now
-                    items[key] = updated
-                    deferred.append(updated)
-                }
-            }
-
-            return deferred
-        }
-    }
-
-    func releaseWaitingForIdentity(appUserId: String) -> [AppActorPaymentQueueItem] {
-        withLock {
-            var released: [AppActorPaymentQueueItem] = []
-
-            for (key, item) in items where item.appUserId == appUserId && item.phase == .waitingForIdentity {
-                var updated = item
-                updated.phase = .needsPost
-                updated.claimedAt = nil
-                items[key] = updated
-                released.append(updated)
-            }
-
-            return released
         }
     }
 
@@ -120,7 +80,7 @@ final class InMemoryPaymentQueueStore: AppActorPaymentQueueStoreProtocol, @unche
     func pendingCount() -> Int {
         withLock {
             items.values.filter {
-                $0.phase == .waitingForIdentity || $0.phase == .needsPost || $0.phase == .posting
+                $0.phase == .needsPost || $0.phase == .posting
             }.count
         }
     }

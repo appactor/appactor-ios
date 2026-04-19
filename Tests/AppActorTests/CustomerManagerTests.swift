@@ -22,7 +22,6 @@ final class RetrySimulatingMockClient: AppActorPaymentClientProtocol, @unchecked
     func identify(_ request: AppActorIdentifyRequest) async throws -> AppActorIdentifyResult {
         AppActorIdentifyResult(
             appUserId: request.appUserId,
-            serverUserId: "server-uuid-retry-mock",
             customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
             customerETag: nil,
             requestId: nil,
@@ -32,7 +31,6 @@ final class RetrySimulatingMockClient: AppActorPaymentClientProtocol, @unchecked
     func login(_ request: AppActorLoginRequest) async throws -> AppActorLoginResult {
         AppActorLoginResult(
             appUserId: request.newAppUserId,
-            serverUserId: nil,
             customerInfo: AppActorCustomerInfo(appUserId: request.newAppUserId),
             customerETag: nil,
             requestId: nil,
@@ -81,7 +79,6 @@ final class RetrySimulatingMockClient: AppActorPaymentClientProtocol, @unchecked
     func postExperimentAssignment(experimentKey: String, appUserId: String, appVersion: String?, country: String?) async throws -> AppActorExperimentFetchResult { fatalError("stub") }
     func postASAAttribution(_ request: AppActorASAAttributionRequest) async throws -> AppActorASAAttributionResponseDTO { fatalError("stub") }
     func postASAPurchaseEvent(_ request: AppActorASAPurchaseEventRequest) async throws -> AppActorASAPurchaseEventResponseDTO { fatalError("stub") }
-    func postASAUpdateUserId(_ request: AppActorASAUpdateUserIdRequest) async throws -> AppActorASAUpdateUserIdResponseDTO { fatalError("stub") }
 }
 
 // MARK: - Helpers

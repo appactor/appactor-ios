@@ -19,7 +19,6 @@ protocol AppActorPaymentClientProtocol: Sendable {
     // ASA (Apple Search Ads)
     func postASAAttribution(_ request: AppActorASAAttributionRequest) async throws -> AppActorASAAttributionResponseDTO
     func postASAPurchaseEvent(_ request: AppActorASAPurchaseEventRequest) async throws -> AppActorASAPurchaseEventResponseDTO
-    func postASAUpdateUserId(_ request: AppActorASAUpdateUserIdRequest) async throws -> AppActorASAUpdateUserIdResponseDTO
 }
 
 // MARK: - Live Client
@@ -109,7 +108,6 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             let responseETag = self.normalizeETag(http.value(forHTTPHeaderField: "ETag"))
             return AppActorIdentifyResult(
                 appUserId: dto.appUserId,
-                serverUserId: dto.serverUserId,
                 customerInfo: customerInfo,
                 customerETag: responseETag,
                 requestId: dto.requestId ?? requestId,
@@ -150,7 +148,6 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             let responseETag = self.normalizeETag(http.value(forHTTPHeaderField: "ETag"))
             return AppActorLoginResult(
                 appUserId: dto.appUserId,
-                serverUserId: dto.serverUserId,
                 customerInfo: customerInfo,
                 customerETag: responseETag,
                 requestId: dto.requestId ?? requestId,
@@ -477,12 +474,6 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         _ request: AppActorASAPurchaseEventRequest
     ) async throws -> AppActorASAPurchaseEventResponseDTO {
         try await postASA(path: "/v1/asa/purchase-event", body: request)
-    }
-
-    func postASAUpdateUserId(
-        _ request: AppActorASAUpdateUserIdRequest
-    ) async throws -> AppActorASAUpdateUserIdResponseDTO {
-        try await postASA(path: "/v1/asa/update-user-id", body: request)
     }
 
     /// Fire-and-forget style POST for ASA endpoints.

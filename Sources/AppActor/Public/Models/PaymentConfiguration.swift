@@ -48,29 +48,53 @@ public struct AppActorPaymentConfiguration: Sendable {
     /// Optional overrides.
     public let options: Options
 
+    /// Optional explicit public app user ID. When omitted, the SDK reuses a cached
+    /// ID or generates a new anonymous ID locally. Empty / whitespace-only values
+    /// are treated as omitted.
+    public let appUserId: String?
+
     public init(
         apiKey: String,
         baseURL: URL = AppActorPaymentConfiguration.defaultBaseURL,
         headerMode: HeaderMode = .bearer,
+        appUserId: String? = nil,
         options: Options = .init()
     ) {
         self.apiKey = apiKey
         self.baseURL = baseURL
         self.headerMode = headerMode
+        self.appUserId = Self.normalizedAppUserId(appUserId)
         self.options = options
     }
 
     @_spi(AppActorPluginSupport)
     public var validationError: AppActorError? {
-        Self.validationError(apiKey: apiKey)
+        Self.validationError(apiKey: apiKey, appUserId: appUserId)
     }
 
     @_spi(AppActorPluginSupport)
-    public static func validationError(apiKey: String) -> AppActorError? {
+    public static func validationError(apiKey: String, appUserId: String? = nil) -> AppActorError? {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return AppActorError.validationError("apiKey must not be blank.")
         }
+        if let appUserId = Self.normalizedAppUserId(appUserId) {
+            do {
+                try AppActorPaymentValidation.validateAppUserId(appUserId)
+            } catch let error as AppActorError {
+                return error
+            } catch {
+                return AppActorError.validationError("appUserId is invalid.")
+            }
+        }
         return nil
+    }
+
+    private static func normalizedAppUserId(_ appUserId: String?) -> String? {
+        guard let appUserId,
+              !appUserId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return appUserId
     }
 
     /// Optional settings for the payment module.

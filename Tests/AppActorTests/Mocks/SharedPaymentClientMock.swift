@@ -23,7 +23,6 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
     // ASA handlers
     var attributionHandler: ((AppActorASAAttributionRequest) async throws -> AppActorASAAttributionResponseDTO)?
     var purchaseEventHandler: ((AppActorASAPurchaseEventRequest) async throws -> AppActorASAPurchaseEventResponseDTO)?
-    var updateUserIdHandler: ((AppActorASAUpdateUserIdRequest) async throws -> AppActorASAUpdateUserIdResponseDTO)?
 
     // MARK: - Call Tracking (thread-safe)
 
@@ -62,8 +61,6 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
     private var _purchaseEventCalls: [AppActorASAPurchaseEventRequest] = []
     var purchaseEventCalls: [AppActorASAPurchaseEventRequest] { queue.sync { _purchaseEventCalls } }
 
-    private var _updateUserIdCalls: [AppActorASAUpdateUserIdRequest] = []
-    var updateUserIdCalls: [AppActorASAUpdateUserIdRequest] { queue.sync { _updateUserIdCalls } }
 
     // MARK: - Protocol Implementation
 
@@ -74,7 +71,6 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
         }
         return AppActorIdentifyResult(
             appUserId: request.appUserId,
-            serverUserId: "server-uuid-123",
             customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
             customerETag: "mock_hash",
             requestId: "req_mock_identify",
@@ -89,7 +85,6 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
         }
         return AppActorLoginResult(
             appUserId: request.newAppUserId,
-            serverUserId: "server-uuid-456",
             customerInfo: AppActorCustomerInfo(appUserId: request.newAppUserId),
             customerETag: "mock_hash",
             requestId: "req_mock_login",
@@ -204,13 +199,5 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
             return try await handler(request)
         }
         return AppActorASAPurchaseEventResponseDTO(status: "ok", eventId: "evt_\(UUID().uuidString.prefix(8))")
-    }
-
-    func postASAUpdateUserId(_ request: AppActorASAUpdateUserIdRequest) async throws -> AppActorASAUpdateUserIdResponseDTO {
-        queue.sync { _updateUserIdCalls.append(request) }
-        if let handler = updateUserIdHandler {
-            return try await handler(request)
-        }
-        return AppActorASAUpdateUserIdResponseDTO(status: "ok")
     }
 }

@@ -453,7 +453,6 @@ final class CacheIdentityChangeTests: XCTestCase {
         client.loginHandler = { _ in
             AppActorLoginResult(
                 appUserId: "new-user",
-                serverUserId: "server-uuid-789",
                 customerInfo: AppActorCustomerInfo(appUserId: "new-user"),
                 customerETag: "cust_etag_new",
                 requestId: "req_login_1",
@@ -495,7 +494,6 @@ final class CacheIdentityChangeTests: XCTestCase {
         client.identifyHandler = { request in
             AppActorIdentifyResult(
                 appUserId: request.appUserId,
-                serverUserId: "server-uuid-identify-logout",
                 customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
                 customerETag: "cust_etag_anon",
                 requestId: "req_identify_anon",
@@ -538,7 +536,6 @@ final class CacheIdentityChangeTests: XCTestCase {
         client.loginHandler = { _ in
             AppActorLoginResult(
                 appUserId: "new-user-2",
-                serverUserId: "server-uuid-new-2",
                 customerInfo: AppActorCustomerInfo(appUserId: "new-user-2"),
                 customerETag: nil,
                 requestId: "req_login_exp",

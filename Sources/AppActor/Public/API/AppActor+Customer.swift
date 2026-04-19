@@ -17,13 +17,12 @@ extension AppActor {
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
         }
-        guard let manager = customerManager, paymentStorage != nil else {
+        guard let manager = customerManager,
+              let appUserId = paymentStorage?.currentAppUserId else {
             throw AppActorError.notConfigured
         }
-        let appUserId = try await ensureServerIdentityReady()
         do {
             let info = try await manager.getCustomerInfo(appUserId: appUserId)
-            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             await paymentProcessor?.kick()
             return info
@@ -99,11 +98,6 @@ extension AppActor {
 // MARK: - Identity-Safe Customer Info Assignment
 
 extension AppActor {
-    func confirmReceiptPipelineIdentityIfCurrent(appUserId: String) async {
-        guard paymentStorage?.currentAppUserId == appUserId else { return }
-        await paymentProcessor?.confirmIdentity(appUserId: appUserId)
-    }
-
     /// Sets `customerInfo` only if the current user still matches the expected identity.
     /// Discards stale results from async calls that completed after a login/logout.
     func setCustomerInfoIfIdentityMatches(_ info: AppActorCustomerInfo, expectedAppUserId: String) {

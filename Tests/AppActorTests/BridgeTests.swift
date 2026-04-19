@@ -275,23 +275,6 @@ final class BridgeReceiptEventTests: XCTestCase {
         XCTAssertNil(bridge.key)
     }
 
-    func testDeferredWaitingForIdentityMapping() {
-        let detail = AppActorReceiptPipelineEventDetail(
-            event: .deferredWaitingForIdentity(transactionId: "tx_wait"),
-            productId: "com.app.monthly",
-            appUserId: "user_waiting"
-        )
-        let bridge = AppActorBridgeReceiptEvent(from: detail)
-        XCTAssertEqual(bridge.type, AppActorBridgeReceiptEvent.TYPE_DEFERRED_WAITING_FOR_IDENTITY)
-        XCTAssertEqual(bridge.transactionId, "tx_wait")
-        XCTAssertEqual(bridge.productId, "com.app.monthly")
-        XCTAssertEqual(bridge.appUserId, "user_waiting")
-        XCTAssertNil(bridge.retryCount)
-        XCTAssertNil(bridge.nextAttemptAt)
-        XCTAssertNil(bridge.errorCode)
-        XCTAssertNil(bridge.key)
-    }
-
     func testRetryScheduledMapping() {
         let nextAt = Date(timeIntervalSince1970: 1_700_000_000)
         let detail = AppActorReceiptPipelineEventDetail(
@@ -430,28 +413,28 @@ final class BridgeIntegrationTests: XCTestCase {
 
     // MARK: - Synchronous Accessors
 
-    func testIsReadyAfterSetup() {
-        XCTAssertTrue(bridge.isReady)
+    func testBridgeExposesConfiguredIdentityAfterSetup() {
+        XCTAssertNotNil(bridge.appUserId)
     }
 
-    func testIsReadyBeforeSetup() {
+    func testBridgeAppUserIdNilBeforeSetup() {
         // Tear down the configured state first
         appactor.paymentStorage = nil
         appactor.paymentLifecycle = .idle
-        XCTAssertFalse(bridge.isReady)
+        XCTAssertNil(bridge.appUserId)
     }
 
-    func testIsReadyRequiresConfiguredLifecycleEvenWhenStorageExists() {
+    func testBridgeAccessorsRequireConfiguredLifecycleEvenWhenStorageExists() {
         storage.setAppUserId("test_user_42")
         appactor.paymentLifecycle = .idle
 
-        XCTAssertFalse(bridge.isReady)
+        XCTAssertNil(bridge.appUserId)
+        XCTAssertTrue(bridge.isAnonymous)
         XCTAssertNotNil(appactor.paymentStorage)
     }
 
     func testAppUserIdReturnsStoredValue() {
         storage.setAppUserId("test_user_42")
-        storage.setServerUserId("server_test_user_42")
         XCTAssertEqual(bridge.appUserId, "test_user_42")
     }
 
@@ -462,24 +445,18 @@ final class BridgeIntegrationTests: XCTestCase {
         XCTAssertNil(bridge.appUserId)
     }
 
-    func testAppUserIdReturnsLocalIdentityEvenWhenNotReady() {
+    func testAppUserIdReturnsLocalIdentityImmediatelyAfterConfiguration() {
         storage.setAppUserId("pending_user_42")
-        storage.setServerUserId(nil)
-        storage.setNeedsReidentify(true)
-
         XCTAssertEqual(bridge.appUserId, "pending_user_42")
-        XCTAssertFalse(bridge.isReady)
     }
 
     func testIsAnonymousForAnonUser() {
         storage.setAppUserId("appactor-anon-abc123")
-        storage.setServerUserId("server_anon_123")
         XCTAssertTrue(bridge.isAnonymous)
     }
 
     func testIsAnonymousForIdentifiedUser() {
         storage.setAppUserId("real_user_123")
-        storage.setServerUserId("server_real_user_123")
         XCTAssertFalse(bridge.isAnonymous)
     }
 
@@ -490,13 +467,9 @@ final class BridgeIntegrationTests: XCTestCase {
         XCTAssertTrue(bridge.isAnonymous)
     }
 
-    func testIsAnonymousUsesLocalIdentityEvenWhenNotReady() {
+    func testIsAnonymousUsesLocalIdentityImmediately() {
         storage.setAppUserId("real_user_123")
-        storage.setServerUserId(nil)
-        storage.setNeedsReidentify(true)
-
         XCTAssertFalse(bridge.isAnonymous)
-        XCTAssertFalse(bridge.isReady)
     }
 
     func testCachedCustomerInfoReturnsCurrentValue() {
@@ -564,7 +537,6 @@ final class BridgeIntegrationTests: XCTestCase {
         mockClient.loginHandler = { request in
             AppActorLoginResult(
                 appUserId: request.newAppUserId,
-                serverUserId: nil,
                 customerInfo: expectedInfo,
                 customerETag: nil,
                 requestId: nil,
@@ -588,25 +560,13 @@ final class BridgeIntegrationTests: XCTestCase {
     }
 
     func testLogOutSuccess() async {
-        mockClient.logoutHandler = { _ in
-            AppActorPaymentResult(value: true, requestId: nil)
-        }
-        mockClient.identifyHandler = { request in
-            AppActorIdentifyResult(
-                appUserId: request.appUserId,
-                serverUserId: "server_\(request.appUserId)",
-                customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
-                customerETag: nil,
-                requestId: nil,
-                signatureVerified: false
-            )
-        }
         storage.setAppUserId("user_to_logout")
 
         let expectation = XCTestExpectation(description: "logOut callback")
         bridge.logOut(
             onSuccess: { result in
                 XCTAssertTrue(result)
+                XCTAssertTrue(self.storage.currentAppUserId?.hasPrefix("appactor-anon-") == true)
                 expectation.fulfill()
             },
             onError: { error in
@@ -614,6 +574,8 @@ final class BridgeIntegrationTests: XCTestCase {
             }
         )
         await fulfillment(of: [expectation], timeout: 5.0)
+        XCTAssertEqual(mockClient.logoutCalls.count, 0, "RC-style logout should be local-only")
+        XCTAssertEqual(mockClient.identifyCalls.count, 0, "RC-style logout should not re-identify")
     }
 
     func testConfigureValidationErrorReportsBridgeErrorWithoutCompleting() async {

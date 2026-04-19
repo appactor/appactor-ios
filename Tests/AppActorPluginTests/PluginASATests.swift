@@ -93,7 +93,6 @@ private struct PluginASATestClient: AppActorPaymentClientProtocol {
     func postExperimentAssignment(experimentKey: String, appUserId: String, appVersion: String?, country: String?) async throws -> AppActorExperimentFetchResult { fatalError("unused in PluginASATests") }
     func postASAAttribution(_ request: AppActorASAAttributionRequest) async throws -> AppActorASAAttributionResponseDTO { fatalError("unused in PluginASATests") }
     func postASAPurchaseEvent(_ request: AppActorASAPurchaseEventRequest) async throws -> AppActorASAPurchaseEventResponseDTO { fatalError("unused in PluginASATests") }
-    func postASAUpdateUserId(_ request: AppActorASAUpdateUserIdRequest) async throws -> AppActorASAUpdateUserIdResponseDTO { fatalError("unused in PluginASATests") }
 }
 
 @MainActor
@@ -149,20 +148,15 @@ final class PluginASATests: XCTestCase {
                 trackInSandbox: true,
                 debugMode: true
             ),
-            attributionCompleted: true,
-            pendingUserIdChange: (oldUserId: "old_user", newUserId: "new_user")
+            attributionCompleted: true
         )
 
         let json = await AppActorPlugin.shared.execute(method: "get_asa_diagnostics", withJson: "{}")
         let envelope = try parseEnvelope(json)
         let success = try XCTUnwrap(envelope["success"] as? [String: Any])
-        let pendingUserIdChange = try XCTUnwrap(success["pending_user_id_change"] as? [String: Any])
 
         XCTAssertEqual(success["attribution_completed"] as? Bool, true)
         XCTAssertEqual(success["pending_purchase_event_count"] as? Int, 2)
-        XCTAssertEqual(success["has_pending_user_id_change"] as? Bool, true)
-        XCTAssertEqual(pendingUserIdChange["old_user_id"] as? String, "old_user")
-        XCTAssertEqual(pendingUserIdChange["new_user_id"] as? String, "new_user")
         XCTAssertEqual(success["debug_mode"] as? Bool, true)
         XCTAssertEqual(success["auto_track_purchases"] as? Bool, false)
         XCTAssertEqual(success["track_in_sandbox"] as? Bool, true)
@@ -207,18 +201,11 @@ final class PluginASATests: XCTestCase {
     private func makeASAManager(
         pendingPurchaseEventCount: Int,
         options: AppActorASAOptions = AppActorASAOptions(),
-        attributionCompleted: Bool = false,
-        pendingUserIdChange: (oldUserId: String, newUserId: String)? = nil
+        attributionCompleted: Bool = false
     ) -> AppActorASAManager {
         let storage = PluginASATestStorage()
         storage.set("user_123", forKey: AppActorPaymentStorageKey.appUserId)
         storage.setAsaAttributionCompleted(attributionCompleted)
-        if let pendingUserIdChange {
-            storage.setAsaPendingUserIdChange(
-                oldUserId: pendingUserIdChange.oldUserId,
-                newUserId: pendingUserIdChange.newUserId
-            )
-        }
 
         let eventStore = PluginASATestEventStore()
         for index in 0..<pendingPurchaseEventCount {

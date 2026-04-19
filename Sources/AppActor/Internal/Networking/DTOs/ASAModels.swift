@@ -101,19 +101,6 @@ struct AppActorASAPurchaseEventResponseDTO: Decodable, Sendable {
     let eventId: String
 }
 
-// MARK: - ASA Update User ID
-
-/// POST /v1/asa/update-user-id — request body
-struct AppActorASAUpdateUserIdRequest: Encodable, Sendable {
-    let oldUserId: String
-    let newUserId: String
-}
-
-/// POST /v1/asa/update-user-id — response body `{ status }`
-struct AppActorASAUpdateUserIdResponseDTO: Decodable, Sendable {
-    let status: String
-}
-
 // MARK: - AnyCodable Helper
 
 /// Type-erased Codable wrapper for arbitrary JSON values (e.g. Apple's attribution response).

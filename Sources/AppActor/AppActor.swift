@@ -154,10 +154,11 @@ public final class AppActor: ObservableObject {
               let processor = paymentProcessor,
               let client = paymentClient,
               let customerManager = customerManager,
-              let silentSyncFetcher = storeKitSilentSyncFetcher else {
+              let silentSyncFetcher = storeKitSilentSyncFetcher,
+              let storage = paymentStorage else {
             throw AppActorError.notConfigured
         }
-        let appUserId = try await ensureServerIdentityReady()
+        let appUserId = storage.ensureAppUserId()
 
         // Step 1: Collect all verified transactions without enqueuing
         async let silentAppTransaction = silentSyncFetcher.appTransaction()
@@ -180,13 +181,11 @@ public final class AppActor: ObservableObject {
                     hasOverflow: false,
                     customerManager: customerManager
                 )
-                await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
                 setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
                 Log.sdk.info("✅ Purchases restored via AppTransaction fallback")
                 return info
             }
             let info = try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
-            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (no transactions)")
             return info
@@ -256,7 +255,6 @@ public final class AppActor: ObservableObject {
                 hasOverflow: !overflow.isEmpty,
                 customerManager: customerManager
             )
-            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(finalInfo, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (bulk: \(result.restoredCount) restored, transferred=\(result.transferred))")
             return finalInfo
@@ -266,7 +264,6 @@ public final class AppActor: ObservableObject {
             await watcher.scanCurrentEntitlements()
             await processor.drainAll()
             let info = try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
-            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (fallback)")
             return info
@@ -345,7 +342,6 @@ public final class AppActor: ObservableObject {
                 appUserId: appUserId,
                 customerManager: customerManager
             )
-            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             return info
         }
@@ -361,7 +357,6 @@ public final class AppActor: ObservableObject {
                 appUserId: appUserId,
                 customerManager: customerManager
             )
-            await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
             setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             return info
         }
@@ -374,7 +369,6 @@ public final class AppActor: ObservableObject {
         }
 
         let info = try await customerManager.getCustomerInfo(appUserId: appUserId)
-        await confirmReceiptPipelineIdentityIfCurrent(appUserId: appUserId)
         setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
         return info
     }
@@ -524,7 +518,6 @@ final class AppActorPaymentContext {
     var foregroundTask: Task<Void, Never>?
     var stalenessTimerTask: Task<Void, Never>?
     var offeringsPrefetchTask: Task<Void, Never>?
-    var identityReadyTask: Task<String, Error>?
     var paymentProcessor: AppActorPaymentProcessor?
     var paymentQueueStore: (any AppActorPaymentQueueStoreProtocol)?
     var transactionWatcher: AppActorTransactionWatcher?
@@ -574,16 +567,6 @@ final class AppActorPaymentContext {
     nonisolated static var _isBootstrapComplete: Bool {
         get { _bootstrapCompleteBox.get() }
         set { _bootstrapCompleteBox.set(newValue) }
-    }
-
-    nonisolated static var _isReady: Bool {
-        guard _lifecycle == .configured, _isBootstrapComplete,
-              let storage = _storage else {
-            return false
-        }
-        return storage.currentAppUserId != nil
-            && storage.serverUserId != nil
-            && !storage.needsReidentify
     }
 
     // _remoteConfigs is mutated on every fetch + cleared on login/logout/reset → needs lock.

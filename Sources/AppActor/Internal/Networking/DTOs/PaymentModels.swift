@@ -68,7 +68,6 @@ struct AppActorLogoutRequest: Encodable {
 /// The `customerETag` comes from the `ETag` response header.
 struct AppActorIdentifyResult: Sendable {
     let appUserId: String
-    let serverUserId: String?
     let customerInfo: AppActorCustomerInfo
     let customerETag: String?
     let requestId: String?
@@ -86,7 +85,6 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
     let requestDateMs: Int64?
     let requestId: String?
     let appUserId: String
-    let serverUserId: String?
     let customer: AppActorCustomerDTO
 
     private enum CodingKeys: String, CodingKey {
@@ -106,7 +104,6 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
             self.requestDateMs = try? container.decodeIfPresent(Int64.self, forKey: .requestDateMs)
             self.requestId = try? container.decodeIfPresent(String.self, forKey: .requestId)
             self.appUserId = appUserId
-            self.serverUserId = try? container.decodeIfPresent(String.self, forKey: .serverUserId)
             self.customer = customer
             return
         }
@@ -121,7 +118,6 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
             self.requestId = (try? container.decodeIfPresent(String.self, forKey: .requestId))
                 ?? (try? data.decodeIfPresent(String.self, forKey: .requestId))
             self.appUserId = appUserId
-            self.serverUserId = try? data.decodeIfPresent(String.self, forKey: .serverUserId)
             self.customer = customer
             return
         }
@@ -134,7 +130,6 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
         self.requestId = (try? container.decodeIfPresent(String.self, forKey: .requestId))
             ?? (try? data.decodeIfPresent(String.self, forKey: .requestId))
         self.appUserId = user.appUserId
-        self.serverUserId = try? data.decodeIfPresent(String.self, forKey: .serverUserId)
         self.customer = user.customerDTO
     }
 }
@@ -147,7 +142,6 @@ struct AppActorIdentifyResponseDTO: Decodable, Sendable {
 /// `{ requestDate, requestDateMs, requestId, appUserId, serverUserId, customer }`.
 struct AppActorLoginResult: Sendable {
     let appUserId: String
-    let serverUserId: String?
     let customerInfo: AppActorCustomerInfo
     let customerETag: String?
     let requestId: String?
@@ -160,7 +154,6 @@ struct AppActorLoginResponseDTO: Decodable, Sendable {
     let requestDateMs: Int64?
     let requestId: String?
     let appUserId: String
-    let serverUserId: String?
     let customer: AppActorCustomerDTO
 
     private enum CodingKeys: String, CodingKey {
@@ -180,7 +173,6 @@ struct AppActorLoginResponseDTO: Decodable, Sendable {
             self.requestDateMs = try? container.decodeIfPresent(Int64.self, forKey: .requestDateMs)
             self.requestId = try? container.decodeIfPresent(String.self, forKey: .requestId)
             self.appUserId = appUserId
-            self.serverUserId = try? container.decodeIfPresent(String.self, forKey: .serverUserId)
             self.customer = customer
             return
         }
@@ -195,7 +187,6 @@ struct AppActorLoginResponseDTO: Decodable, Sendable {
             self.requestId = (try? container.decodeIfPresent(String.self, forKey: .requestId))
                 ?? (try? data.decodeIfPresent(String.self, forKey: .requestId))
             self.appUserId = appUserId
-            self.serverUserId = try? data.decodeIfPresent(String.self, forKey: .serverUserId)
             self.customer = customer
             return
         }
@@ -208,7 +199,6 @@ struct AppActorLoginResponseDTO: Decodable, Sendable {
         self.requestId = (try? container.decodeIfPresent(String.self, forKey: .requestId))
             ?? (try? data.decodeIfPresent(String.self, forKey: .requestId))
         self.appUserId = user.appUserId
-        self.serverUserId = try? data.decodeIfPresent(String.self, forKey: .serverUserId)
         self.customer = user.customerDTO
     }
 }

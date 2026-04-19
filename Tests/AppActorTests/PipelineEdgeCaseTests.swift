@@ -14,7 +14,6 @@ final class PipelineEdgeCaseTests: XCTestCase {
         client = MockPaymentClient()
         store = InMemoryPaymentQueueStore()
         processor = AppActorPaymentProcessor(store: store, client: client)
-        await processor.confirmIdentity(appUserId: "user_123")
     }
 
     // MARK: - Helpers
@@ -110,8 +109,6 @@ final class PipelineEdgeCaseTests: XCTestCase {
             return AppActorReceiptPostResponse(status: "ok", requestId: "req_1")
         }
 
-        await processor.confirmIdentity(appUserId: "user_A")
-
         // Enqueue items for user_A
         let item1 = makeItem(key: "apple:1", transactionId: "1", appUserId: "user_A")
         let item2 = makeItem(key: "apple:2", transactionId: "2", appUserId: "user_A")
@@ -184,7 +181,6 @@ final class PipelineEdgeCaseTests: XCTestCase {
         mockClient.identifyHandler = { _ in
             AppActorIdentifyResult(
                 appUserId: "test_user",
-                serverUserId: "server-test-user",
                 customerInfo: .empty,
                 customerETag: nil,
                 requestId: "req_id",

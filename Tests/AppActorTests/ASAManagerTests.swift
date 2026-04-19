@@ -39,8 +39,6 @@ final class ASAAttributionTests: XCTestCase {
     private func makeManager(debugMode: Bool = false) -> AppActorASAManager {
         // Set app user ID (required for attribution)
         storage.set("user_123", forKey: AppActorPaymentStorageKey.appUserId)
-        storage.setServerUserId("server_user_123")
-        storage.setNeedsReidentify(false)
         return AppActorASAManager(
             client: client,
             storage: storage,
@@ -240,136 +238,6 @@ final class ASAAttributionTests: XCTestCase {
         XCTAssertNil(storage.currentAppUserId, "ASA should not generate a local-only identity anymore")
         XCTAssertEqual(client.attributionCalls.count, 0, "Should not POST attribution without a confirmed identity")
         XCTAssertFalse(storage.asaAttributionCompleted, "Deferred attribution must remain retryable")
-    }
-}
-
-// MARK: - User ID Sync Tests
-
-final class ASAUserIdSyncTests: XCTestCase {
-
-    private var client: MockPaymentClient!
-    private var storage: InMemoryPaymentStorage!
-    private var eventStore: InMemoryASAEventStore!
-
-    override func setUp() {
-        super.setUp()
-        client = MockPaymentClient()
-        storage = InMemoryPaymentStorage()
-        eventStore = InMemoryASAEventStore()
-    }
-
-    private func makeManager() -> AppActorASAManager {
-        AppActorASAManager(
-            client: client, storage: storage, eventStore: eventStore,
-            tokenProvider: MockASATokenProvider(),
-            options: makeDefaultOptions(),
-            sdkVersion: "1.0.0"
-        )
-    }
-
-    // MARK: - No Pending Change
-
-    func testFlushDoesNothingWhenNoPending() async {
-        let manager = makeManager()
-        await manager.flushPendingUserIdChange()
-        XCTAssertEqual(client.updateUserIdCalls.count, 0)
-    }
-
-    // MARK: - Happy Path
-
-    func testFlushSyncsPendingUserIdChange() async {
-        storage.setAsaPendingUserIdChange(oldUserId: "old_user", newUserId: "new_user")
-        let manager = makeManager()
-
-        await manager.flushPendingUserIdChange()
-
-        XCTAssertEqual(client.updateUserIdCalls.count, 1)
-        XCTAssertEqual(client.updateUserIdCalls.first?.oldUserId, "old_user")
-        XCTAssertEqual(client.updateUserIdCalls.first?.newUserId, "new_user")
-        XCTAssertNil(storage.asaPendingUserIdChange, "Should clear pending after success")
-    }
-
-    // MARK: - No-Op (Same IDs)
-
-    func testFlushSkipsNoOpChange() async {
-        storage.setAsaPendingUserIdChange(oldUserId: "same_id", newUserId: "same_id")
-        let manager = makeManager()
-
-        await manager.flushPendingUserIdChange()
-
-        XCTAssertEqual(client.updateUserIdCalls.count, 0, "Should skip when old == new")
-        XCTAssertNil(storage.asaPendingUserIdChange, "Should still clear the no-op entry")
-    }
-
-    // MARK: - Permanent Error Clears Pending
-
-    func testFlushClearsPendingOnPermanent4xx() async {
-        storage.setAsaPendingUserIdChange(oldUserId: "old", newUserId: "new")
-        client.updateUserIdHandler = { _ in throw make400Error() }
-        let manager = makeManager()
-
-        await manager.flushPendingUserIdChange()
-
-        XCTAssertNil(storage.asaPendingUserIdChange, "Permanent 4xx should clear pending to avoid infinite loop")
-    }
-
-    // MARK: - Transient Error Keeps Pending
-
-    func testFlushKeepsPendingOnTransientError() async {
-        storage.setAsaPendingUserIdChange(oldUserId: "old", newUserId: "new")
-        client.updateUserIdHandler = { _ in throw make500Error() }
-        let manager = makeManager()
-
-        await manager.flushPendingUserIdChange()
-
-        XCTAssertNotNil(storage.asaPendingUserIdChange, "Transient error should keep pending for next bootstrap")
-    }
-
-    // MARK: - Re-entrancy Guard
-
-    func testConcurrentUserIdFlushSkipsSecondCall() async {
-        storage.setAsaPendingUserIdChange(oldUserId: "old", newUserId: "new")
-
-        // Make client slow so first flush is still in-flight when second starts
-        client.updateUserIdHandler = { req in
-            try await Task.sleep(nanoseconds: 200_000_000) // 200ms
-            return AppActorASAUpdateUserIdResponseDTO(status: "ok")
-        }
-
-        let manager = makeManager()
-
-        // Launch two concurrent flushes
-        async let flush1: () = manager.flushPendingUserIdChange()
-        async let flush2: () = manager.flushPendingUserIdChange()
-        _ = await (flush1, flush2)
-
-        // Re-entrancy guard should prevent second call from hitting server
-        XCTAssertEqual(client.updateUserIdCalls.count, 1, "Second concurrent flush should be skipped by re-entrancy guard")
-    }
-
-    // MARK: - Response Status Validation (M3)
-
-    func testFlushNonOkUserIdResponseKeepsPending() async {
-        storage.setAsaPendingUserIdChange(oldUserId: "old", newUserId: "new")
-        client.updateUserIdHandler = { _ in
-            return AppActorASAUpdateUserIdResponseDTO(status: "error")
-        }
-        let manager = makeManager()
-
-        await manager.flushPendingUserIdChange()
-
-        XCTAssertNotNil(storage.asaPendingUserIdChange, "Non-ok response should keep pending for next bootstrap")
-    }
-
-    // MARK: - Enqueue
-
-    func testEnqueueUserIdChange() async {
-        let manager = makeManager()
-        await manager.enqueueUserIdChange(oldUserId: "a", newUserId: "b")
-
-        let pending = storage.asaPendingUserIdChange
-        XCTAssertEqual(pending?.oldUserId, "a")
-        XCTAssertEqual(pending?.newUserId, "b")
     }
 }
 
@@ -845,8 +713,6 @@ final class ASADiagnosticsTests: XCTestCase {
         let storage = InMemoryPaymentStorage()
         storage.set("user_1", forKey: AppActorPaymentStorageKey.appUserId)
         storage.setAsaAttributionCompleted(true)
-        storage.setAsaPendingUserIdChange(oldUserId: "old", newUserId: "new")
-
         let eventStore = InMemoryASAEventStore()
         // Add 3 events
         for i in 0..<3 {
@@ -870,9 +736,6 @@ final class ASADiagnosticsTests: XCTestCase {
 
         XCTAssertTrue(diag.attributionCompleted)
         XCTAssertEqual(diag.pendingPurchaseEventCount, 3)
-        XCTAssertTrue(diag.hasPendingUserIdChange)
-        XCTAssertEqual(diag.pendingUserIdChange?.oldUserId, "old")
-        XCTAssertEqual(diag.pendingUserIdChange?.newUserId, "new")
         XCTAssertTrue(diag.debugMode)
         XCTAssertTrue(diag.autoTrackPurchases)
     }
@@ -890,8 +753,6 @@ final class ASADiagnosticsTests: XCTestCase {
 
         XCTAssertFalse(diag.attributionCompleted)
         XCTAssertEqual(diag.pendingPurchaseEventCount, 0)
-        XCTAssertFalse(diag.hasPendingUserIdChange)
-        XCTAssertNil(diag.pendingUserIdChange)
         XCTAssertFalse(diag.debugMode)
         XCTAssertFalse(diag.autoTrackPurchases)
     }
@@ -918,81 +779,6 @@ final class ASADiagnosticsTests: XCTestCase {
     }
 }
 
-// MARK: - H1: Chain-Aware User ID Change Tests
-
-final class ASAChainedUserIdChangeTests: XCTestCase {
-
-    private var client: MockPaymentClient!
-    private var storage: InMemoryPaymentStorage!
-    private var eventStore: InMemoryASAEventStore!
-
-    override func setUp() {
-        super.setUp()
-        client = MockPaymentClient()
-        storage = InMemoryPaymentStorage()
-        eventStore = InMemoryASAEventStore()
-    }
-
-    private func makeManager() -> AppActorASAManager {
-        AppActorASAManager(
-            client: client, storage: storage, eventStore: eventStore,
-            tokenProvider: MockASATokenProvider(),
-            options: makeDefaultOptions(),
-            sdkVersion: "1.0.0"
-        )
-    }
-
-    /// A→B then B→C should be composed into A→C (preserves original old user).
-    func testChainedUserIdChangePreservesOriginalOld() async {
-        let manager = makeManager()
-
-        await manager.enqueueUserIdChange(oldUserId: "A", newUserId: "B")
-        await manager.enqueueUserIdChange(oldUserId: "B", newUserId: "C")
-
-        let pending = storage.asaPendingUserIdChange
-        XCTAssertEqual(pending?.oldUserId, "A", "Should preserve original old user")
-        XCTAssertEqual(pending?.newUserId, "C", "Should use latest new user")
-    }
-
-    /// A→B then B→C then C→D should compose into A→D.
-    func testTripleChainedUserIdChange() async {
-        let manager = makeManager()
-
-        await manager.enqueueUserIdChange(oldUserId: "A", newUserId: "B")
-        await manager.enqueueUserIdChange(oldUserId: "B", newUserId: "C")
-        await manager.enqueueUserIdChange(oldUserId: "C", newUserId: "D")
-
-        let pending = storage.asaPendingUserIdChange
-        XCTAssertEqual(pending?.oldUserId, "A", "Should preserve original old user across 3 changes")
-        XCTAssertEqual(pending?.newUserId, "D", "Should use latest new user")
-    }
-
-    /// A→B then B→A should cancel out (round-trip no-op).
-    func testChainedUserIdChangeCancelsRoundTrip() async {
-        let manager = makeManager()
-
-        await manager.enqueueUserIdChange(oldUserId: "A", newUserId: "B")
-        await manager.enqueueUserIdChange(oldUserId: "B", newUserId: "A")
-
-        XCTAssertNil(storage.asaPendingUserIdChange, "Round-trip A→B→A should clear pending (no-op)")
-    }
-
-    /// Chained change A→C should be sent to backend correctly on flush.
-    func testChainedChangeFlushesToBackend() async {
-        let manager = makeManager()
-
-        await manager.enqueueUserIdChange(oldUserId: "A", newUserId: "B")
-        await manager.enqueueUserIdChange(oldUserId: "B", newUserId: "C")
-
-        await manager.flushPendingUserIdChange()
-
-        XCTAssertEqual(client.updateUserIdCalls.count, 1)
-        XCTAssertEqual(client.updateUserIdCalls.first?.oldUserId, "A")
-        XCTAssertEqual(client.updateUserIdCalls.first?.newUserId, "C")
-        XCTAssertNil(storage.asaPendingUserIdChange, "Should clear after successful flush")
-    }
-}
-
 // MARK: - L1: Token-Only Attempt Counter Tests
 
 final class ASATokenOnlyAttemptTests: XCTestCase {
@@ -1006,8 +792,6 @@ final class ASATokenOnlyAttemptTests: XCTestCase {
         client = MockPaymentClient()
         storage = InMemoryPaymentStorage()
         storage.set("user_123", forKey: AppActorPaymentStorageKey.appUserId)
-        storage.setServerUserId("server_user_123")
-        storage.setNeedsReidentify(false)
         tokenProvider = MockASATokenProvider()
         // Make Apple API fail so we get token-only path
         tokenProvider.appleAttributionResult = .error(NSError(domain: "test", code: 500, userInfo: nil))

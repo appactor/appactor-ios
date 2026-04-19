@@ -13,7 +13,6 @@ protocol AppActorPaymentStorage: Sendable {
 
 enum AppActorPaymentStorageKey {
     static let appUserId = "appactor_billing_app_user_id"
-    static let serverUserId = "appactor_billing_server_user_id"
     static let lastRequestId = "appactor_billing_last_request_id"
 
     // App Account Token (for StoreKit purchase → Apple transaction binding)
@@ -21,8 +20,6 @@ enum AppActorPaymentStorageKey {
 
     // ASA (Apple Search Ads) keys
     static let asaAttributionCompleted = "appactor_asa_attribution_completed"
-    /// [L7] Single atomic key for pending user ID change (replaces two separate keys).
-    static let asaPendingUserIdChange = "appactor_asa_pending_user_id_change"
     /// JSON array of originalTransactionIds already sent to ASA backend.
     /// Provides lifetime dedup — renewals with the same originalTransactionId are skipped
     /// even after the pending event has been flushed and removed from the event store.
@@ -33,8 +30,10 @@ enum AppActorPaymentStorageKey {
     /// Prevents infinite re-posts when Apple API is persistently unavailable.
     static let asaTokenOnlyAttempts = "appactor_asa_token_only_attempts"
 
-    /// Set when logOut() identify fails. Cleared on next successful identify.
-    static let needsReidentify = "appactor_needs_reidentify"
+    /// Legacy readiness key from pre-RC-style identity. Cleared on configure/reset.
+    static let legacyServerUserId = "appactor_billing_server_user_id"
+    /// Legacy readiness key from pre-RC-style identity. Cleared on configure/reset.
+    static let legacyNeedsReidentify = "appactor_needs_reidentify"
 }
 
 // MARK: - UserDefaults Implementation
@@ -81,11 +80,6 @@ extension AppActorPaymentStorage {
         string(forKey: AppActorPaymentStorageKey.appUserId)
     }
 
-    /// Returns the stored server user UUID, if any.
-    var serverUserId: String? {
-        string(forKey: AppActorPaymentStorageKey.serverUserId)
-    }
-
     /// Returns the last `request_id` received from the server.
     var lastRequestId: String? {
         get { string(forKey: AppActorPaymentStorageKey.lastRequestId) }
@@ -108,14 +102,21 @@ extension AppActorPaymentStorage {
         return generateAnonymousAppUserId()
     }
 
+    /// Resolves the canonical local app user ID for the session.
+    /// Priority: explicit non-blank ID -> cached ID -> new anonymous ID.
+    @discardableResult
+    func resolveAppUserId(explicit explicitAppUserId: String?) -> String {
+        if let explicitAppUserId,
+           !explicitAppUserId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            setAppUserId(explicitAppUserId)
+            return explicitAppUserId
+        }
+        return ensureAppUserId()
+    }
+
     /// Overwrites the stored `app_user_id`.
     func setAppUserId(_ id: String) {
         set(id, forKey: AppActorPaymentStorageKey.appUserId)
-    }
-
-    /// Stores the server-assigned user UUID.
-    func setServerUserId(_ id: String?) {
-        set(id, forKey: AppActorPaymentStorageKey.serverUserId)
     }
 
     /// Stores the last request_id.
@@ -127,9 +128,15 @@ extension AppActorPaymentStorage {
     /// Note: customer/offerings cache is managed by `AppActorETagManager`, not here.
     func clearAll() {
         remove(forKey: AppActorPaymentStorageKey.appUserId)
-        remove(forKey: AppActorPaymentStorageKey.serverUserId)
         remove(forKey: AppActorPaymentStorageKey.appAccountToken)
+        clearLegacyIdentityState()
         // Note: lastRequestId is kept for debugging.
+    }
+
+    /// Clears legacy readiness keys from the pre-RC-style identity model.
+    func clearLegacyIdentityState() {
+        remove(forKey: AppActorPaymentStorageKey.legacyServerUserId)
+        remove(forKey: AppActorPaymentStorageKey.legacyNeedsReidentify)
     }
 
     // MARK: - App Account Token
@@ -186,31 +193,6 @@ extension AppActorPaymentStorage {
         let date = formatter.string(from: Date())
         set(date, forKey: AppActorPaymentStorageKey.asaInstallDate)
         return date
-    }
-
-    /// [L7] Pending ASA user ID change (old → new), stored as a single atomic JSON value.
-    var asaPendingUserIdChange: (oldUserId: String, newUserId: String)? {
-        if let json = string(forKey: AppActorPaymentStorageKey.asaPendingUserIdChange) {
-            if let data = json.data(using: .utf8),
-               let dto = try? JSONDecoder().decode(AsaPendingUserIdChangeDTO.self, from: data) {
-                return (dto.oldUserId, dto.newUserId)
-            }
-            // [N4] Corrupt JSON — clear it, then fall through to try legacy keys
-            Log.attribution.warn("Corrupt pending user ID change JSON, clearing.")
-            remove(forKey: AppActorPaymentStorageKey.asaPendingUserIdChange)
-        }
-        return nil
-    }
-
-    func setAsaPendingUserIdChange(oldUserId: String, newUserId: String) {
-        let dto = AsaPendingUserIdChangeDTO(oldUserId: oldUserId, newUserId: newUserId)
-        guard let data = try? JSONEncoder().encode(dto),
-              let json = String(data: data, encoding: .utf8) else { return }
-        set(json, forKey: AppActorPaymentStorageKey.asaPendingUserIdChange)
-    }
-
-    func clearAsaPendingUserIdChange() {
-        remove(forKey: AppActorPaymentStorageKey.asaPendingUserIdChange)
     }
 
     // MARK: - ASA Sent Transaction Tracking
@@ -272,21 +254,4 @@ extension AppActorPaymentStorage {
         remove(forKey: AppActorPaymentStorageKey.asaTokenOnlyAttempts)
     }
 
-    // MARK: - Re-identify Flag
-
-    var needsReidentify: Bool {
-        string(forKey: AppActorPaymentStorageKey.needsReidentify) == "1"
-    }
-
-    func setNeedsReidentify(_ value: Bool) {
-        set(value ? "1" : nil, forKey: AppActorPaymentStorageKey.needsReidentify)
-    }
-}
-
-// MARK: - Atomic Storage DTOs
-
-/// [L7] DTO for atomic pending user ID storage (single key write/read).
-private struct AsaPendingUserIdChangeDTO: Codable {
-    let oldUserId: String
-    let newUserId: String
 }

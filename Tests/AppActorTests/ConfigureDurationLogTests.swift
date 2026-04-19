@@ -64,7 +64,7 @@ final class ConfigureDurationLogTests: XCTestCase {
         await appactor.runStartupSequence()
 
         let capturedLogs = logCollector.snapshot()
-        let stepNames = ["setup", "identify", "sweepUnfinished", "drainReceiptQueueAndRefreshCustomer"]
+        let stepNames = ["setup", "offerings/api", "sweepUnfinished", "drainReceiptQueueAndRefreshCustomer"]
         for step in stepNames {
             let found = capturedLogs.contains { $0.message.contains("⏱ \(step):") }
             XCTAssertTrue(found, "Expected timing log for step '\(step)'")
