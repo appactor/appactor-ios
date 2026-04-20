@@ -30,11 +30,9 @@ final class DiagnosticsViewModel: ObservableObject {
         let isEnabled: Bool
         let attributionCompleted: Bool
         let pendingPurchaseEventCount: Int
-        let hasPendingUserIdChange: Bool
-        let pendingOldUserId: String?
-        let pendingNewUserId: String?
         let debugMode: Bool
         let autoTrackPurchases: Bool
+        let trackInSandbox: Bool
         let timestamp: Date
 
         var formattedTime: String { Self.fmt.string(from: timestamp) }
@@ -64,11 +62,9 @@ final class DiagnosticsViewModel: ObservableObject {
                     isEnabled: true,
                     attributionCompleted: diag.attributionCompleted,
                     pendingPurchaseEventCount: diag.pendingPurchaseEventCount,
-                    hasPendingUserIdChange: diag.hasPendingUserIdChange,
-                    pendingOldUserId: diag.pendingUserIdChange?.oldUserId,
-                    pendingNewUserId: diag.pendingUserIdChange?.newUserId,
                     debugMode: diag.debugMode,
                     autoTrackPurchases: diag.autoTrackPurchases,
+                    trackInSandbox: diag.trackInSandbox,
                     timestamp: Date()
                 )
                 appState.logStore.log("🔄 ASA state snapshot taken")
@@ -77,11 +73,9 @@ final class DiagnosticsViewModel: ObservableObject {
                     isEnabled: false,
                     attributionCompleted: false,
                     pendingPurchaseEventCount: 0,
-                    hasPendingUserIdChange: false,
-                    pendingOldUserId: nil,
-                    pendingNewUserId: nil,
                     debugMode: false,
                     autoTrackPurchases: false,
+                    trackInSandbox: false,
                     timestamp: Date()
                 )
                 appState.logStore.log("ASA not configured")

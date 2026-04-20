@@ -17,7 +17,6 @@ struct ASAScreen: View {
             asaStatusCard
             keychainCard
             purchaseEventsCard
-            userIdChangeCard
         }
         .onAppear {
             vm.appState = appState
@@ -69,6 +68,12 @@ struct ASAScreen: View {
                             label: "Debug Mode",
                             value: asa.debugMode ? "On" : "Off",
                             valueColor: asa.debugMode ? PRTheme.info : .secondary
+                        )
+
+                        InfoRow(
+                            label: "Track In Sandbox",
+                            value: asa.trackInSandbox ? "On" : "Off",
+                            valueColor: asa.trackInSandbox ? PRTheme.info : .secondary
                         )
                     }
 
@@ -156,43 +161,4 @@ struct ASAScreen: View {
         }
     }
 
-    // MARK: - User ID Change Card
-
-    private var userIdChangeCard: some View {
-        PRCard {
-            VStack(alignment: .leading, spacing: PRTheme.spacing) {
-                SectionHeader(
-                    "User ID Sync",
-                    icon: "person.2.fill",
-                    color: PRTheme.info,
-                    subtitle: "ASA tarafına bekleyen user mapping değişiklikleri"
-                )
-
-                if let asa = vm.asaState, asa.isEnabled {
-                    InfoRow(
-                        label: "Pending Change",
-                        value: asa.hasPendingUserIdChange ? "Yes" : "None",
-                        valueColor: asa.hasPendingUserIdChange ? PRTheme.warning : PRTheme.success
-                    )
-
-                    if asa.hasPendingUserIdChange {
-                        InfoRow(
-                            label: "Old → New",
-                            value: "\(asa.pendingOldUserId ?? "?") → \(asa.pendingNewUserId ?? "?")",
-                            monospaced: true,
-                            valueColor: PRTheme.warning
-                        )
-                    }
-
-                    Text("User ID changes are synced before attribution on each bootstrap.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Text("ASA not configured")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
 }

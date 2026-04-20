@@ -6,7 +6,8 @@ final class AppState: ObservableObject {
 
     // MARK: - Configuration
 
-    let apiKey = "pk_live_7ec893603ab8ef7196b259667062d347d472ac56a762865808b7f22c2f1a8937"
+    /// Replace this before running the example app on device.
+    let apiKey = "pk_your_public_api_key"
 
     // MARK: - Shared State
 
@@ -27,6 +28,13 @@ final class AppState: ObservableObject {
         didConfigure = true
         isConfiguring = true
 
+        guard apiKey != "pk_your_public_api_key" else {
+            isConfiguring = false
+            errorMessage = "Replace the placeholder API key in App/AppState.swift before running the example."
+            logStore.log("⚠️ configure() blocked — replace placeholder apiKey in App/AppState.swift", level: .warning)
+            return
+        }
+
         logStore.log("▶ configure() starting — apiKey: \(String(apiKey.prefix(12)))…")
 
         Task {
@@ -37,7 +45,7 @@ final class AppState: ObservableObject {
 
             isConfiguring = false
             isConfigured = true
-            logStore.log("✅ configure() complete — bootstrap finished")
+            logStore.log("✅ configure() complete — local identity ready, bootstrap finished")
             refreshState()
             wireCallbacks()
         }

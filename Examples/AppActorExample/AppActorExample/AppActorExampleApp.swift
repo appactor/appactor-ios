@@ -8,8 +8,7 @@ struct AppActorExampleApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                
-                if appState.isConfigured {
+                if appState.isConfigured || appState.errorMessage != nil {
                     MainTabView()
                 } else {
                     SplashView()
