@@ -26,14 +26,6 @@ struct AppActorPaymentDeviceInfo: Sendable {
     }
 }
 
-// MARK: - Internal Result Wrapper
-
-/// Pairs a decoded value with the requestId from the response envelope.
-struct AppActorPaymentResult<T> {
-    let value: T
-    let requestId: String?
-}
-
 // MARK: - Request Bodies
 
 /// POST /v1/payment/identify
@@ -53,11 +45,6 @@ struct AppActorIdentifyRequest: Encodable {
 struct AppActorLoginRequest: Encodable {
     let currentAppUserId: String
     let newAppUserId: String
-}
-
-/// POST /v1/payment/logout
-struct AppActorLogoutRequest: Encodable {
-    let appUserId: String
 }
 
 // MARK: - Identify Result
@@ -271,13 +258,6 @@ struct AppActorErrorResponse: Decodable {
         /// Server-suggested retry delay in seconds.
         let retryAfterSeconds: Double?
     }
-}
-
-// MARK: - Response Data Payloads
-
-/// `data` from logout response.
-struct AppActorLogoutData: Decodable {
-    let success: Bool?
 }
 
 // MARK: - Validation

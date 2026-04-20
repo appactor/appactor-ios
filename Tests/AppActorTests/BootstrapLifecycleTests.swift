@@ -11,6 +11,25 @@ import XCTest
 @MainActor
 final class BootstrapLifecycleTests: XCTestCase {
 
+    private actor AsyncSignal {
+        private var didSignal = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func signal() {
+            guard !didSignal else { return }
+            didSignal = true
+            continuation?.resume()
+            continuation = nil
+        }
+
+        func wait() async {
+            guard !didSignal else { return }
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+    }
+
     private var appactor: AppActor!
     private var mockClient: MockPaymentClient!
     private var storage: InMemoryPaymentStorage!
@@ -136,36 +155,38 @@ final class BootstrapLifecycleTests: XCTestCase {
     /// Verifies that when a bootstrap Task is cancelled mid-flight, the lifecycle reverts to
     /// .idle and the watcher/processor are nil (BOOT-07 fix: revertLifecycleIfCancelled is async).
     ///
-    /// Strategy: use a mock client whose offerings warm-up suspends indefinitely, give watcher time
-    /// to start, then cancel the task while bootstrap is still in-flight.
+    /// Strategy: block the awaited customer refresh step, cancel the outer bootstrap task,
+    /// then release the mocked fetch so startup can observe cancellation and run cleanup.
     func testCancelledBootstrapRevertsLifecycleAndCleansUpActors() async throws {
-        throw XCTSkip("Cancellation timing remains flaky under the RC-style bootstrap refactor; reset and bootstrap cleanup are covered by deterministic tests.")
-        // Arrange: mock client whose offerings warm-up suspends until cancelled.
-        let neverCompletesBootstrap = MockPaymentClient()
-        neverCompletesBootstrap.getOfferingsHandler = { _ in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 10_000_000)
-            }
-            throw CancellationError()
+        let customerRefreshStarted = AsyncSignal()
+        let releaseCustomerRefresh = AsyncSignal()
+        mockClient.getCustomerHandler = { _, _ in
+            await customerRefreshStarted.signal()
+            await releaseCustomerRefresh.wait()
+            return .fresh(
+                AppActorCustomerInfo(appUserId: self.storage.currentAppUserId ?? "appactor-anon-cancelled"),
+                eTag: nil,
+                requestId: "req_boot07_cancel",
+                signatureVerified: false
+            )
         }
 
-        // Act: start the full configure flow in a Task we can cancel
-        let configTask = Task { @MainActor [weak self] in
+        let config = AppActorPaymentConfiguration(
+            apiKey: "pk_test_boot07_cancel",
+            baseURL: URL(string: "https://api.test.appactor.com")!
+        )
+        appactor.configureForTesting(config: config, client: mockClient, storage: storage)
+        appactor.isBootstrapComplete = false
+
+        let startupTask = Task.detached { @MainActor [weak self] in
             guard let self else { return }
-            let config = AppActorPaymentConfiguration(
-                apiKey: "pk_test_boot07_cancel",
-                baseURL: URL(string: "https://api.test.appactor.com")!
-            )
-            self.appactor.configureForTesting(config: config, client: neverCompletesBootstrap, storage: self.storage)
             await self.appactor.runStartupSequence()
         }
 
-        // Give the startup sequence enough time to start watcher and enter the offerings warm-up step.
-        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
-
-        // Cancel the bootstrap Task
-        configTask.cancel()
-        await configTask.value
+        await customerRefreshStarted.wait()
+        startupTask.cancel()
+        await releaseCustomerRefresh.signal()
+        await startupTask.value
 
         // Assert: lifecycle reverted to .idle and actors cleaned up
         XCTAssertEqual(appactor.paymentLifecycle, .idle,
@@ -177,6 +198,8 @@ final class BootstrapLifecycleTests: XCTestCase {
                      "transactionWatcher must be nil after cancelled bootstrap (BOOT-07 fix)")
         XCTAssertNil(appactor.paymentProcessor,
                      "paymentProcessor must be nil after cancelled bootstrap (BOOT-07 fix)")
+        XCTAssertFalse(appactor.isBootstrapComplete,
+                       "Bootstrap completion flag must reset after cancelled startup")
     }
 
     // MARK: - BOOT-04: logIn() drains receipt queue before cache clear
@@ -220,16 +243,14 @@ final class BootstrapLifecycleTests: XCTestCase {
         storage.setAppUserId("authenticated-user-001")
 
         // Act: call logOut() — drainAll() runs on the empty processor, then caches are cleared
-        let serverAcknowledged = try await appactor.logOut()
+        let logoutSucceeded = try await appactor.logOut()
 
         // Assert: logout succeeded and a new anonymous identity was generated
-        XCTAssertTrue(serverAcknowledged, "Server acknowledged logout should return true")
+        XCTAssertTrue(logoutSucceeded, "Local logout should still return true")
         let newUserId = storage.currentAppUserId
         XCTAssertNotNil(newUserId, "A new anonymous user ID must be generated after logout")
         XCTAssertTrue(newUserId?.hasPrefix("appactor-anon-") ?? false,
                       "Post-logout user ID must be anonymous (BOOT-05 fix)")
-        XCTAssertEqual(mockClient.logoutCalls.count, 0,
-                       "RC-style logout should not call the server")
         XCTAssertEqual(mockClient.identifyCalls.count, 0,
                        "RC-style logout should not re-identify")
     }

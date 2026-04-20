@@ -84,7 +84,6 @@ private struct PluginASATestTokenProvider: AppActorASATokenProviderProtocol {
 private struct PluginASATestClient: AppActorPaymentClientProtocol {
     func identify(_ request: AppActorIdentifyRequest) async throws -> AppActorIdentifyResult { fatalError("unused in PluginASATests") }
     func login(_ request: AppActorLoginRequest) async throws -> AppActorLoginResult { fatalError("unused in PluginASATests") }
-    func logout(_ request: AppActorLogoutRequest) async throws -> AppActorPaymentResult<Bool> { fatalError("unused in PluginASATests") }
     func getOfferings(eTag: String?) async throws -> AppActorOfferingsFetchResult { fatalError("unused in PluginASATests") }
     func getCustomer(appUserId: String, eTag: String?) async throws -> AppActorCustomerFetchResult { fatalError("unused in PluginASATests") }
     func getRemoteConfigs(appUserId: String?, appVersion: String?, country: String?, eTag: String?) async throws -> AppActorRemoteConfigFetchResult { fatalError("unused in PluginASATests") }

@@ -485,22 +485,6 @@ final class CacheIdentityChangeTests: XCTestCase {
         let customerInfo = AppActorCustomerInfo(appUserId: "user-to-logout")
         await etagManager.storeFresh(customerInfo, for: .customer(appUserId: "user-to-logout"), eTag: "cust_etag_pre")
 
-        // Set up logout handler
-        client.logoutHandler = { _ in
-            AppActorPaymentResult(value: true, requestId: "req_logout_1")
-        }
-
-        // Set up identify handler (logOut re-identifies with new anonymous ID)
-        client.identifyHandler = { request in
-            AppActorIdentifyResult(
-                appUserId: request.appUserId,
-                customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
-                customerETag: "cust_etag_anon",
-                requestId: "req_identify_anon",
-                signatureVerified: false
-            )
-        }
-
         // Perform logout
         _ = try await appactor.logOut()
 

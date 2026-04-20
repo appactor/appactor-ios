@@ -12,7 +12,6 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
 
     var identifyHandler: ((AppActorIdentifyRequest) async throws -> AppActorIdentifyResult)?
     var loginHandler: ((AppActorLoginRequest) async throws -> AppActorLoginResult)?
-    var logoutHandler: ((AppActorLogoutRequest) async throws -> AppActorPaymentResult<Bool>)?
     var getOfferingsHandler: ((String?) async throws -> AppActorOfferingsFetchResult)?
     var getCustomerHandler: ((String, String?) async throws -> AppActorCustomerFetchResult)?
     var postReceiptHandler: ((AppActorReceiptPostRequest) async throws -> AppActorReceiptPostResponse)?
@@ -33,9 +32,6 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
 
     private var _loginCalls: [AppActorLoginRequest] = []
     var loginCalls: [AppActorLoginRequest] { queue.sync { _loginCalls } }
-
-    private var _logoutCalls: [AppActorLogoutRequest] = []
-    var logoutCalls: [AppActorLogoutRequest] { queue.sync { _logoutCalls } }
 
     private var _getOfferingsCalls: [String?] = []
     var getOfferingsCalls: [String?] { queue.sync { _getOfferingsCalls } }
@@ -90,14 +86,6 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
             requestId: "req_mock_login",
             signatureVerified: false
         )
-    }
-
-    func logout(_ request: AppActorLogoutRequest) async throws -> AppActorPaymentResult<Bool> {
-        queue.sync { _logoutCalls.append(request) }
-        if let handler = logoutHandler {
-            return try await handler(request)
-        }
-        return AppActorPaymentResult(value: true, requestId: "req_mock_logout")
     }
 
     func getOfferings(eTag: String?) async throws -> AppActorOfferingsFetchResult {

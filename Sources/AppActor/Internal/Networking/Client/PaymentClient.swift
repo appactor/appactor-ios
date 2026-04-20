@@ -6,7 +6,6 @@ import Foundation
 protocol AppActorPaymentClientProtocol: Sendable {
     func identify(_ request: AppActorIdentifyRequest) async throws -> AppActorIdentifyResult
     func login(_ request: AppActorLoginRequest) async throws -> AppActorLoginResult
-    func logout(_ request: AppActorLogoutRequest) async throws -> AppActorPaymentResult<Bool>
     func getOfferings(eTag: String?) async throws -> AppActorOfferingsFetchResult
     func getCustomer(appUserId: String, eTag: String?) async throws -> AppActorCustomerFetchResult
     func getRemoteConfigs(appUserId: String?, appVersion: String?, country: String?, eTag: String?) async throws -> AppActorRemoteConfigFetchResult
@@ -154,14 +153,6 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 signatureVerified: signatureVerified
             )
         }
-    }
-
-    func logout(_ request: AppActorLogoutRequest) async throws -> AppActorPaymentResult<Bool> {
-        let response: AppActorPaymentResponse<AppActorLogoutData> = try await post(
-            path: "/v1/payment/logout",
-            body: request
-        )
-        return AppActorPaymentResult(value: response.data.success ?? true, requestId: response.requestId)
     }
 
     func getOfferings(eTag: String?) async throws -> AppActorOfferingsFetchResult {
@@ -555,21 +546,6 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
     // MARK: - Internal Networking
 
-    private func post<Body: Encodable, Response: Decodable>(
-        path: String,
-        body: Body
-    ) async throws -> Response {
-        let url = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let nonce = applyAuth(to: &urlRequest, path: path)
-        urlRequest.httpBody = try encoder.encode(body)
-        urlRequest.timeoutInterval = 30
-
-        return try await performRequest(urlRequest, path: path, sentNonce: nonce)
-    }
-
     /// Normalize an ETag value: trim whitespace, return nil if empty.
     private func normalizeETag(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty else { return nil }
@@ -674,29 +650,6 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
         responseLogger?(path, http.statusCode, data)
         return (data, http, signatureVerified)
-    }
-
-    /// Simple retry wrapper that delegates to `performRetryableRequest`.
-    /// Used by `post()` for login/logout — no ETag, no custom 4xx handler.
-    private func performRequest<Response: Decodable>(
-        _ urlRequest: URLRequest,
-        path: String,
-        sentNonce: String?
-    ) async throws -> Response {
-        try await performRetryableRequest(urlRequest, path: path, sentNonce: sentNonce) { [decoder] data, http, _, requestId in
-            guard (200..<300).contains(http.statusCode) else {
-                throw AppActorError.serverError(
-                    httpStatus: http.statusCode,
-                    code: "UNEXPECTED_STATUS",
-                    message: nil, details: nil, requestId: requestId
-                )
-            }
-            do {
-                return try decoder.decode(Response.self, from: data)
-            } catch {
-                throw AppActorError.decodingError(error, requestId: requestId)
-            }
-        }
     }
 
     // MARK: - Retry Helper

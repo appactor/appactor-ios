@@ -401,6 +401,10 @@ extension AppActor {
     /// 2. Clears user-scoped caches.
     /// 3. Rotates the appAccountToken for the new local identity.
     ///
+    /// No server logout request is sent and the SDK does not auto-identify the new
+    /// anonymous user. `customerInfo` is cleared immediately and will repopulate on
+    /// the next explicit customer refresh or receipt-driven update.
+    ///
     /// - Returns: `true` on success.
     @discardableResult
     public func logOut() async throws -> Bool {

@@ -37,9 +37,6 @@ final class RetrySimulatingMockClient: AppActorPaymentClientProtocol, @unchecked
             signatureVerified: false
         )
     }
-    func logout(_ request: AppActorLogoutRequest) async throws -> AppActorPaymentResult<Bool> {
-        AppActorPaymentResult(value: true, requestId: nil)
-    }
     func getOfferings(eTag: String?) async throws -> AppActorOfferingsFetchResult {
         .fresh(AppActorOfferingsResponseDTO(currentOffering: nil, offerings: []), eTag: nil, requestId: nil, signatureVerified: false)
     }

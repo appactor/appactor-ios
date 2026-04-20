@@ -212,7 +212,7 @@ final class PaymentLiveIdentityTests: XCTestCase {
         // Step 3: Logout
         LiveTestLog.log("Step 3 - Logging out...")
         let result = try await appactor.logOut()
-        LiveTestLog.log("Step 3 - Logout server acknowledged: \(result)")
+        LiveTestLog.log("Step 3 - Logout completed locally: \(result)")
 
         let postLogoutId = appactor.appUserId
         LiveTestLog.log("Step 3 - Post-logout currentAppUserId: \(postLogoutId ?? "nil")")
@@ -224,9 +224,8 @@ final class PaymentLiveIdentityTests: XCTestCase {
         XCTAssertNotEqual(postLogoutId, namedId,
                           "Post-logout ID should differ from the logged-in ID")
 
-        // identify() should have been called automatically by logOut()
-        XCTAssertNotNil(appactor.customerInfo.appUserId,
-                        "Post-logout identify should have set customerInfo")
+        XCTAssertEqual(appactor.customerInfo, .empty,
+                       "RC-style logOut() should clear customerInfo until the next explicit refresh")
 
         LiveTestLog.log("=== testLiveLogout PASSED ===")
     }

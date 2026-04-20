@@ -299,7 +299,6 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertNotNil(newId)
         XCTAssertTrue(newId!.hasPrefix("appactor-anon-"))
         XCTAssertNotEqual(newId, "logged_in_user")
-        XCTAssertEqual(mockClient.logoutCalls.count, 0)
         XCTAssertEqual(mockClient.identifyCalls.count, 0)
     }
 
@@ -310,7 +309,6 @@ final class PaymentIdentityTests: XCTestCase {
         let newId = storage.currentAppUserId
         XCTAssertNotNil(newId)
         XCTAssertTrue(newId!.hasPrefix("appactor-anon-"))
-        XCTAssertEqual(mockClient.logoutCalls.count, 0)
     }
 
     func testLogoutGeneratesNewAnonId() async throws {
@@ -536,20 +534,6 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertEqual(response.requestId, "req_login_v2")
         XCTAssertNil(response.customer.tokenBalance)
         XCTAssertEqual(response.customer.firstSeen, "2026-01-15T00:00:00.000Z")
-    }
-
-    func testLogoutResponseDecodesFromBackendJSON() throws {
-        let json = """
-        {
-            "data": { "success": true },
-            "requestId": "req_logout_1"
-        }
-        """.data(using: .utf8)!
-
-        let decoder = JSONDecoder()
-        let response = try decoder.decode(AppActorPaymentResponse<AppActorLogoutData>.self, from: json)
-
-        XCTAssertEqual(response.data.success, true)
     }
 
     func testErrorResponseDecodesFromBackendJSON() throws {

@@ -574,7 +574,6 @@ final class BridgeIntegrationTests: XCTestCase {
             }
         )
         await fulfillment(of: [expectation], timeout: 5.0)
-        XCTAssertEqual(mockClient.logoutCalls.count, 0, "RC-style logout should be local-only")
         XCTAssertEqual(mockClient.identifyCalls.count, 0, "RC-style logout should not re-identify")
     }
 
