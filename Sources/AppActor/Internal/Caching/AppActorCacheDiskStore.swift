@@ -84,6 +84,14 @@ actor AppActorCacheDiskStore {
         try? FileManager.default.removeItem(at: fileURL(for: resource))
     }
 
+    func clear(prefix: String) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        for file in files where file.pathExtension == "json" && file.lastPathComponent.hasPrefix(prefix) {
+            try? fm.removeItem(at: file)
+        }
+    }
+
     func clearAll() {
         try? FileManager.default.removeItem(at: directory)
     }

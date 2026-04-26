@@ -23,7 +23,7 @@ extension AppActor {
         }
         do {
             let info = try await manager.getCustomerInfo(appUserId: appUserId)
-            setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+            await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             await paymentProcessor?.kick()
             return info
         } catch let appError as AppActorError where appError.isTransient {
@@ -34,7 +34,7 @@ extension AppActor {
                 expectedAppUserId: appUserId,
                 offlineKeys: offlineKeys
             ) {
-                setCustomerInfoIfIdentityMatches(offlineInfo, expectedAppUserId: appUserId)
+                await setCustomerInfoIfIdentityMatches(offlineInfo, expectedAppUserId: appUserId)
                 Log.customer.info("Server unreachable — offline entitlements: \(offlineKeys)")
                 return offlineInfo
             }
@@ -100,12 +100,34 @@ extension AppActor {
 extension AppActor {
     /// Sets `customerInfo` only if the current user still matches the expected identity.
     /// Discards stale results from async calls that completed after a login/logout.
-    func setCustomerInfoIfIdentityMatches(_ info: AppActorCustomerInfo, expectedAppUserId: String) {
+    func setCustomerInfoIfIdentityMatches(_ info: AppActorCustomerInfo, expectedAppUserId: String) async {
         guard paymentStorage?.currentAppUserId == expectedAppUserId else {
             Log.customer.debug("Discarding stale customer info — expected \(expectedAppUserId), current \(paymentStorage?.currentAppUserId ?? "nil")")
             return
         }
+        let previousActiveKeys = customerInfo.activeEntitlementKeys
+        let activeEntitlementsChanged = previousActiveKeys != info.activeEntitlementKeys
+
+        if activeEntitlementsChanged {
+            self.paymentRemoteConfigs = nil
+            if let remoteConfigManager {
+                await remoteConfigManager.clearCache(appUserId: expectedAppUserId)
+            }
+            if let experimentManager {
+                await experimentManager.clearCache(appUserId: expectedAppUserId)
+            }
+
+            guard paymentStorage?.currentAppUserId == expectedAppUserId else {
+                Log.customer.debug("Discarding stale customer info after cache invalidation — expected \(expectedAppUserId), current \(paymentStorage?.currentAppUserId ?? "nil")")
+                return
+            }
+        }
+
         self.customerInfo = info
+
+        if activeEntitlementsChanged {
+            Log.customer.debug("Customer entitlements changed — invalidated remote config and experiment caches")
+        }
     }
 }
 

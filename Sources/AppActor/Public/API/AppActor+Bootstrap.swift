@@ -169,7 +169,7 @@ extension AppActor {
                         appUserId: currentAppUserId,
                         verified: info.verification == .verified
                     )
-                    self.customerInfo = info
+                    await self.setCustomerInfoIfIdentityMatches(info, expectedAppUserId: currentAppUserId)
 
                     // Fire deferred purchase callback if this product was previously pending
                     if let count = self.paymentContext.pendingProductCounts[productId], count > 0 {

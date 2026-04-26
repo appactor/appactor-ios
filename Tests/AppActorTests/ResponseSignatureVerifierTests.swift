@@ -115,6 +115,25 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         XCTAssertEqual(result, .success)
     }
 
+    func testNonceBased304EmptyBodyValidSignature() {
+        let body = Data()
+        let timestampStr = String(Int(now))
+        let sig = signV1(body: body, nonce: nonce, timestamp: timestampStr)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Request-Nonce": nonce,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ], statusCode: 304)
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nonce,
+            apiKey: "", requestPath: "",
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .success)
+    }
+
     func testV1TamperedBody() {
         let body = Data("{\"ok\":true}".utf8)
         let timestampStr = String(Int(now))
@@ -587,6 +606,35 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         XCTAssertEqual(result, .signatureInvalid)
     }
 
+    func testSaltBasedQueryTargetIsBound() {
+        let body = Data("{\"data\":[]}".utf8)
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let requestTarget = "/v1/remote-config?app_user_id=user_A&app_version=1.0.0&country=TR"
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: requestTarget, timestamp: timestampStr)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ])
+
+        let valid = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: requestTarget,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(valid, .success)
+
+        let replayedToDifferentQuery = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey,
+            requestPath: "/v1/remote-config?app_user_id=user_A&app_version=1.0.0&country=US",
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(replayedToDifferentQuery, .signatureInvalid)
+    }
+
     func testSaltBasedWrongETag() {
         let body = Data("{\"offerings\":[]}".utf8)
         let timestampStr = String(Int(now))
@@ -662,6 +710,28 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             "X-AppActor-Signature-Timestamp": timestampStr,
             "ETag": eTag
         ])
+
+        let result = ResponseSignatureVerifier.verify(
+            response: response, body: body, sentNonce: nil,
+            apiKey: testApiKey, requestPath: testPath,
+            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+        )
+        XCTAssertEqual(result, .success)
+    }
+
+    func testSaltBased304EmptyBodyWithETagValidSignature() {
+        let body = Data()
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let eTag = "W/\"abc123\""
+        let sig = signSaltV1(body: body, salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr, eTag: eTag)
+
+        let response = makeResponse(headers: [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": sig,
+            "X-AppActor-Signature-Timestamp": timestampStr,
+            "ETag": eTag
+        ], statusCode: 304)
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nil,

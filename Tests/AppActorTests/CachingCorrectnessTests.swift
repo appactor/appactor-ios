@@ -543,6 +543,148 @@ final class CacheIdentityChangeTests: XCTestCase {
         XCTAssertNotNil(offEntry, "CACH-03: Offerings cache must be preserved after logIn")
     }
 
+    func testCACH03_entitlementChangeInvalidatesTargetingCaches() async throws {
+        let appUserId = "target-user"
+        storage.setAppUserId(appUserId)
+        appactor.customerInfo = .empty
+        appactor.paymentRemoteConfigs = nil
+
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            .fresh(
+                [AppActorRemoteConfigItemDTO(key: "paywall", value: .string("A"), valueType: "string")],
+                eTag: "rc_etag",
+                requestId: "req_rc",
+                signatureVerified: false
+            )
+        }
+        client.postExperimentAssignmentHandler = { _, _, _, _ in
+            .success(
+                AppActorExperimentAssignmentDTO(
+                    inExperiment: true,
+                    reason: nil,
+                    experiment: AppActorExperimentAssignmentDTO.ExperimentRef(id: "exp_1", key: "paywall_copy"),
+                    variant: AppActorExperimentAssignmentDTO.VariantRef(
+                        id: "var_1",
+                        key: "control",
+                        valueType: "string",
+                        payload: .string("copy")
+                    ),
+                    assignedAt: "2026-03-14T12:00:00Z"
+                ),
+                requestId: "req_exp",
+                signatureVerified: false
+            )
+        }
+
+        _ = try await remoteConfigManager.getRemoteConfigs(appUserId: appUserId, appVersion: "1.0.0", country: "TR")
+        _ = try await experimentManager.getAssignment(experimentKey: "paywall_copy", appUserId: appUserId, appVersion: "1.0.0", country: "TR")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 1)
+        XCTAssertEqual(client.postExperimentAssignmentCalls.count, 1)
+
+        let updatedInfo = AppActorCustomerInfo(
+            entitlements: ["premium": AppActorEntitlementInfo(id: "premium", isActive: true)],
+            appUserId: appUserId
+        )
+        await appactor.setCustomerInfoIfIdentityMatches(updatedInfo, expectedAppUserId: appUserId)
+
+        _ = try await remoteConfigManager.getRemoteConfigs(appUserId: appUserId, appVersion: "1.0.0", country: "TR")
+        _ = try await experimentManager.getAssignment(experimentKey: "paywall_copy", appUserId: appUserId, appVersion: "1.0.0", country: "TR")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertEqual(client.postExperimentAssignmentCalls.count, 2)
+        XCTAssertNil(appactor.cachedRemoteConfigs)
+    }
+
+    func testCACH03_entitlementChangeClearsRemoteConfigsBeforeCustomerCallback() async throws {
+        let appUserId = "callback-target-user"
+        storage.setAppUserId(appUserId)
+        appactor.customerInfo = .empty
+        appactor.paymentRemoteConfigs = AppActorRemoteConfigs(items: [
+            AppActorRemoteConfigItem(key: "paywall", value: .string("stale"), valueType: .string)
+        ])
+
+        var cachedConfigsSeenInCallback: AppActorRemoteConfigs?
+        appactor.onCustomerInfoChanged = { _ in
+            cachedConfigsSeenInCallback = AppActor.shared.cachedRemoteConfigs
+        }
+        defer { appactor.onCustomerInfoChanged = nil }
+
+        let updatedInfo = AppActorCustomerInfo(
+            entitlements: ["premium": AppActorEntitlementInfo(id: "premium", isActive: true)],
+            appUserId: appUserId
+        )
+        await appactor.setCustomerInfoIfIdentityMatches(updatedInfo, expectedAppUserId: appUserId)
+
+        XCTAssertNil(cachedConfigsSeenInCallback)
+        XCTAssertNil(appactor.cachedRemoteConfigs)
+    }
+
+    func testCACH03_loginClearsTargetUserTargetingCaches() async throws {
+        let targetUserId = "returning-target-user"
+        storage.setAppUserId("old-user")
+        appactor.customerInfo = .empty
+        appactor.paymentRemoteConfigs = nil
+
+        var remoteValues = ["stale", "fresh"]
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            let value = remoteValues.removeFirst()
+            return .fresh(
+                [AppActorRemoteConfigItemDTO(key: "paywall", value: .string(value), valueType: "string")],
+                eTag: "rc_\(value)",
+                requestId: "req_rc_\(value)",
+                signatureVerified: false
+            )
+        }
+
+        var experimentValues = ["stale", "fresh"]
+        client.postExperimentAssignmentHandler = { _, _, _, _ in
+            let variant = experimentValues.removeFirst()
+            return .success(
+                AppActorExperimentAssignmentDTO(
+                    inExperiment: true,
+                    reason: nil,
+                    experiment: AppActorExperimentAssignmentDTO.ExperimentRef(id: "exp_1", key: "paywall_copy"),
+                    variant: AppActorExperimentAssignmentDTO.VariantRef(
+                        id: "var_\(variant)",
+                        key: variant,
+                        valueType: "string",
+                        payload: .string(variant)
+                    ),
+                    assignedAt: "2026-03-14T12:00:00Z"
+                ),
+                requestId: "req_exp_\(variant)",
+                signatureVerified: false
+            )
+        }
+
+        let staleConfigs = try await remoteConfigManager.getRemoteConfigs(appUserId: targetUserId, appVersion: "1.0.0", country: "TR")
+        let staleAssignment = try await experimentManager.getAssignment(experimentKey: "paywall_copy", appUserId: targetUserId, appVersion: "1.0.0", country: "TR")
+        XCTAssertEqual(staleConfigs["paywall"]?.stringValue, "stale")
+        XCTAssertEqual(staleAssignment?.variantKey, "stale")
+
+        client.loginHandler = { _ in
+            AppActorLoginResult(
+                appUserId: targetUserId,
+                customerInfo: AppActorCustomerInfo(
+                    entitlements: ["premium": AppActorEntitlementInfo(id: "premium", isActive: true)],
+                    appUserId: targetUserId
+                ),
+                customerETag: "cust_target",
+                requestId: "req_login_target",
+                signatureVerified: false
+            )
+        }
+
+        _ = try await appactor.logIn(newAppUserId: targetUserId)
+
+        let freshConfigs = try await remoteConfigManager.getRemoteConfigs(appUserId: targetUserId, appVersion: "1.0.0", country: "TR")
+        let freshAssignment = try await experimentManager.getAssignment(experimentKey: "paywall_copy", appUserId: targetUserId, appVersion: "1.0.0", country: "TR")
+        XCTAssertEqual(freshConfigs["paywall"]?.stringValue, "fresh")
+        XCTAssertEqual(freshAssignment?.variantKey, "fresh")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertEqual(client.postExperimentAssignmentCalls.count, 2)
+        XCTAssertNil(appactor.cachedRemoteConfigs)
+    }
+
     /// CACH-03: reset() clears ALL caches (offerings, customer, experiments, remoteConfigs).
     func testCACH03_resetClearsAllCaches() async throws {
         // Setup: seed all caches

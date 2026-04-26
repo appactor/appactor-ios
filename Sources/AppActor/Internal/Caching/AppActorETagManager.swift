@@ -135,6 +135,16 @@ actor AppActorETagManager {
         await diskStore.clear(resource)
     }
 
+    /// Clears every remote config cache variant for a user/context prefix.
+    func clearRemoteConfigs(appUserId: String?) async {
+        await diskStore.clear(prefix: AppActorCacheResource.remoteConfigsPrefix(appUserId: appUserId))
+    }
+
+    /// Clears every experiment cache variant for a user/context prefix.
+    func clearExperiments(appUserId: String) async {
+        await diskStore.clear(prefix: AppActorCacheResource.experimentsPrefix(appUserId: appUserId))
+    }
+
     /// Clears all cached data.
     func clearAll() async {
         await diskStore.clearAll()

@@ -181,12 +181,12 @@ public final class AppActor: ObservableObject {
                     hasOverflow: false,
                     customerManager: customerManager
                 )
-                setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+                await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
                 Log.sdk.info("✅ Purchases restored via AppTransaction fallback")
                 return info
             }
             let info = try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
-            setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+            await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (no transactions)")
             return info
         }
@@ -255,7 +255,7 @@ public final class AppActor: ObservableObject {
                 hasOverflow: !overflow.isEmpty,
                 customerManager: customerManager
             )
-            setCustomerInfoIfIdentityMatches(finalInfo, expectedAppUserId: appUserId)
+            await setCustomerInfoIfIdentityMatches(finalInfo, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (bulk: \(result.restoredCount) restored, transferred=\(result.transferred))")
             return finalInfo
         } catch {
@@ -264,7 +264,7 @@ public final class AppActor: ObservableObject {
             await watcher.scanCurrentEntitlements()
             await processor.drainAll()
             let info = try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
-            setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+            await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (fallback)")
             return info
         }
@@ -342,7 +342,7 @@ public final class AppActor: ObservableObject {
                 appUserId: appUserId,
                 customerManager: customerManager
             )
-            setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+            await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             return info
         }
 
@@ -357,19 +357,19 @@ public final class AppActor: ObservableObject {
                 appUserId: appUserId,
                 customerManager: customerManager
             )
-            setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+            await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
             return info
         }
 
         if let cachedInfo = await customerManager.cachedInfo(),
            shouldReturnCachedCustomerInfoForQuietSync(cachedInfo, expectedAppUserId: appUserId) {
             Log.customer.debug("Quiet sync: returning cached customer info after store sync candidates were exhausted")
-            setCustomerInfoIfIdentityMatches(cachedInfo, expectedAppUserId: appUserId)
+            await setCustomerInfoIfIdentityMatches(cachedInfo, expectedAppUserId: appUserId)
             return cachedInfo
         }
 
         let info = try await customerManager.getCustomerInfo(appUserId: appUserId)
-        setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
+        await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
         return info
     }
 

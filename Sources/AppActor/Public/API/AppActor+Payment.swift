@@ -380,8 +380,16 @@ extension AppActor {
             await manager.seedCache(info: verifiedLoginInfo, eTag: loginResult.customerETag, appUserId: loginResult.appUserId, verified: loginResult.signatureVerified)
         }
 
+        if let rcManager = remoteConfigManager {
+            await rcManager.clearCache(appUserId: loginResult.appUserId)
+        }
+        if let expManager = experimentManager {
+            await expManager.clearCache(appUserId: loginResult.appUserId)
+        }
+        self.paymentRemoteConfigs = nil
+
         self.paymentCurrentUser = verifiedLoginInfo
-        self.customerInfo = verifiedLoginInfo
+        await setCustomerInfoIfIdentityMatches(verifiedLoginInfo, expectedAppUserId: loginResult.appUserId)
 
         // End identity transition — flush buffered transactions with their captured appUserId
         if let watcher = transactionWatcher {

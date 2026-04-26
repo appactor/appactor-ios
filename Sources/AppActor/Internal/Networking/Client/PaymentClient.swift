@@ -35,6 +35,8 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     private let verifySignatures: Bool
     private let requireSignatures: Bool
     private let responseLogger: (@Sendable (_ path: String, _ status: Int, _ body: Data) -> Void)?
+    private static let signatureTargetHeader = "X-AppActor-Signature-Target"
+    private static let signatureTargetPathQuery = "path-query"
 
     init(
         baseURL: URL,
@@ -562,11 +564,28 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         }
 
-        guard EndpointSigningPolicy.forPath(path).needsNonce else { return nil }
+        guard EndpointSigningPolicy.forPath(path).needsNonce else {
+            request.setValue(Self.signatureTargetPathQuery, forHTTPHeaderField: Self.signatureTargetHeader)
+            return nil
+        }
 
         let nonce = ResponseSignatureVerifier.generateNonce()
         request.setValue(nonce, forHTTPHeaderField: "X-AppActor-Nonce")
         return nonce
+    }
+
+    /// Returns the exact request target used by salt-based response signing.
+    /// Query params are part of the signature so targeted resources cannot be replayed across contexts.
+    private func signatureRequestTarget(for request: URLRequest, fallbackPath: String) -> String {
+        guard let url = request.url,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return fallbackPath
+        }
+        let path = components.percentEncodedPath.isEmpty ? fallbackPath : components.percentEncodedPath
+        guard let query = components.percentEncodedQuery, !query.isEmpty else {
+            return path
+        }
+        return "\(path)?\(query)"
     }
 
     /// Executes a single HTTP request (no retry). Returns raw (Data, HTTPURLResponse, signatureVerified).
@@ -596,15 +615,15 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         // Log rate-limit headers for observability
         logRateLimitHeaders(from: http, path: path)
 
-        // Verify response signature (only for 2xx responses when enabled)
+        // Verify response signature for successful responses, including 304 validators.
         var signatureVerified = false
-        if verifySignatures && (200..<300).contains(http.statusCode) {
+        if verifySignatures && ((200..<300).contains(http.statusCode) || http.statusCode == 304) {
             let result = ResponseSignatureVerifier.verify(
                 response: http,
                 body: data,
                 sentNonce: sentNonce,
                 apiKey: apiKey,
-                requestPath: path
+                requestPath: signatureRequestTarget(for: urlRequest, fallbackPath: path)
             )
 
             switch result {
@@ -612,6 +631,10 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 signatureVerified = true
                 Log.signing.debug("Signature verified for \(path)")
             case .signingNotSupported:
+                if http.statusCode == 304 {
+                    Log.signing.warn("304 response was not signed for \(path); forcing fresh validation")
+                    break
+                }
                 if sentNonce != nil {
                     // Nonce-required endpoint: server didn't echo nonce
                     if requireSignatures {
@@ -624,6 +647,10 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     Log.signing.debug("Salt-based signing not active on server for \(path)")
                 }
             case .signatureMissing:
+                if http.statusCode == 304 {
+                    Log.signing.warn("304 response signature missing for \(path); forcing fresh validation")
+                    break
+                }
                 // Server echoed nonce but signature is missing — possible MITM header strip
                 Log.signing.error("Response signature missing (nonce was echoed) for \(path)")
                 throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
@@ -685,15 +712,20 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         var currentNonce = sentNonce
         var lastError: Error = AppActorError.networkError(URLError(.unknown))
         var retryAfterOverride: TimeInterval?
+        var skipDelayForImmediateETagRetry = false
 
         for attempt in 0..<maxRetries {
             if attempt > 0 {
-                let base = min(pow(2.0, Double(attempt - 1)), 30.0)
-                let jitter = Double.random(in: 0..<base)
-                let ownDelay = base + jitter
-                let delay = min(max(ownDelay, retryAfterOverride ?? 0), 120.0)
-                retryAfterOverride = nil
-                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                if skipDelayForImmediateETagRetry {
+                    skipDelayForImmediateETagRetry = false
+                } else {
+                    let base = min(pow(2.0, Double(attempt - 1)), 30.0)
+                    let jitter = Double.random(in: 0..<base)
+                    let ownDelay = base + jitter
+                    let delay = min(max(ownDelay, retryAfterOverride ?? 0), 120.0)
+                    retryAfterOverride = nil
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
                 // Strip stale ETag on retry to avoid 304 loop
                 mutableRequest.setValue(nil, forHTTPHeaderField: "If-None-Match")
                 // Fresh nonce per attempt for unique response binding (only if endpoint uses nonce)
@@ -715,6 +747,15 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     return try onSuccess(data, http, signatureVerified, requestId)
 
                 case 304:
+                    if verifySignatures && !signatureVerified {
+                        if attempt == 0, normalizeETag(eTag) != nil {
+                            lastError = AppActorError.signatureError(.signatureMissing, requestId: requestId)
+                            skipDelayForImmediateETagRetry = true
+                            Log.signing.warn("Unsigned 304 for \(path); retrying once without ETag")
+                            continue
+                        }
+                        throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
+                    }
                     // Let onSuccess handle 304 too (for ETag-based endpoints)
                     return try onSuccess(data, http, signatureVerified, requestId)
 

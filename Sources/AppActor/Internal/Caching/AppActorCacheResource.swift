@@ -7,7 +7,9 @@ enum AppActorCacheResource: Hashable, Sendable {
     case offlineProductCatalog
     case customer(appUserId: String)
     case remoteConfigs(appUserId: String?)
+    case remoteConfigsContext(appUserId: String?, appVersion: String?, country: String?)
     case experiments(appUserId: String)
+    case experimentsContext(appUserId: String, appVersion: String?, country: String?)
 
     /// Filename-safe key used for disk persistence.
     var cacheKey: String {
@@ -22,17 +24,34 @@ enum AppActorCacheResource: Hashable, Sendable {
             let hex = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
             return "customer_\(hex)"
         case .remoteConfigs(let appUserId):
-            guard let appUserId, !appUserId.isEmpty else {
-                return "remote_configs_anon"
-            }
-            let digest = SHA256.hash(data: Data(appUserId.utf8))
-            let hex = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
-            return "remote_configs_\(hex)"
+            return Self.remoteConfigsPrefix(appUserId: appUserId)
+        case .remoteConfigsContext(let appUserId, let appVersion, let country):
+            return "\(Self.remoteConfigsPrefix(appUserId: appUserId))_\(Self.contextHash(appVersion: appVersion, country: country))"
         case .experiments(let appUserId):
-            let digest = SHA256.hash(data: Data(appUserId.utf8))
-            let hex = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
-            return "experiments_\(hex)"
+            return Self.experimentsPrefix(appUserId: appUserId)
+        case .experimentsContext(let appUserId, let appVersion, let country):
+            return "\(Self.experimentsPrefix(appUserId: appUserId))_\(Self.contextHash(appVersion: appVersion, country: country))"
         }
+    }
+
+    static func remoteConfigsPrefix(appUserId: String?) -> String {
+        guard let appUserId, !appUserId.isEmpty else {
+            return "remote_configs_anon"
+        }
+        return "remote_configs_\(hash(appUserId))"
+    }
+
+    static func experimentsPrefix(appUserId: String) -> String {
+        "experiments_\(hash(appUserId))"
+    }
+
+    private static func contextHash(appVersion: String?, country: String?) -> String {
+        hash("v=\(appVersion ?? "")|c=\(country ?? "")")
+    }
+
+    private static func hash(_ value: String) -> String {
+        let digest = SHA256.hash(data: Data(value.utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 }
 

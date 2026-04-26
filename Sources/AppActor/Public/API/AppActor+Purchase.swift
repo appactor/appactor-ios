@@ -156,7 +156,7 @@ extension AppActor {
                     }
                     // Update @Published customerInfo immediately so UI reflects
                     // premium state as soon as purchase() returns.
-                    self.customerInfo = customerInfo
+                    await setCustomerInfoIfIdentityMatches(customerInfo, expectedAppUserId: purchaseAppUserId)
                     return .success(
                         customerInfo: customerInfo,
                         purchaseInfo: purchaseInfo(for: transaction)
@@ -167,7 +167,7 @@ extension AppActor {
                     // latest customer snapshot before surfacing a result.
                     // Fall back to cached customerInfo if the network call fails.
                     let info = (try? await getCustomerInfo()) ?? self.customerInfo
-                    self.customerInfo = info
+                    await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: purchaseAppUserId)
                     return .success(
                         customerInfo: info,
                         purchaseInfo: purchaseInfo(for: transaction)
@@ -183,7 +183,7 @@ extension AppActor {
                     // Server didn't confirm in time — compute offline entitlements
                     // from StoreKit transactions. Receipt stays queued for background retry.
                     if let offlineInfo = await queuedPurchaseOfflineCustomerInfo(appUserId: purchaseAppUserId) {
-                        self.customerInfo = offlineInfo
+                        await setCustomerInfoIfIdentityMatches(offlineInfo, expectedAppUserId: purchaseAppUserId)
                         return .success(
                             customerInfo: offlineInfo,
                             purchaseInfo: purchaseInfo(for: transaction)

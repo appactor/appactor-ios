@@ -15,19 +15,28 @@ final class RemoteConfigManagerTests: XCTestCase {
 
     private var client: MockPaymentClient!
     private var etagManager: AppActorETagManager!
+    private var cacheDir: URL!
     private var currentDate: Date!
     private var manager: AppActorRemoteConfigManager!
 
     override func setUp() {
         super.setUp()
         client = MockPaymentClient()
-        etagManager = AppActorETagManager()
+        cacheDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("appactor_remote_config_test_\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        etagManager = AppActorETagManager(diskStore: AppActorCacheDiskStore(directory: cacheDir))
         currentDate = Date()
         manager = AppActorRemoteConfigManager(
             client: client,
             etagManager: etagManager,
             dateProvider: { [unowned self] in self.currentDate }
         )
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: cacheDir)
+        super.tearDown()
     }
 
     // MARK: - Basic Fetch
@@ -71,6 +80,39 @@ final class RemoteConfigManagerTests: XCTestCase {
         XCTAssertEqual(cached["flag"]?.boolValue, true)
     }
 
+    func testAppVersionChangeBypassesFreshMemoryCache() async throws {
+        client.getRemoteConfigsHandler = { _, appVersion, _, _ in
+            let value = appVersion == "2.0.0" ? "v2" : "v1"
+            return .fresh(makeDTOs([("flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false)
+        }
+
+        let first = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "TR")
+        XCTAssertEqual(first["flag"]?.stringValue, "v1")
+
+        currentDate = currentDate.addingTimeInterval(120)
+
+        let second = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.0.0", country: "TR")
+        XCTAssertEqual(second["flag"]?.stringValue, "v2")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+    }
+
+    func testCountryChangeBypassesFreshMemoryCache() async throws {
+        client.getRemoteConfigsHandler = { _, _, country, _ in
+            let value = country == "US" ? "us" : "tr"
+            return .fresh(makeDTOs([("country_flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false)
+        }
+
+        let first = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "tr")
+        XCTAssertEqual(first["country_flag"]?.stringValue, "tr")
+        XCTAssertEqual(client.getRemoteConfigsCalls[0].country, "TR")
+
+        currentDate = currentDate.addingTimeInterval(120)
+
+        let second = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "US")
+        XCTAssertEqual(second["country_flag"]?.stringValue, "us")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+    }
+
     func testRefetchesAfterTTLExpiry() async throws {
         let dtos = makeDTOs([("flag", .bool(true), "boolean")])
         client.getRemoteConfigsHandler = { _, _, _, _ in
@@ -101,7 +143,7 @@ final class RemoteConfigManagerTests: XCTestCase {
         }
 
         // First call: fresh
-        _ = try await manager.getRemoteConfigs(appUserId: nil, appVersion: nil, country: nil)
+        _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: nil, country: nil)
 
         // Expire TTL
         currentDate = currentDate.addingTimeInterval(360)
@@ -127,6 +169,70 @@ final class RemoteConfigManagerTests: XCTestCase {
         await manager.clearCache(appUserId: defaultUserId)
         let after = await manager.cached
         XCTAssertNil(after)
+    }
+
+    func testClearCacheRemovesAllContextVariantsForUser() async throws {
+        client.getRemoteConfigsHandler = { _, appVersion, _, _ in
+            let value = appVersion == "2.0.0" ? "v2" : "v1"
+            return .fresh(makeDTOs([("flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false)
+        }
+
+        _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "TR")
+        _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.0.0", country: "TR")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+
+        await manager.clearCache(appUserId: defaultUserId)
+
+        currentDate = currentDate.addingTimeInterval(120)
+        let refetched = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "TR")
+        XCTAssertEqual(refetched["flag"]?.stringValue, "v1")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 3)
+    }
+
+    func testClearCacheCancelsInFlightAndPreventsStaleWrite() async throws {
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                // Simulate a transport layer that still returns after cancellation.
+            }
+            return .fresh(
+                makeDTOs([("flag", .string("stale"), "string")]),
+                eTag: "etag_stale",
+                requestId: "req_stale",
+                signatureVerified: false
+            )
+        }
+
+        let fetchTask = Task<AppActorRemoteConfigs, Error> {
+            try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "TR")
+        }
+
+        try await Task.sleep(nanoseconds: 20_000_000)
+        await manager.clearCache(appUserId: defaultUserId)
+
+        do {
+            _ = try await fetchTask.value
+            XCTFail("Expected in-flight remote config fetch to be cancelled after clearCache")
+        } catch is CancellationError {
+            // Expected: stale response must not repopulate cache after invalidation.
+        }
+
+        let cachedAfterClear = await manager.cached
+        XCTAssertNil(cachedAfterClear)
+
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            .fresh(
+                makeDTOs([("flag", .string("fresh"), "string")]),
+                eTag: "etag_fresh",
+                requestId: "req_fresh",
+                signatureVerified: false
+            )
+        }
+        let refetched = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "TR")
+        XCTAssertEqual(refetched["flag"]?.stringValue, "fresh")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertNil(client.getRemoteConfigsCalls[1].eTag)
     }
 
     // MARK: - Query Params Forwarding
