@@ -49,6 +49,27 @@ let result = try await AppActor.shared.purchase(package: offerings.current?.mont
 let isPremium = AppActor.shared.customerInfo.hasActiveEntitlement("premium")
 ```
 
+## Payment Restore & Retry Policy
+
+`configure()` starts the SDK, identifies the local AppActor user, fetches offerings,
+starts the StoreKit watcher, drains any locally queued receipts, and refreshes
+customer info. It does **not** call `AppStore.sync()`, auto-restore the full
+StoreKit history, or quietly scan all historical purchases during startup.
+
+For anonymous users, an app reinstall creates a new local AppActor user unless
+your app passes a stable `appUserId`. To recover previous App Store purchases
+after reinstall, call `syncPurchases()` from your own account recovery flow or
+show a user-triggered restore button that calls `restorePurchases()`.
+
+Apps with their own account system should configure AppActor with the same stable
+`appUserId` for that account on every install. That keeps entitlements attached to
+the account and avoids relying on restore as the primary identity mechanism.
+
+Consumable, token, and credit products should be granted only after your backend
+accepts the receipt and AppActor returns an `ok` receipt result/customer update.
+Retryable receipt failures remain queued for later delivery and should not be
+treated as final backend credit grants.
+
 ## Documentation
 
 Visit [appactor.com/docs](https://appactor.com/docs) for full documentation.

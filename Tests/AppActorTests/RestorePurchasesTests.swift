@@ -1,6 +1,18 @@
 import XCTest
 @testable import AppActor
 
+private actor RestoreSyncRecorder {
+    private var recordedEvents: [String] = []
+
+    func record(_ event: String) {
+        recordedEvents.append(event)
+    }
+
+    func events() -> [String] {
+        recordedEvents
+    }
+}
+
 @MainActor
 final class RestorePurchasesTests: XCTestCase {
 
@@ -33,6 +45,7 @@ final class RestorePurchasesTests: XCTestCase {
         appactor.paymentProcessor = nil
         appactor.transactionWatcher = nil
         appactor.paymentQueueStore = nil
+        appactor.paymentContext.appStoreSync = AppActorPaymentContext.defaultAppStoreSync
         appactor.paymentLifecycle = .idle
         super.tearDown()
     }
@@ -51,7 +64,62 @@ final class RestorePurchasesTests: XCTestCase {
         }
     }
 
+    func testRestorePurchasesSyncWithAppStoreThrowsWhenNotConfiguredBeforeSync() async {
+        let recorder = RestoreSyncRecorder()
+        appactor.paymentContext.appStoreSync = {
+            await recorder.record("sync")
+        }
+
+        do {
+            _ = try await appactor.restorePurchases(syncWithAppStore: true)
+            XCTFail("Expected AppActorError.notConfigured")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .notConfigured)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let events = await recorder.events()
+        XCTAssertEqual(events, [],
+                       "restorePurchases must validate configuration before AppStore.sync()")
+    }
+
     // MARK: - Empty Transactions
+
+    func testRestorePurchasesSyncWithAppStoreInvokesSyncBeforeRestoreLogic() async throws {
+        let recorder = RestoreSyncRecorder()
+        let config = AppActorPaymentConfiguration(
+            apiKey: "pk_test_restore_sync",
+            baseURL: URL(string: "https://api.test.appactor.com")!
+        )
+        let fetcher = MockStoreKitSilentSyncFetcher(
+            firstVerifiedTransactionHandler: nil,
+            appTransactionHandler: nil
+        )
+        mockClient.getCustomerHandler = { _, _ in
+            await recorder.record("customer")
+            return .fresh(
+                AppActorCustomerInfo(appUserId: "sync_restore_user"),
+                eTag: nil,
+                requestId: "req_sync_restore",
+                signatureVerified: false
+            )
+        }
+        appactor.configureForTesting(
+            config: config,
+            client: mockClient,
+            storage: storage,
+            silentSyncFetcher: fetcher
+        )
+        appactor.paymentContext.appStoreSync = {
+            await recorder.record("sync")
+        }
+
+        _ = try await appactor.restorePurchases(syncWithAppStore: true)
+
+        let events = await recorder.events()
+        XCTAssertEqual(events, ["sync", "customer"])
+    }
 
     func testRestorePurchasesWithNoTransactionsSkipsBulkRestore() async throws {
         // In a unit test environment, Transaction.currentEntitlements is empty,

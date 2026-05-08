@@ -94,21 +94,18 @@ actor AppActorPaymentProcessor {
         }
     }
 
-    /// Legacy retry threshold retained for metrics/tests. Retryable errors are no longer
-    /// dead-lettered at this threshold; only decode mismatches use a hard terminal limit.
+    /// Legacy retry threshold retained for metrics/tests. Retryable receipt failures
+    /// intentionally stay queued beyond this threshold; only decode mismatches and
+    /// permanent errors dead-letter.
     static let maxRetryAttempts = 3
 
     /// Maximum retry attempts for decode mismatches (HTTP 200 but body can't be parsed).
-    /// These won't self-resolve, so dead-letter at the same limit as general retries.
+    /// These won't self-resolve, so dead-letter after a short bounded retry window.
     static let maxDecodeRetryAttempts = 3
 
     /// Timeout for purchase flow await — returns `.queued` if server doesn't respond within this window.
     /// Kept generous so identity establishment and receipt retries can still resolve inline when possible.
     static let purchaseAwaitTimeout: TimeInterval = 35
-
-    /// Maximum age of a queue item before permanent dead-letter.
-    /// Younger items will be recovered by sweepUnfinished() on next boot.
-    static let retryLifetimeLimit: TimeInterval = 7 * 24 * 60 * 60
 
     init(store: AppActorPaymentQueueStoreProtocol, client: AppActorPaymentClientProtocol) {
         self.store = store

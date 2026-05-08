@@ -138,15 +138,12 @@ public final class AppActor: ObservableObject {
     ///
     /// - Throws: ``AppActorError`` if payment mode is not configured.
     /// - Returns: The latest customer info from the server.
-    /// - Parameter syncWithAppStore: When `true`, calls `AppStore.sync()` first to
-    ///   refresh transactions from Apple's servers. This may prompt for Apple ID sign-in.
-    ///   Defaults to `false` (reads only locally available transactions).
+    /// - Parameter syncWithAppStore: When `true`, validates SDK configuration, then calls
+    ///   `AppStore.sync()` before restore logic to refresh transactions from Apple's servers.
+    ///   This may prompt for Apple ID sign-in. Defaults to `false` (reads only locally
+    ///   available transactions).
     @discardableResult
     public func restorePurchases(syncWithAppStore: Bool = false) async throws -> AppActorCustomerInfo {
-        if syncWithAppStore {
-            try await AppStore.sync()
-        }
-
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
         }
@@ -157,6 +154,9 @@ public final class AppActor: ObservableObject {
               let silentSyncFetcher = storeKitSilentSyncFetcher,
               let storage = paymentStorage else {
             throw AppActorError.notConfigured
+        }
+        if syncWithAppStore {
+            try await paymentContext.appStoreSync()
         }
         let appUserId = storage.ensureAppUserId()
 
@@ -544,6 +544,7 @@ final class AppActorPaymentContext {
     var remoteConfigManager: AppActorRemoteConfigManager?
     var asaManager: AppActorASAManager?
     var storeKitSilentSyncFetcher: (any AppActorStoreKitSilentSyncFetcherProtocol)?
+    var appStoreSync: @Sendable () async throws -> Void = AppActorPaymentContext.defaultAppStoreSync
 
     var offerings: AppActorOfferings?
     var remoteConfigs: AppActorRemoteConfigs?
@@ -553,6 +554,10 @@ final class AppActorPaymentContext {
     nonisolated private static let _lifecycleBox = AppActorLockedBox<AppActorPaymentLifecycle>(.idle)
     nonisolated private static let _storageBox = AppActorLockedBox<(any AppActorPaymentStorage)?>(nil)
     nonisolated private static let _bootstrapCompleteBox = AppActorLockedBox<Bool>(false)
+
+    static let defaultAppStoreSync: @Sendable () async throws -> Void = {
+        try await AppStore.sync()
+    }
 
     nonisolated static var _lifecycle: AppActorPaymentLifecycle {
         get { _lifecycleBox.get() }
