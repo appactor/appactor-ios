@@ -79,6 +79,10 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Which code paths enqueued this item.
     var sources: Set<Source>
 
+    /// Stable billing/classification intent captured when the item was first queued.
+    /// Kept separate from `sources`, which may grow when the same transaction is observed again.
+    var sourceIntent: SourceIntent? = nil
+
     /// When this item was claimed for processing. Used for stale claim detection.
     var claimedAt: Date?
 
@@ -118,6 +122,19 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         case sweep
     }
 
+    enum SourceIntent: String, Codable, Sendable {
+        case purchase
+        case restore
+        case sync
+    }
+
+    static func inferredSourceIntent(from sources: Set<Source>) -> SourceIntent {
+        if sources.contains(.purchase) || sources.contains(.transactionUpdates) || sources.contains(.sweep) {
+            return .purchase
+        }
+        return sources.contains(.restore) ? .restore : .purchase
+    }
+
     // MARK: - Key Construction
 
     /// Idempotency key: `"apple:<transactionId>"`.
@@ -130,9 +147,11 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Merges an incoming item (e.g. from sweepUnfinished re-enqueue) into this existing item.
     /// Updates JWS and sources; resets dead-lettered items for a fresh retry cycle.
     mutating func mergeFrom(_ incoming: AppActorPaymentQueueItem) {
+        let stableSourceIntent = sourceIntent ?? Self.inferredSourceIntent(from: sources)
         jws = incoming.jws
         if signedAppTransactionInfo == nil { signedAppTransactionInfo = incoming.signedAppTransactionInfo }
         sources = sources.union(incoming.sources)
+        if sourceIntent == nil { sourceIntent = stableSourceIntent }
         lastSeenAt = incoming.lastSeenAt
         // Prefer non-nil purchase context from the richer source (e.g. purchase flow
         // re-enqueuing an item that arrived earlier via sweep with nil context).

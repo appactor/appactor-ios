@@ -349,6 +349,7 @@ final class RestorePurchasesTests: XCTestCase {
     func testRestoreRequestEncoding() throws {
         let request = AppActorRestoreRequest(
             appUserId: "user_123",
+            sourceIntent: "restore",
             transactions: [
                 AppActorRestoreTransactionItem(transactionId: "100", jwsRepresentation: "jws_a"),
                 AppActorRestoreTransactionItem(transactionId: "200", jwsRepresentation: "jws_b"),
@@ -362,6 +363,7 @@ final class RestorePurchasesTests: XCTestCase {
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
         XCTAssertEqual(json["appUserId"] as? String, "user_123")
+        XCTAssertEqual(json["sourceIntent"] as? String, "restore")
         XCTAssertEqual(json["signedAppTransactionInfo"] as? String, "app-transaction-jws")
         let txns = json["transactions"] as? [[String: Any]]
         XCTAssertEqual(txns?.count, 2)
@@ -411,6 +413,7 @@ final class RestorePurchasesTests: XCTestCase {
     func testMockPostRestoreDefaultReturnsCorrectCount() async throws {
         let request = AppActorRestoreRequest(
             appUserId: "user_456",
+            sourceIntent: "restore",
             transactions: [
                 AppActorRestoreTransactionItem(transactionId: "1", jwsRepresentation: "jws1"),
                 AppActorRestoreTransactionItem(transactionId: "2", jwsRepresentation: "jws2"),
@@ -446,6 +449,7 @@ final class RestorePurchasesTests: XCTestCase {
 
         let request = AppActorRestoreRequest(
             appUserId: "user_789",
+            sourceIntent: "restore",
             transactions: [
                 AppActorRestoreTransactionItem(transactionId: "1", jwsRepresentation: "jws")
             ],

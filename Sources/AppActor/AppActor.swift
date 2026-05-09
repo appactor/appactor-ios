@@ -171,6 +171,7 @@ public final class AppActor: ObservableObject {
                 let result = try await client.postRestore(
                     AppActorRestoreRequest(
                         appUserId: appUserId,
+                        sourceIntent: "restore",
                         transactions: [],
                         signedAppTransactionInfo: restoreAppTransaction.jwsRepresentation
                     )
@@ -206,6 +207,7 @@ public final class AppActor: ObservableObject {
         }
         let request = AppActorRestoreRequest(
             appUserId: appUserId,
+            sourceIntent: "restore",
             transactions: items,
             signedAppTransactionInfo: restoreAppTransaction?.jwsRepresentation
         )
@@ -384,6 +386,7 @@ public final class AppActor: ObservableObject {
             environment: transaction.environment,
             bundleId: transaction.bundleId,
             storefront: transaction.storefront,
+            sourceIntent: "sync",
             signedTransactionInfo: transaction.jwsRepresentation,
             signedAppTransactionInfo: appTransaction?.jwsRepresentation,
             transactionId: transaction.transactionId,
@@ -405,6 +408,7 @@ public final class AppActor: ObservableObject {
             environment: appTransaction.environment,
             bundleId: appTransaction.bundleId,
             storefront: nil,
+            sourceIntent: "sync",
             signedTransactionInfo: nil,
             signedAppTransactionInfo: appTransaction.jwsRepresentation,
             transactionId: nil,

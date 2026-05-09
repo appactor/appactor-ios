@@ -5,6 +5,7 @@ import Foundation
 /// POST body for `/v1/payment/restore/apple`.
 struct AppActorRestoreRequest: Encodable, Sendable {
     let appUserId: String
+    let sourceIntent: String
     let transactions: [AppActorRestoreTransactionItem]
     let signedAppTransactionInfo: String?
 }

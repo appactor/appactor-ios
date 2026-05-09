@@ -806,6 +806,7 @@ actor AppActorPaymentProcessor {
             lastSeenAt: now,
             lastError: nil,
             sources: [source],
+            sourceIntent: Self.sourceIntent(for: source),
             claimedAt: nil
         )
     }
@@ -818,6 +819,7 @@ actor AppActorPaymentProcessor {
             environment: item.environment,
             bundleId: item.bundleId,
             storefront: item.storefront,
+            sourceIntent: (item.sourceIntent ?? Self.sourceIntent(for: item.sources)).rawValue,
             signedTransactionInfo: item.jws,
             signedAppTransactionInfo: item.signedAppTransactionInfo,
             transactionId: item.transactionId,
@@ -827,6 +829,19 @@ actor AppActorPaymentProcessor {
             offeringId: item.offeringId,
             packageId: item.packageId
         )
+    }
+
+    private static func sourceIntent(for source: AppActorPaymentQueueItem.Source) -> AppActorPaymentQueueItem.SourceIntent {
+        switch source {
+        case .restore:
+            return .restore
+        case .purchase, .transactionUpdates, .sweep:
+            return .purchase
+        }
+    }
+
+    private static func sourceIntent(for sources: Set<AppActorPaymentQueueItem.Source>) -> AppActorPaymentQueueItem.SourceIntent {
+        AppActorPaymentQueueItem.inferredSourceIntent(from: sources)
     }
 
     /// Backoff schedule: 3 retries (0s, 0.75s, 3s). Dead-lettered after 3 failed attempts.

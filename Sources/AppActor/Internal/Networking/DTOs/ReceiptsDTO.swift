@@ -8,6 +8,7 @@ struct AppActorReceiptPostRequest: Encodable, Sendable {
     let environment: String
     let bundleId: String
     let storefront: String?
+    let sourceIntent: String
     let signedTransactionInfo: String?
     let signedAppTransactionInfo: String?
     let transactionId: String?
