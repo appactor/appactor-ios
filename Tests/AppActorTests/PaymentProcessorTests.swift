@@ -37,6 +37,7 @@ final class PaymentProcessorTests: XCTestCase {
         firstSeenAt: Date = Date(),
         appUserId: String = "user_123",
         source: AppActorPaymentQueueItem.Source = .purchase,
+        sourceIntent: AppActorPaymentQueueItem.SourceIntent? = nil,
         signedAppTransactionInfo: String? = nil
     ) -> AppActorPaymentQueueItem {
         AppActorPaymentQueueItem(
@@ -59,6 +60,7 @@ final class PaymentProcessorTests: XCTestCase {
             lastSeenAt: Date(),
             lastError: nil,
             sources: [source],
+            sourceIntent: sourceIntent,
             claimedAt: nil
         )
     }
@@ -94,6 +96,18 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertTrue(all.first!.sources.contains(.purchase))
         XCTAssertTrue(all.first!.sources.contains(.sweep))
         XCTAssertEqual(all.first?.jws, "jws_newer")
+    }
+
+    func testLegacyRestoreIntentSurvivesSweepMerge() {
+        let item1 = makeItem(source: .restore, sourceIntent: nil)
+        store.upsert(item1)
+
+        var item2 = makeItem(source: .sweep)
+        item2.jws = "jws_newer"
+        store.upsert(item2)
+
+        let request = AppActorPaymentProcessor.makeRequest(from: store.allItems().first!)
+        XCTAssertEqual(request.sourceIntent, "restore")
     }
 
     // MARK: - 2. Single Drain Loop
@@ -625,7 +639,15 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(request.productId, "com.test.monthly")
         XCTAssertEqual(request.idempotencyKey, "apple:12345")
         XCTAssertEqual(request.originalTransactionId, "12345")
+        XCTAssertEqual(request.sourceIntent, "purchase")
     }
+
+    func testMakeRequestPreservesQueuedRestoreIntent() {
+        let item = makeItem(source: .restore, sourceIntent: .restore)
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertEqual(request.sourceIntent, "restore")
+	}
 
     // MARK: - Key Format
 
