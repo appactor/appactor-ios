@@ -103,7 +103,16 @@ extension AppActor {
         let purchaseIdentity = attachAppAccountToken(to: options, storage: storage)
         let options = purchaseIdentity.options
         let purchaseAppUserId = storage.ensureAppUserId()
+        var handledForegroundTransactionId: String?
         Log.receipts.debug("Purchase with appAccountToken: \(String(purchaseIdentity.token.uuidString.lowercased().prefix(8)))…")
+
+        let foregroundPurchase = await AppActorForegroundPurchaseScope.begin(
+            watcher: transactionWatcher,
+            productId: product.id
+        )
+        defer {
+            foregroundPurchase.end(handledTransactionId: handledForegroundTransactionId)
+        }
 
         // Execute the StoreKit purchase
         let result: Product.PurchaseResult
@@ -120,6 +129,7 @@ extension AppActor {
         case .success(let verificationResult):
             switch verificationResult {
             case .verified(let transaction):
+                handledForegroundTransactionId = String(transaction.id)
                 let appTransaction = await storeKitSilentSyncFetcher?.appTransaction()
 
                 // ASA purchase event tracking is handled centrally by

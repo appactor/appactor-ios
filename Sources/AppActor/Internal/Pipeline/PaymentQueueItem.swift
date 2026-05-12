@@ -126,13 +126,39 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         case purchase
         case restore
         case sync
+        case queue
+
+        fileprivate var priority: Int {
+            switch self {
+            case .queue:
+                return 0
+            case .sync:
+                return 1
+            case .restore:
+                return 2
+            case .purchase:
+                return 3
+            }
+        }
     }
 
     static func inferredSourceIntent(from sources: Set<Source>) -> SourceIntent {
-        if sources.contains(.purchase) || sources.contains(.transactionUpdates) || sources.contains(.sweep) {
+        if sources.contains(.purchase) {
             return .purchase
         }
-        return sources.contains(.restore) ? .restore : .purchase
+        if sources.contains(.restore) { return .restore }
+        if sources.contains(.sweep) { return .sync }
+        if sources.contains(.transactionUpdates) { return .queue }
+        return .purchase
+    }
+
+    static func resolvedSourceIntent(stored: SourceIntent?, sources: Set<Source>) -> SourceIntent {
+        let inferred = inferredSourceIntent(from: sources)
+        guard let stored else { return inferred }
+        if stored == .purchase && !sources.contains(.purchase) {
+            return inferred
+        }
+        return stored
     }
 
     // MARK: - Key Construction
@@ -147,11 +173,13 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Merges an incoming item (e.g. from sweepUnfinished re-enqueue) into this existing item.
     /// Updates JWS and sources; resets dead-lettered items for a fresh retry cycle.
     mutating func mergeFrom(_ incoming: AppActorPaymentQueueItem) {
-        let stableSourceIntent = sourceIntent ?? Self.inferredSourceIntent(from: sources)
         jws = incoming.jws
         if signedAppTransactionInfo == nil { signedAppTransactionInfo = incoming.signedAppTransactionInfo }
+        let previousSources = sources
+        let existingIntent = Self.resolvedSourceIntent(stored: sourceIntent, sources: previousSources)
+        let incomingIntent = Self.resolvedSourceIntent(stored: incoming.sourceIntent, sources: incoming.sources)
         sources = sources.union(incoming.sources)
-        if sourceIntent == nil { sourceIntent = stableSourceIntent }
+        sourceIntent = incomingIntent.priority > existingIntent.priority ? incomingIntent : existingIntent
         lastSeenAt = incoming.lastSeenAt
         // Prefer non-nil purchase context from the richer source (e.g. purchase flow
         // re-enqueuing an item that arrived earlier via sweep with nil context).

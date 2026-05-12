@@ -1,6 +1,37 @@
 import Foundation
 import StoreKit
 
+struct AppActorForegroundPurchaseScope {
+    private let watcher: AppActorTransactionWatcher?
+    private let productId: String
+    private let token: UUID?
+
+    static func begin(
+        watcher: AppActorTransactionWatcher?,
+        productId: String
+    ) async -> AppActorForegroundPurchaseScope {
+        let token = await watcher?.beginForegroundPurchase(productId: productId)
+        return AppActorForegroundPurchaseScope(
+            watcher: watcher,
+            productId: productId,
+            token: token
+        )
+    }
+
+    func end(handledTransactionId: String?) {
+        let watcher = watcher
+        let productId = productId
+        let token = token
+        Task {
+            await watcher?.endForegroundPurchase(
+                productId: productId,
+                token: token,
+                handledTransactionId: handledTransactionId
+            )
+        }
+    }
+}
+
 /// Listens for `Transaction.updates` and enqueues items into `PaymentProcessor`.
 ///
 /// This is the enqueue-only counterpart to the old `PaymentTransactionListener`.
@@ -28,6 +59,8 @@ actor AppActorTransactionWatcher {
     }
 
     private var pendingBuffer: [BufferedTransaction] = []
+    private var foregroundPurchaseProductTokens: [String: UUID] = [:]
+    private var foregroundPurchaseBuffer: [UUID: [BufferedTransaction]] = [:]
 
     init(
         processor: AppActorPaymentProcessor,
@@ -113,6 +146,32 @@ actor AppActorTransactionWatcher {
         }
     }
 
+    // MARK: - Foreground Purchase Coordination
+
+    func beginForegroundPurchase(productId: String) -> UUID {
+        let token = UUID()
+        foregroundPurchaseProductTokens[productId] = token
+        return token
+    }
+
+    func endForegroundPurchase(productId: String, token: UUID?, handledTransactionId: String?) async {
+        guard let token else { return }
+        if foregroundPurchaseProductTokens[productId] == token {
+            foregroundPurchaseProductTokens.removeValue(forKey: productId)
+        }
+        let buffered = foregroundPurchaseBuffer.removeValue(forKey: token) ?? []
+        for item in buffered {
+            let source: AppActorPaymentQueueItem.Source =
+                handledTransactionId == String(item.transaction.id) ? .purchase : item.source
+            await enqueueWithUserId(
+                item.transaction,
+                jws: item.jws,
+                source: source,
+                appUserId: item.capturedAppUserId
+            )
+        }
+    }
+
     // MARK: - Scan & Collect
 
     /// Scans `Transaction.currentEntitlements` for any verified transactions
@@ -178,6 +237,19 @@ actor AppActorTransactionWatcher {
                 Log.storeKit.debug("Buffered transaction \(transaction.id) during identity transition (user: \(capturedUserId))")
                 return
             }
+        }
+
+        if source == .transactionUpdates, let token = foregroundPurchaseProductTokens[transaction.productID] {
+            let capturedUserId = storage.ensureAppUserId()
+            let buffered = BufferedTransaction(
+                transaction: transaction,
+                jws: jws,
+                source: source,
+                capturedAppUserId: capturedUserId
+            )
+            foregroundPurchaseBuffer[token, default: []].append(buffered)
+            Log.storeKit.debug("Buffered transaction \(transaction.id) during foreground purchase (product: \(transaction.productID))")
+            return
         }
 
         let appUserId = storage.ensureAppUserId()

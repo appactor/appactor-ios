@@ -819,7 +819,10 @@ actor AppActorPaymentProcessor {
             environment: item.environment,
             bundleId: item.bundleId,
             storefront: item.storefront,
-            sourceIntent: (item.sourceIntent ?? Self.sourceIntent(for: item.sources)).rawValue,
+            sourceIntent: AppActorPaymentQueueItem.resolvedSourceIntent(
+                stored: item.sourceIntent,
+                sources: item.sources
+            ).rawValue,
             signedTransactionInfo: item.jws,
             signedAppTransactionInfo: item.signedAppTransactionInfo,
             transactionId: item.transactionId,
@@ -835,7 +838,11 @@ actor AppActorPaymentProcessor {
         switch source {
         case .restore:
             return .restore
-        case .purchase, .transactionUpdates, .sweep:
+        case .sweep:
+            return .sync
+        case .transactionUpdates:
+            return .queue
+        case .purchase:
             return .purchase
         }
     }
