@@ -4,6 +4,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     fileprivate static let maxQueuedUsers = 10
     fileprivate static let maxQueuedAttributesPerUser = 100
     fileprivate static let maxQueuedIntegrationIdentifiersPerUser = 50
+    fileprivate static let maxIntegrationIdentifiersPerRequest = 25
 
     private let lock = NSLock()
     private var storage: any AppActorPaymentStorage
@@ -161,16 +162,18 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
                 }
 
                 if !bucket.integrationIdentifiers.isEmpty {
-                    _ = try await client.patchIntegrationIdentifiers(
-                        appUserId: appUserId,
-                        request: AppActorSetIntegrationIdentifiersRequest(
-                            integrationIdentifiers: bucket.integrationIdentifiers
+                    for identifiers in integrationIdentifierBatches(bucket.integrationIdentifiers) {
+                        _ = try await client.patchIntegrationIdentifiers(
+                            appUserId: appUserId,
+                            request: AppActorSetIntegrationIdentifiersRequest(
+                                integrationIdentifiers: identifiers
+                            )
                         )
-                    )
-                    removeFlushedIntegrationIdentifiers(
-                        appUserId: appUserId,
-                        identifiers: bucket.integrationIdentifiers
-                    )
+                        removeFlushedIntegrationIdentifiers(
+                            appUserId: appUserId,
+                            identifiers: identifiers
+                        )
+                    }
                 }
 
                 if let attribution = bucket.attribution {
@@ -235,6 +238,25 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             }
             state.update(bucket, for: appUserId)
         }
+    }
+
+    private func integrationIdentifierBatches(_ identifiers: [String: String]) -> [[String: String]] {
+        var batches: [[String: String]] = []
+        var current: [String: String] = [:]
+
+        for key in identifiers.keys.sorted() {
+            current[key] = identifiers[key]
+            if current.count == Self.maxIntegrationIdentifiersPerRequest {
+                batches.append(current)
+                current = [:]
+            }
+        }
+
+        if !current.isEmpty {
+            batches.append(current)
+        }
+
+        return batches
     }
 
     private func removeFlushedAttribution(

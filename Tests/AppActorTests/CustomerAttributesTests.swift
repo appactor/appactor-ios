@@ -236,6 +236,23 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(client.patchAttributionCalls.last?.request.attribution.metadata["source_detail"], .string("exact"))
     }
 
+	func testIntegrationIdentifierFlushBatchesToBackendRequestLimit() async throws {
+		let manager = AppActorCustomerAttributesManager(storage: storage, client: client)
+		for index in 0..<26 {
+			try manager.enqueueIntegrationIdentifier(
+				appUserId: "user_a",
+				key: "provider_\(index)",
+				value: "value-\(index)"
+			)
+		}
+
+		try await manager.flush(appUserId: "user_a")
+
+		let batchSizes = client.patchIntegrationIdentifiersCalls.map { $0.request.integrationIdentifiers.count }.sorted()
+		XCTAssertEqual(batchSizes, [1, 25])
+		XCTAssertNil(manager.pendingBucket(appUserId: "user_a"))
+	}
+
 	func testRevenueCatStyleIntegrationAndAttributionHelpers() async throws {
 		try await appactor.setAppsflyerID("af_123")
 		try await appactor.setAdjustID("adj_123")
