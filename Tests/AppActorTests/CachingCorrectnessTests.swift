@@ -554,7 +554,8 @@ final class CacheIdentityChangeTests: XCTestCase {
                 [AppActorRemoteConfigItemDTO(key: "paywall", value: .string("A"), valueType: "string")],
                 eTag: "rc_etag",
                 requestId: "req_rc",
-                signatureVerified: false
+                signatureVerified: false,
+                requiresUserContext: false
             )
         }
         client.postExperimentAssignmentHandler = { _, _, _, _ in
@@ -631,7 +632,8 @@ final class CacheIdentityChangeTests: XCTestCase {
                 [AppActorRemoteConfigItemDTO(key: "paywall", value: .string(value), valueType: "string")],
                 eTag: "rc_\(value)",
                 requestId: "req_rc_\(value)",
-                signatureVerified: false
+                signatureVerified: false,
+                requiresUserContext: false
             )
         }
 

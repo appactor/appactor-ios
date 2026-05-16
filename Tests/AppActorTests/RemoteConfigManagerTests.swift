@@ -48,7 +48,7 @@ final class RemoteConfigManagerTests: XCTestCase {
             ("max_retries", .int(5), "number"),
         ])
         client.getRemoteConfigsHandler = { _, _, _, _ in
-            .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false)
+            .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false, requiresUserContext: false)
         }
 
         let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: nil, country: nil)
@@ -64,7 +64,7 @@ final class RemoteConfigManagerTests: XCTestCase {
     func testReturnsCachedWithinTTL() async throws {
         let dtos = makeDTOs([("flag", .bool(true), "boolean")])
         client.getRemoteConfigsHandler = { _, _, _, _ in
-            .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false)
+            .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false, requiresUserContext: false)
         }
 
         // First call: fetches from network
@@ -83,7 +83,7 @@ final class RemoteConfigManagerTests: XCTestCase {
     func testAppVersionChangeBypassesFreshMemoryCache() async throws {
         client.getRemoteConfigsHandler = { _, appVersion, _, _ in
             let value = appVersion == "2.0.0" ? "v2" : "v1"
-            return .fresh(makeDTOs([("flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false)
+            return .fresh(makeDTOs([("flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false, requiresUserContext: false)
         }
 
         let first = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "TR")
@@ -99,7 +99,7 @@ final class RemoteConfigManagerTests: XCTestCase {
     func testCountryChangeBypassesFreshMemoryCache() async throws {
         client.getRemoteConfigsHandler = { _, _, country, _ in
             let value = country == "US" ? "us" : "tr"
-            return .fresh(makeDTOs([("country_flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false)
+            return .fresh(makeDTOs([("country_flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false, requiresUserContext: false)
         }
 
         let first = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "tr")
@@ -116,7 +116,7 @@ final class RemoteConfigManagerTests: XCTestCase {
     func testRefetchesAfterTTLExpiry() async throws {
         let dtos = makeDTOs([("flag", .bool(true), "boolean")])
         client.getRemoteConfigsHandler = { _, _, _, _ in
-            .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false)
+            .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false, requiresUserContext: false)
         }
 
         _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: nil, country: nil)
@@ -137,9 +137,9 @@ final class RemoteConfigManagerTests: XCTestCase {
         client.getRemoteConfigsHandler = { _, _, _, _ in
             callCount += 1
             if callCount == 1 {
-                return .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false)
+                return .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false, requiresUserContext: false)
             }
-            return .notModified(eTag: "etag_1", requestId: "req_2")
+            return .notModified(eTag: "etag_1", requestId: "req_2", requiresUserContext: false)
         }
 
         // First call: fresh
@@ -159,7 +159,7 @@ final class RemoteConfigManagerTests: XCTestCase {
     func testClearCacheRemovesInMemoryState() async throws {
         let dtos = makeDTOs([("flag", .bool(true), "boolean")])
         client.getRemoteConfigsHandler = { _, _, _, _ in
-            .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false)
+            .fresh(dtos, eTag: "etag_1", requestId: "req_1", signatureVerified: false, requiresUserContext: false)
         }
 
         _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: nil, country: nil)
@@ -174,7 +174,7 @@ final class RemoteConfigManagerTests: XCTestCase {
     func testClearCacheRemovesAllContextVariantsForUser() async throws {
         client.getRemoteConfigsHandler = { _, appVersion, _, _ in
             let value = appVersion == "2.0.0" ? "v2" : "v1"
-            return .fresh(makeDTOs([("flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false)
+            return .fresh(makeDTOs([("flag", .string(value), "string")]), eTag: "etag_\(value)", requestId: "req_\(value)", signatureVerified: false, requiresUserContext: false)
         }
 
         _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "TR")
@@ -200,7 +200,8 @@ final class RemoteConfigManagerTests: XCTestCase {
                 makeDTOs([("flag", .string("stale"), "string")]),
                 eTag: "etag_stale",
                 requestId: "req_stale",
-                signatureVerified: false
+                signatureVerified: false,
+                requiresUserContext: false
             )
         }
 
@@ -226,7 +227,8 @@ final class RemoteConfigManagerTests: XCTestCase {
                 makeDTOs([("flag", .string("fresh"), "string")]),
                 eTag: "etag_fresh",
                 requestId: "req_fresh",
-                signatureVerified: false
+                signatureVerified: false,
+                requiresUserContext: false
             )
         }
         let refetched = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "1.0.0", country: "TR")
@@ -238,6 +240,10 @@ final class RemoteConfigManagerTests: XCTestCase {
     // MARK: - Query Params Forwarding
 
     func testPassesQueryParamsToClient() async throws {
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            .fresh([], eTag: nil, requestId: "req_public", signatureVerified: false, requiresUserContext: false)
+        }
+
         _ = try await manager.getRemoteConfigs(
             appUserId: "user_123",
             appVersion: "2.1.0",
@@ -246,9 +252,291 @@ final class RemoteConfigManagerTests: XCTestCase {
 
         XCTAssertEqual(client.getRemoteConfigsCalls.count, 1)
         let call = client.getRemoteConfigsCalls[0]
-        XCTAssertEqual(call.appUserId, "user_123")
+        XCTAssertNil(call.appUserId)
         XCTAssertEqual(call.appVersion, "2.1.0")
         XCTAssertEqual(call.country, "TR")
+    }
+
+    func testPublicFirstFetchRefetchesWithUserWhenRequired() async throws {
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            if appUserId == nil {
+                return .fresh(
+                    makeDTOs([("paywall", .string("public"), "string")]),
+                    eTag: "etag_public",
+                    requestId: "req_public",
+                    signatureVerified: false,
+                    requiresUserContext: true
+                )
+            }
+            return .fresh(
+                makeDTOs([("paywall", .string("premium"), "string")]),
+                eTag: "etag_user",
+                requestId: "req_user",
+                signatureVerified: false,
+                requiresUserContext: true
+            )
+        }
+
+        let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "tr")
+
+        XCTAssertEqual(configs["paywall"]?.stringValue, "premium")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertNil(client.getRemoteConfigsCalls[0].appUserId)
+        XCTAssertEqual(client.getRemoteConfigsCalls[0].country, "TR")
+        XCTAssertEqual(client.getRemoteConfigsCalls[1].appUserId, defaultUserId)
+    }
+
+    func testMissingUserContextHeaderRefetchesWithUserWhenAppUserIdPresent() async throws {
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            if appUserId == nil {
+                return .fresh(
+                    makeDTOs([("audience", .string("public"), "string")]),
+                    eTag: "etag_public",
+                    requestId: "req_public",
+                    signatureVerified: false,
+                    requiresUserContext: nil
+                )
+            }
+            return .fresh(
+                makeDTOs([("audience", .string("premium"), "string")]),
+                eTag: "etag_user",
+                requestId: "req_user",
+                signatureVerified: false,
+                requiresUserContext: true
+            )
+        }
+
+        let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        XCTAssertEqual(configs["audience"]?.stringValue, "premium")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertNil(client.getRemoteConfigsCalls[0].appUserId)
+        XCTAssertEqual(client.getRemoteConfigsCalls[1].appUserId, defaultUserId)
+    }
+
+    func testHeaderlessFreshPublicCacheDoesNotSatisfyUserContext() async throws {
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            if appUserId == nil {
+                return .fresh(
+                    makeDTOs([("audience", .string("public"), "string")]),
+                    eTag: "etag_public",
+                    requestId: "req_public",
+                    signatureVerified: false,
+                    requiresUserContext: nil
+                )
+            }
+            return .fresh(
+                makeDTOs([("audience", .string("premium"), "string")]),
+                eTag: "etag_user",
+                requestId: "req_user",
+                signatureVerified: false,
+                requiresUserContext: true
+            )
+        }
+
+        _ = try await manager.getRemoteConfigs(appUserId: nil, appVersion: "2.1.0", country: "TR")
+        let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        XCTAssertEqual(configs["audience"]?.stringValue, "premium")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertNil(client.getRemoteConfigsCalls[0].appUserId)
+        XCTAssertEqual(client.getRemoteConfigsCalls[1].appUserId, defaultUserId)
+    }
+
+    func testConcurrentPublicProbeAwaitersAllRefetchWithUserWhenRequired() async throws {
+        var publicCalls = 0
+        var userCalls = 0
+        let lock = NSLock()
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            if appUserId == nil {
+                lock.withLock { publicCalls += 1 }
+                try await Task.sleep(nanoseconds: 20_000_000)
+                return .fresh(
+                    makeDTOs([("audience", .string("public"), "string")]),
+                    eTag: "etag_public",
+                    requestId: "req_public",
+                    signatureVerified: false,
+                    requiresUserContext: true
+                )
+            }
+            lock.withLock { userCalls += 1 }
+            try await Task.sleep(nanoseconds: 20_000_000)
+            return .fresh(
+                makeDTOs([("audience", .string("premium"), "string")]),
+                eTag: "etag_user",
+                requestId: "req_user",
+                signatureVerified: false,
+                requiresUserContext: true
+            )
+        }
+
+        async let first = manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+        async let second = manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        let results = try await [first, second]
+
+        XCTAssertEqual(results.map { $0["audience"]?.stringValue }, ["premium", "premium"])
+        XCTAssertEqual(lock.withLock { publicCalls }, 1)
+        XCTAssertEqual(lock.withLock { userCalls }, 1)
+    }
+
+    func testRememberedUserModeSkipsPublicProbe() async throws {
+        var callCount = 0
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            callCount += 1
+            if callCount == 1 {
+                XCTAssertNil(appUserId)
+                return .fresh([], eTag: "etag_public", requestId: "req_public", signatureVerified: false, requiresUserContext: true)
+            }
+            XCTAssertEqual(appUserId, self.defaultUserId)
+            return .fresh(
+                makeDTOs([("audience", .string("user"), "string")]),
+                eTag: "etag_user_\(callCount)",
+                requestId: "req_user_\(callCount)",
+                signatureVerified: false,
+                requiresUserContext: true
+            )
+        }
+
+        _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+        await manager.clearCache(appUserId: defaultUserId)
+
+        let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        XCTAssertEqual(configs["audience"]?.stringValue, "user")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 3)
+        XCTAssertEqual(client.getRemoteConfigsCalls[2].appUserId, defaultUserId)
+    }
+
+    func testRememberedUserModeExpiresAndProbesPublicAgain() async throws {
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            if appUserId == nil {
+                return .fresh([], eTag: "etag_public", requestId: "req_public", signatureVerified: false, requiresUserContext: true)
+            }
+            return .fresh(
+                makeDTOs([("audience", .string("user"), "string")]),
+                eTag: "etag_user",
+                requestId: "req_user",
+                signatureVerified: false,
+                requiresUserContext: true
+            )
+        }
+
+        _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        currentDate = currentDate.addingTimeInterval(360)
+        _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 4)
+        XCTAssertNil(client.getRemoteConfigsCalls[2].appUserId)
+        XCTAssertEqual(client.getRemoteConfigsCalls[3].appUserId, defaultUserId)
+    }
+
+    func testPublicNotModifiedWithUserContextHeaderRefetchesWithUser() async throws {
+        await etagManager.storeFresh(
+            makeDTOs([("audience", .string("public"), "string")]),
+            for: .remoteConfigsContext(appUserId: nil, appVersion: "2.1.0", country: "TR"),
+            eTag: "etag_public"
+        )
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            if appUserId == nil {
+                return .notModified(eTag: "etag_public", requestId: "req_public_304", requiresUserContext: true)
+            }
+            return .fresh(
+                makeDTOs([("audience", .string("premium"), "string")]),
+                eTag: "etag_user",
+                requestId: "req_user",
+                signatureVerified: false,
+                requiresUserContext: true
+            )
+        }
+
+        let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        XCTAssertEqual(configs["audience"]?.stringValue, "premium")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertNil(client.getRemoteConfigsCalls[0].appUserId)
+        XCTAssertEqual(client.getRemoteConfigsCalls[1].appUserId, defaultUserId)
+    }
+
+    func testUnknownPublicDiskFallbackPrefersUserCacheWhenAvailable() async throws {
+        await etagManager.storeFresh(
+            makeDTOs([("audience", .string("public"), "string")]),
+            for: .remoteConfigsContext(appUserId: nil, appVersion: "2.1.0", country: "TR"),
+            eTag: "etag_public"
+        )
+        await etagManager.storeFresh(
+            makeDTOs([("audience", .string("premium"), "string")]),
+            for: .remoteConfigsContext(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR"),
+            eTag: "etag_user"
+        )
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            throw AppActorError.networkError(URLError(.notConnectedToInternet))
+        }
+
+        let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        XCTAssertEqual(configs["audience"]?.stringValue, "premium")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertNil(client.getRemoteConfigsCalls[0].appUserId)
+        XCTAssertEqual(client.getRemoteConfigsCalls[1].appUserId, defaultUserId)
+    }
+
+    func testUserRequiredPublicProbeIsNotReusedAfterUserFetchFailure() async throws {
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            if appUserId == nil {
+                return .fresh(
+                    makeDTOs([("audience", .string("public"), "string")]),
+                    eTag: "etag_public",
+                    requestId: "req_public",
+                    signatureVerified: false,
+                    requiresUserContext: true
+                )
+            }
+            throw AppActorError.networkError(URLError(.notConnectedToInternet))
+        }
+
+        do {
+            _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+            XCTFail("Expected user refetch to fail")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .network)
+        }
+
+        let restartedManager = AppActorRemoteConfigManager(
+            client: client,
+            etagManager: etagManager,
+            dateProvider: { [unowned self] in self.currentDate }
+        )
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            throw AppActorError.networkError(URLError(.notConnectedToInternet))
+        }
+
+        do {
+            _ = try await restartedManager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+            XCTFail("Expected restarted manager to miss unsafe public disk cache")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .network)
+        }
+    }
+
+    func testPublicModeDoesNotFetchUserSpecificRemoteConfig() async throws {
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            XCTAssertNil(appUserId)
+            return .fresh(
+                makeDTOs([("layout", .string("public"), "string")]),
+                eTag: "etag_public",
+                requestId: "req_public",
+                signatureVerified: false,
+                requiresUserContext: false
+            )
+        }
+
+        let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        XCTAssertEqual(configs["layout"]?.stringValue, "public")
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 1)
+        XCTAssertNil(client.getRemoteConfigsCalls[0].appUserId)
     }
 
     // MARK: - Value Type Parsing
@@ -261,7 +549,7 @@ final class RemoteConfigManagerTests: XCTestCase {
             ("double_flag", .double(3.14), "number"),
         ])
         client.getRemoteConfigsHandler = { _, _, _, _ in
-            .fresh(dtos, eTag: nil, requestId: nil, signatureVerified: false)
+            .fresh(dtos, eTag: nil, requestId: nil, signatureVerified: false, requiresUserContext: false)
         }
 
         let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: nil, country: nil)
@@ -300,7 +588,7 @@ final class RemoteConfigManagerTests: XCTestCase {
 
         let dtos = makeDTOs([("flag", .bool(true), "boolean")])
         client.getRemoteConfigsHandler = { _, _, _, _ in
-            .fresh(dtos, eTag: "etag_abc", requestId: "req_1", signatureVerified: false)
+            .fresh(dtos, eTag: "etag_abc", requestId: "req_1", signatureVerified: false, requiresUserContext: false)
         }
 
         // First call: no eTag
@@ -319,7 +607,7 @@ final class RemoteConfigManagerTests: XCTestCase {
 
     func testTracksLastRequestId() async throws {
         client.getRemoteConfigsHandler = { _, _, _, _ in
-            .fresh([], eTag: nil, requestId: "req_xyz", signatureVerified: false)
+            .fresh([], eTag: nil, requestId: "req_xyz", signatureVerified: false, requiresUserContext: false)
         }
 
         _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: nil, country: nil)
@@ -331,7 +619,7 @@ final class RemoteConfigManagerTests: XCTestCase {
         let cachedDTOs = makeDTOs([("from_old_user", .string("A"), "string")])
         await etagManager.storeFresh(
             cachedDTOs,
-            for: .remoteConfigs(appUserId: "user_A"),
+            for: .remoteConfigsContext(appUserId: "user_A", appVersion: nil, country: nil),
             eTag: "etag_user_A"
         )
         client.getRemoteConfigsHandler = { _, _, _, _ in

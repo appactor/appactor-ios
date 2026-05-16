@@ -37,6 +37,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     private let responseLogger: (@Sendable (_ path: String, _ status: Int, _ body: Data) -> Void)?
     private static let signatureTargetHeader = "X-AppActor-Signature-Target"
     private static let signatureTargetPathQuery = "path-query"
+    private static let remoteConfigRequiresUserContextHeader = "X-AppActor-Remote-Config-Requires-User-Context"
 
     init(
         baseURL: URL,
@@ -271,11 +272,25 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     throw AppActorError.decodingError(error, requestId: requestId)
                 }
                 let responseETag = self.normalizeETag(http.value(forHTTPHeaderField: "ETag"))
-                return .fresh(items, eTag: responseETag, requestId: requestId, signatureVerified: signatureVerified)
+                return .fresh(
+                    items,
+                    eTag: responseETag,
+                    requestId: requestId,
+                    signatureVerified: signatureVerified,
+                    requiresUserContext: self.parseBooleanHeader(
+                        http.value(forHTTPHeaderField: Self.remoteConfigRequiresUserContextHeader)
+                    )
+                )
 
             case 304:
                 let responseETag = self.normalizeETag(http.value(forHTTPHeaderField: "ETag"))
-                return .notModified(eTag: responseETag, requestId: requestId)
+                return .notModified(
+                    eTag: responseETag,
+                    requestId: requestId,
+                    requiresUserContext: self.parseBooleanHeader(
+                        http.value(forHTTPHeaderField: Self.remoteConfigRequiresUserContextHeader)
+                    )
+                )
 
             default:
                 throw AppActorError.serverError(httpStatus: http.statusCode, code: "UNEXPECTED_STATUS", message: nil, details: nil, requestId: requestId)
@@ -552,6 +567,19 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     private func normalizeETag(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty else { return nil }
         return trimmed
+    }
+
+    private func parseBooleanHeader(_ value: String?) -> Bool? {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty else { return nil }
+        switch normalized {
+        case "true", "1", "yes":
+            return true
+        case "false", "0", "no":
+            return false
+        default:
+            return nil
+        }
     }
 
     /// Applies authentication header and optionally generates a nonce for response signature verification.

@@ -24,8 +24,25 @@ actor AppActorRemoteConfigManager {
         let country: String?
     }
 
+    private struct ModeContext: Hashable, Sendable {
+        let appVersion: String?
+        let country: String?
+    }
+
+    private enum FetchMode: Sendable, Equatable {
+        case publicOnly
+        case requiresUser
+    }
+
+    private struct ModeDecision: Sendable {
+        let mode: FetchMode
+        let decidedAt: Date
+    }
+
     private var cachedConfigs: [CacheContext: AppActorRemoteConfigs] = [:]
     private var cachedAt: [CacheContext: Date] = [:]
+    private var requiresUserContextByContext: [CacheContext: Bool] = [:]
+    private var modeDecisions: [ModeContext: ModeDecision] = [:]
     private var lastRequestId: String?
     private var inFlightTasks: [CacheContext: Task<AppActorRemoteConfigs, Error>] = [:]
     private var inFlightGenerations: [CacheContext: UInt64] = [:]
@@ -60,16 +77,43 @@ actor AppActorRemoteConfigManager {
         appVersion: String?,
         country: String?
     ) async throws -> AppActorRemoteConfigs {
-        let context = normalizedContext(appUserId: appUserId, appVersion: appVersion, country: country)
-        if let cached = cachedConfigs[context], let at = cachedAt[context] {
-            let age = dateProvider().timeIntervalSince(at)
-            if age < Self.cacheTTL {
-                return cached
-            }
-        }
-        lastCacheContext = context
+        let userContext = normalizedContext(appUserId: appUserId, appVersion: appVersion, country: country)
+        let publicContext = normalizedContext(appUserId: nil, appVersion: appVersion, country: country)
+        let modeContext = ModeContext(appVersion: publicContext.appVersion, country: publicContext.country)
+        let preferredContext = preferredContext(
+            userContext: userContext,
+            publicContext: publicContext,
+            modeContext: modeContext
+        )
 
-        return try await fetchCoalesced(context: context)
+        if let cached = freshMemoryCache(for: preferredContext) {
+            if shouldRefetchPublicResultWithUser(publicContext: preferredContext, userContext: userContext) {
+                return try await refetchWithUserContext(
+                    userContext: userContext,
+                    publicContext: preferredContext,
+                    modeContext: modeContext
+                )
+            }
+            lastCacheContext = preferredContext
+            return cached
+        }
+
+        let configs = try await fetchCoalesced(context: preferredContext)
+        if preferredContext.appUserId == nil {
+            guard shouldRefetchPublicResultWithUser(publicContext: preferredContext, userContext: userContext) else {
+                updateModeDecision(modeContext: modeContext, requiresUserContext: requiresUserContextByContext[preferredContext])
+                return configs
+            }
+
+            return try await refetchWithUserContext(
+                userContext: userContext,
+                publicContext: preferredContext,
+                modeContext: modeContext
+            )
+        }
+
+        updateModeDecision(modeContext: modeContext, requiresUserContext: requiresUserContextByContext[preferredContext])
+        return configs
     }
 
     /// Returns the current in-memory cached configs, or `nil`.
@@ -85,19 +129,24 @@ actor AppActorRemoteConfigManager {
     /// Cancels any in-flight fetch to prevent actor-reentrancy stale writes.
     func clearCache(appUserId: String?) async {
         let normalized = normalizedUserId(appUserId)
-        let taskContexts = inFlightTasks.keys.filter { $0.appUserId == normalized }
+        let appUserIdsToClear = appUserIdsToClear(for: normalized)
+        let taskContexts = inFlightTasks.keys.filter { appUserIdsToClear.contains($0.appUserId) }
         for context in taskContexts {
             inFlightTasks[context]?.cancel()
             inFlightTasks.removeValue(forKey: context)
             inFlightGenerations.removeValue(forKey: context)
         }
-        cachedConfigs = cachedConfigs.filter { $0.key.appUserId != normalized }
-        cachedAt = cachedAt.filter { $0.key.appUserId != normalized }
+        cachedConfigs = cachedConfigs.filter { !appUserIdsToClear.contains($0.key.appUserId) }
+        cachedAt = cachedAt.filter { !appUserIdsToClear.contains($0.key.appUserId) }
+        requiresUserContextByContext = requiresUserContextByContext.filter { !appUserIdsToClear.contains($0.key.appUserId) }
         lastRequestId = nil
-        if lastCacheContext?.appUserId == normalized {
+        if let last = lastCacheContext, appUserIdsToClear.contains(last.appUserId) {
             lastCacheContext = nil
         }
         await etagManager.clearRemoteConfigs(appUserId: normalized)
+        if normalized != nil {
+            await etagManager.clearRemoteConfigs(appUserId: nil)
+        }
     }
 
     func clearCache() async {
@@ -165,8 +214,9 @@ actor AppActorRemoteConfigManager {
         try ensureFetchStillCurrent(context: context, generation: generation)
 
         switch result {
-        case .fresh(let dtos, let eTag, let requestId, let signatureVerified):
+        case .fresh(let dtos, let eTag, let requestId, let signatureVerified, let requiresUserContext):
             lastRequestId = requestId
+            recordRequiresUserContext(requiresUserContext, for: context)
 
             let configs = buildPublicModel(from: dtos)
 
@@ -189,8 +239,9 @@ actor AppActorRemoteConfigManager {
             Log.sdk.info("Remote configs loaded: \(configs.items.count) item(s)")
             return configs
 
-        case .notModified(let eTag, let requestId):
+        case .notModified(let eTag, let requestId, let requiresUserContext):
             lastRequestId = requestId
+            recordRequiresUserContext(requiresUserContext, for: context)
 
             // If we have in-memory cache, just update its timestamp
             if let existing = cachedConfigs[context] {
@@ -229,7 +280,7 @@ actor AppActorRemoteConfigManager {
                 appUserId: context.appUserId, appVersion: context.appVersion, country: context.country, eTag: nil
             )
             try ensureFetchStillCurrent(context: context, generation: generation)
-            guard case .fresh(let dtos, let retryETag, let retryReqId, let retryVerified) = retry else {
+            guard case .fresh(let dtos, let retryETag, let retryReqId, let retryVerified, let retryRequiresUserContext) = retry else {
                 throw AppActorError.serverError(
                     httpStatus: 304,
                     code: "CACHE_INCONSISTENCY",
@@ -239,6 +290,7 @@ actor AppActorRemoteConfigManager {
                 )
             }
             lastRequestId = retryReqId
+            recordRequiresUserContext(retryRequiresUserContext, for: context)
             let configs = buildPublicModel(from: dtos)
             try await storeFreshIfCurrent(
                 dtos,
@@ -289,6 +341,90 @@ actor AppActorRemoteConfigManager {
         cachedAt[context] = entry.cachedAt
         Log.sdk.debug("Loaded remote configs from disk cache (cached at \(entry.cachedAt))")
         return configs
+    }
+
+    private func preferredContext(
+        userContext: CacheContext,
+        publicContext: CacheContext,
+        modeContext: ModeContext
+    ) -> CacheContext {
+        guard userContext.appUserId != nil,
+              let decision = freshModeDecision(for: modeContext),
+              decision == .requiresUser else {
+            return publicContext
+        }
+        return userContext
+    }
+
+    private func freshMemoryCache(for context: CacheContext) -> AppActorRemoteConfigs? {
+        guard let cached = cachedConfigs[context], let at = cachedAt[context] else {
+            return nil
+        }
+        let age = dateProvider().timeIntervalSince(at)
+        guard age < Self.cacheTTL else {
+            return nil
+        }
+        return cached
+    }
+
+    private func freshModeDecision(for context: ModeContext) -> FetchMode? {
+        guard let decision = modeDecisions[context] else { return nil }
+        let age = dateProvider().timeIntervalSince(decision.decidedAt)
+        guard age < Self.cacheTTL else {
+            modeDecisions.removeValue(forKey: context)
+            return nil
+        }
+        return decision.mode
+    }
+
+    private func updateModeDecision(modeContext: ModeContext, requiresUserContext: Bool?) {
+        guard let requiresUserContext else { return }
+        modeDecisions[modeContext] = ModeDecision(
+            mode: requiresUserContext ? .requiresUser : .publicOnly,
+            decidedAt: dateProvider()
+        )
+    }
+
+    private func shouldRefetchPublicResultWithUser(publicContext: CacheContext, userContext: CacheContext) -> Bool {
+        guard publicContext.appUserId == nil, userContext.appUserId != nil else {
+            return false
+        }
+        return requiresUserContextByContext[publicContext] != false
+    }
+
+    private func refetchWithUserContext(
+        userContext: CacheContext,
+        publicContext: CacheContext,
+        modeContext: ModeContext
+    ) async throws -> AppActorRemoteConfigs {
+        updateModeDecision(modeContext: modeContext, requiresUserContext: true)
+        await discardPublicProbeCache(context: publicContext)
+        if let cached = freshMemoryCache(for: userContext) {
+            lastCacheContext = userContext
+            return cached
+        }
+        return try await fetchCoalesced(context: userContext)
+    }
+
+    private func recordRequiresUserContext(_ requiresUserContext: Bool?, for context: CacheContext) {
+        guard let requiresUserContext else { return }
+        requiresUserContextByContext[context] = requiresUserContext
+    }
+
+    private func discardPublicProbeCache(context: CacheContext) async {
+        cachedConfigs.removeValue(forKey: context)
+        cachedAt.removeValue(forKey: context)
+        if lastCacheContext == context {
+            lastCacheContext = nil
+        }
+        await etagManager.clear(resource(for: context))
+    }
+
+    private func appUserIdsToClear(for normalized: String?) -> Set<String?> {
+        if normalized == nil {
+            return [nil]
+        }
+        return [normalized, nil]
     }
 
     private func normalizedContext(appUserId: String?, appVersion: String?, country: String?) -> CacheContext {

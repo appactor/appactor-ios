@@ -15,9 +15,15 @@ struct AppActorRemoteConfigItemDTO: Codable, Sendable {
 /// Result type for conditional GET on remote config endpoint.
 enum AppActorRemoteConfigFetchResult: Sendable {
     /// Fresh data from the server (HTTP 200).
-    case fresh([AppActorRemoteConfigItemDTO], eTag: String?, requestId: String?, signatureVerified: Bool)
+    case fresh(
+        [AppActorRemoteConfigItemDTO],
+        eTag: String?,
+        requestId: String?,
+        signatureVerified: Bool,
+        requiresUserContext: Bool? = nil
+    )
     /// Server returned 304 — cached data is still valid.
-    case notModified(eTag: String?, requestId: String?)
+    case notModified(eTag: String?, requestId: String?, requiresUserContext: Bool? = nil)
 }
 
 // MARK: - Public Models

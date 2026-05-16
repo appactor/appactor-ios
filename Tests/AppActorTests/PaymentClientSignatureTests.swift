@@ -119,7 +119,10 @@ final class PaymentClientSignatureTests: XCTestCase {
                 url: request.url!,
                 statusCode: 200,
                 httpVersion: "HTTP/1.1",
-                headerFields: ["Content-Type": "application/json"]
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "X-AppActor-Remote-Config-Requires-User-Context": "false",
+                ]
             )!
             return (response, body)
         }
@@ -131,12 +134,13 @@ final class PaymentClientSignatureTests: XCTestCase {
             eTag: nil
         )
 
-        guard case .fresh(let items, _, let requestId, _) = result else {
+        guard case .fresh(let items, _, let requestId, _, let requiresUserContext) = result else {
             XCTFail("Expected fresh remote config response")
             return
         }
         XCTAssertTrue(items.isEmpty)
         XCTAssertEqual(requestId, "req_remote_config")
+        XCTAssertEqual(requiresUserContext, false)
 
         let requests = PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests }
         XCTAssertEqual(requests.count, 1)
