@@ -95,6 +95,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
             customAttributionSnapshots[appUserId] = attribution
+            state.customAttributionSnapshots[appUserId] = attribution
             trimQueuedUsers(&state, preserving: appUserId)
         }
     }
@@ -104,8 +105,10 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
         patch: AppActorAttribution
     ) -> AppActorAttribution {
         lock.withLock {
-            let queuedAttribution = loadState(from: storage).buckets[appUserId]?.attribution
-            var merged = customAttributionSnapshots[appUserId] ?? queuedAttribution ?? AppActorAttribution()
+            var state = loadState(from: storage)
+            let queuedAttribution = state.buckets[appUserId]?.attribution
+            let persistedSnapshot = state.customAttributionSnapshots[appUserId]
+            var merged = customAttributionSnapshots[appUserId] ?? persistedSnapshot ?? queuedAttribution ?? AppActorAttribution()
             merged.provider = patch.provider ?? merged.provider ?? "custom"
             merged.status = patch.status ?? merged.status
             merged.providerName = patch.providerName ?? merged.providerName
@@ -130,6 +133,9 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             merged.attributedAt = patch.attributedAt ?? merged.attributedAt
             merged.metadata.merge(patch.metadata) { _, new in new }
             customAttributionSnapshots[appUserId] = merged
+            state.customAttributionSnapshots[appUserId] = merged
+            trimQueuedUsers(&state, preserving: appUserId)
+            saveState(state, to: storage)
             return merged
         }
     }
@@ -270,7 +276,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     }
 
     private func saveState(_ state: PendingState, to storage: any AppActorPaymentStorage) {
-        guard !state.buckets.isEmpty else {
+        guard !state.isEmpty else {
             storage.remove(forKey: AppActorPaymentStorageKey.customerAttributesQueue)
             return
         }
@@ -319,6 +325,11 @@ private func trimQueuedUsers(
 extension AppActorCustomerAttributesManager {
     struct PendingState: Codable, Sendable, Equatable {
         var buckets: [String: PendingBucket] = [:]
+        var customAttributionSnapshots: [String: AppActorAttribution] = [:]
+
+        var isEmpty: Bool {
+            buckets.isEmpty && customAttributionSnapshots.isEmpty
+        }
 
         mutating func update(_ bucket: PendingBucket, for appUserId: String) {
             if bucket.isEmpty {

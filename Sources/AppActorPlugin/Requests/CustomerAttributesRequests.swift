@@ -179,3 +179,75 @@ struct UpdateAttributionRequest: AppActorPluginRequest {
         return .successVoid
     }
 }
+
+struct SetMediaSourceRequest: AppActorPluginRequest {
+    static let method = "set_media_source"
+
+    let value: String
+
+    @MainActor
+    func execute() async throws -> AppActorPluginResult {
+        try await AppActor.shared.setMediaSource(value)
+        return .successVoid
+    }
+}
+
+struct SetCampaignRequest: AppActorPluginRequest {
+    static let method = "set_campaign"
+
+    let value: String
+
+    @MainActor
+    func execute() async throws -> AppActorPluginResult {
+        try await AppActor.shared.setCampaign(value)
+        return .successVoid
+    }
+}
+
+struct SetAdGroupRequest: AppActorPluginRequest {
+    static let method = "set_ad_group"
+
+    let value: String
+
+    @MainActor
+    func execute() async throws -> AppActorPluginResult {
+        try await AppActor.shared.setAdGroup(value)
+        return .successVoid
+    }
+}
+
+struct SetAdRequest: AppActorPluginRequest {
+    static let method = "set_ad"
+
+    let value: String
+
+    @MainActor
+    func execute() async throws -> AppActorPluginResult {
+        try await AppActor.shared.setAd(value)
+        return .successVoid
+    }
+}
+
+struct SetKeywordRequest: AppActorPluginRequest {
+    static let method = "set_keyword"
+
+    let value: String
+
+    @MainActor
+    func execute() async throws -> AppActorPluginResult {
+        try await AppActor.shared.setKeyword(value)
+        return .successVoid
+    }
+}
+
+struct SetCreativeRequest: AppActorPluginRequest {
+    static let method = "set_creative"
+
+    let value: String
+
+    @MainActor
+    func execute() async throws -> AppActorPluginResult {
+        try await AppActor.shared.setCreative(value)
+        return .successVoid
+    }
+}

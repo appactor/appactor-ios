@@ -143,6 +143,48 @@ final class PluginCustomerAttributesTests: XCTestCase {
         XCTAssertEqual(client.attributionCalls.last?.1.attribution.metadata["keyword"], .string("swift"))
     }
 
+    func testUpdateAttributionRequestPreservesSnakeCaseAcquisitionFields() async throws {
+        let json = await AppActorPlugin.shared.execute(
+            method: "update_attribution",
+            withJson: #"{"provider":"custom","provider_name":"facebook","campaign_id":"cmp_123","campaign_name":"Spring","ad_group":"Retargeting","click_id":"click_123","attributed_at":"2026-05-16T12:00:00.000Z"}"#
+        )
+        let envelope = try parseEnvelope(json)
+        let attribution = try XCTUnwrap(client.attributionCalls.last?.1.attribution)
+
+        XCTAssertEqual(envelope["success"] as? Bool, true)
+        XCTAssertEqual(attribution.provider, "custom")
+        XCTAssertEqual(attribution.providerName, "facebook")
+        XCTAssertEqual(attribution.campaignId, "cmp_123")
+        XCTAssertEqual(attribution.campaignName, "Spring")
+        XCTAssertEqual(attribution.campaign, "Spring")
+        XCTAssertEqual(attribution.adGroup, "Retargeting")
+        XCTAssertEqual(attribution.clickId, "click_123")
+        XCTAssertEqual(attribution.attributedAt, "2026-05-16T12:00:00.000Z")
+    }
+
+    func testAttributionHelperRequestsRouteThroughNativeMergeState() async throws {
+        let mediaSource = await AppActorPlugin.shared.execute(
+            method: "set_media_source",
+            withJson: #"{"value":"facebook"}"#
+        )
+        let campaign = await AppActorPlugin.shared.execute(
+            method: "set_campaign",
+            withJson: #"{"value":"spring_sale"}"#
+        )
+        let mediaSourceEnvelope = try parseEnvelope(mediaSource)
+        let campaignEnvelope = try parseEnvelope(campaign)
+        let attribution = try XCTUnwrap(client.attributionCalls.last?.1.attribution)
+
+        XCTAssertEqual(mediaSourceEnvelope["success"] as? Bool, true)
+        XCTAssertEqual(campaignEnvelope["success"] as? Bool, true)
+        XCTAssertEqual(attribution.provider, "custom")
+        XCTAssertEqual(attribution.providerName, "facebook")
+        XCTAssertEqual(attribution.network, "facebook")
+        XCTAssertEqual(attribution.source, "facebook")
+        XCTAssertEqual(attribution.campaignName, "spring_sale")
+        XCTAssertEqual(attribution.campaign, "spring_sale")
+    }
+
     private func parseEnvelope(_ json: String) throws -> [String: Any] {
         let data = Data(json.utf8)
         let object = try JSONSerialization.jsonObject(with: data)

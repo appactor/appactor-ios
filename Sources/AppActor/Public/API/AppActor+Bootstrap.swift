@@ -53,7 +53,7 @@ extension AppActor {
 
         self.isBootstrapComplete = true
 
-        try? await flushPendingCustomerAttributeWritesForCurrentUser()
+        try? await flushPendingCustomerAttributeWritesForAllUsers()
 
         // Drain any PurchaseIntents that arrived before bootstrap completed
         if #available(iOS 16.4, macOS 14.4, tvOS 16.4, watchOS 9.4, *) {

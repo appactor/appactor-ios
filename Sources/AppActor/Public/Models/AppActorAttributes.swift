@@ -252,38 +252,73 @@ public struct AppActorAttribution: Sendable, Equatable, Codable {
         case metadata
     }
 
+    private enum DecodingKeys: String, CodingKey {
+        case provider
+        case status
+        case providerName
+        case campaignId
+        case campaignName
+        case adGroupId
+        case adGroupName
+        case adId
+        case adName
+        case creativeId
+        case creativeName
+        case keywordId
+        case keyword
+        case attributedAt
+        case network
+        case source
+        case medium
+        case campaign
+        case adGroup
+        case ad
+        case creative
+        case clickId
+        case metadata
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let provider = try container.decodeIfPresent(String.self, forKey: .provider)
-        let providerName = try container.decodeIfPresent(String.self, forKey: .providerName)
-        let campaignName = try container.decodeIfPresent(String.self, forKey: .campaignName)
-        let adGroupName = try container.decodeIfPresent(String.self, forKey: .adGroupName)
-        let adName = try container.decodeIfPresent(String.self, forKey: .adName)
-        let creativeName = try container.decodeIfPresent(String.self, forKey: .creativeName)
+        let alternateContainer = try decoder.container(keyedBy: DecodingKeys.self)
+
+        func decode(_ key: CodingKeys, _ alternateKey: DecodingKeys) throws -> String? {
+            try container.decodeIfPresent(String.self, forKey: key)
+                ?? alternateContainer.decodeIfPresent(String.self, forKey: alternateKey)
+        }
+
+        let provider = try decode(.provider, .provider)
+        let providerName = try decode(.providerName, .providerName)
+        let campaignName = try decode(.campaignName, .campaignName)
+        let adGroupName = try decode(.adGroupName, .adGroupName)
+        let adName = try decode(.adName, .adName)
+        let creativeName = try decode(.creativeName, .creativeName)
 
         self.provider = provider
-        self.status = try container.decodeIfPresent(String.self, forKey: .status)
+        self.status = try decode(.status, .status)
         self.providerName = providerName
-        self.campaignId = try container.decodeIfPresent(String.self, forKey: .campaignId)
+        self.campaignId = try decode(.campaignId, .campaignId)
         self.campaignName = campaignName
-        self.adGroupId = try container.decodeIfPresent(String.self, forKey: .adGroupId)
+        self.adGroupId = try decode(.adGroupId, .adGroupId)
         self.adGroupName = adGroupName
-        self.adId = try container.decodeIfPresent(String.self, forKey: .adId)
+        self.adId = try decode(.adId, .adId)
         self.adName = adName
-        self.creativeId = try container.decodeIfPresent(String.self, forKey: .creativeId)
+        self.creativeId = try decode(.creativeId, .creativeId)
         self.creativeName = creativeName
-        self.keywordId = try container.decodeIfPresent(String.self, forKey: .keywordId)
-        self.network = try container.decodeIfPresent(String.self, forKey: .network) ?? provider
-        self.source = try container.decodeIfPresent(String.self, forKey: .source) ?? providerName
-        self.medium = try container.decodeIfPresent(String.self, forKey: .medium)
-        self.campaign = try container.decodeIfPresent(String.self, forKey: .campaign) ?? campaignName
-        self.adGroup = try container.decodeIfPresent(String.self, forKey: .adGroup) ?? adGroupName
-        self.ad = try container.decodeIfPresent(String.self, forKey: .ad) ?? adName
-        self.keyword = try container.decodeIfPresent(String.self, forKey: .keyword)
-        self.creative = try container.decodeIfPresent(String.self, forKey: .creative) ?? creativeName
-        self.clickId = try container.decodeIfPresent(String.self, forKey: .clickId)
-        self.attributedAt = try container.decodeIfPresent(String.self, forKey: .attributedAt)
-        self.metadata = try container.decodeIfPresent([String: AppActorAttributeValue].self, forKey: .metadata) ?? [:]
+        self.keywordId = try decode(.keywordId, .keywordId)
+        self.network = try decode(.network, .network) ?? provider
+        self.source = try decode(.source, .source) ?? providerName
+        self.medium = try decode(.medium, .medium)
+        self.campaign = try decode(.campaign, .campaign) ?? campaignName
+        self.adGroup = try decode(.adGroup, .adGroup) ?? adGroupName
+        self.ad = try decode(.ad, .ad) ?? adName
+        self.keyword = try decode(.keyword, .keyword)
+        self.creative = try decode(.creative, .creative) ?? creativeName
+        self.clickId = try decode(.clickId, .clickId)
+        self.attributedAt = try decode(.attributedAt, .attributedAt)
+        self.metadata = try container.decodeIfPresent([String: AppActorAttributeValue].self, forKey: .metadata)
+            ?? alternateContainer.decodeIfPresent([String: AppActorAttributeValue].self, forKey: .metadata)
+            ?? [:]
     }
 
     public func encode(to encoder: Encoder) throws {

@@ -220,7 +220,7 @@ extension AppActor {
         if let processor = self.paymentProcessor {
             await processor.drainAll()
         }
-        try? await flushPendingCustomerAttributeWritesForCurrentUser()
+        try? await flushPendingCustomerAttributeWritesForAllUsers()
         guard !Task.isCancelled else { return }
 
         // Only refresh customer info if cache is stale (>5 min)

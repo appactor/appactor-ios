@@ -72,12 +72,12 @@ extension AppActor {
         try await setReservedAttribute(AppActorAttributeKey.apnsToken, value: pushToken.map { .string($0) })
     }
 
-    public static func setPushToken(_ pushToken: Data?) async throws {
+    public static func setPushToken(_ pushToken: Data) async throws {
         try await shared.setPushToken(pushToken)
     }
 
-    public func setPushToken(_ pushToken: Data?) async throws {
-        try await setPushToken(pushToken.map(Self.hexString))
+    public func setPushToken(_ pushToken: Data) async throws {
+        try await setPushToken(Self.hexString(from: pushToken))
     }
 
     public static func collectDeviceIdentifiers() async throws {
@@ -317,6 +317,18 @@ extension AppActor {
     func flushPendingCustomerAttributeWritesForCurrentUser() async throws {
         guard let appUserId = paymentStorage?.currentAppUserId else { return }
         try await customerAttributesManager.flush(appUserId: appUserId)
+    }
+
+    func flushPendingCustomerAttributeWritesForAllUsers() async throws {
+        for appUserId in customerAttributesManager.pendingUserIds() {
+            do {
+                try await customerAttributesManager.flush(appUserId: appUserId)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                Log.customer.warn("Customer attribute flush failed for pending user \(String(appUserId.prefix(8)))…; keeping queued mutations")
+            }
+        }
     }
 
     private func setReservedAttribute(_ key: String, value: AppActorAttributeValue?) async throws {

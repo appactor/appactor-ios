@@ -298,6 +298,62 @@ final class CustomerAttributesTests: XCTestCase {
 		XCTAssertEqual(request.campaign, "spring_sale")
 	}
 
+	func testAttributionHelperMergeUsesPersistedSnapshotAfterRelaunch() async throws {
+		let manager = AppActorCustomerAttributesManager(storage: storage, client: client)
+		let first = AppActorAttribution(
+			provider: "custom",
+			providerName: "facebook",
+			campaignName: nil,
+			keyword: nil,
+			metadata: ["source_detail": "organic_social"]
+		)
+		try manager.enqueueAttribution(appUserId: "user_a", attribution: first)
+		try await manager.flush(appUserId: "user_a")
+
+		let relaunchedManager = AppActorCustomerAttributesManager(storage: storage, client: client)
+		let merged = relaunchedManager.mergeCustomAttribution(
+			appUserId: "user_a",
+			patch: AppActorAttribution(provider: "custom", campaignName: "spring_sale")
+		)
+
+		XCTAssertNil(relaunchedManager.pendingBucket(appUserId: "user_a"))
+		XCTAssertEqual(merged.provider, "custom")
+		XCTAssertEqual(merged.providerName, "facebook")
+		XCTAssertEqual(merged.campaignName, "spring_sale")
+		XCTAssertEqual(merged.campaign, "spring_sale")
+		XCTAssertEqual(merged.metadata["source_detail"], .string("organic_social"))
+	}
+
+	func testAllUserAttributeFlushDrainsPreviousIdentityQueue() async throws {
+		storage.setAppUserId("old_user")
+		let offline = AppActorError.networkError(URLError(.notConnectedToInternet))
+		client.patchAttributesHandler = { _, _ in throw offline }
+
+		try await appactor.setEmail("old@example.com")
+
+		client.loginHandler = { request in
+			AppActorLoginResult(
+				appUserId: request.newAppUserId,
+				customerInfo: AppActorCustomerInfo(appUserId: request.newAppUserId),
+				customerETag: "login_etag",
+				requestId: "req_login",
+				signatureVerified: false
+			)
+		}
+
+		let info = try await appactor.logIn(newAppUserId: "identified_user")
+		XCTAssertEqual(info.appUserId, "identified_user")
+		XCTAssertNotNil(appactor.customerAttributesManager.pendingBucket(appUserId: "old_user"))
+
+		client.patchAttributesHandler = nil
+		try await appactor.flushPendingCustomerAttributeWritesForAllUsers()
+
+		XCTAssertNil(appactor.customerAttributesManager.pendingBucket(appUserId: "old_user"))
+		XCTAssertTrue(client.patchAttributesCalls.contains { call in
+			call.appUserId == "old_user" && call.request.attributes[AppActorAttributeKey.email] == .string("old@example.com")
+		})
+	}
+
 	func testIdentityTransitionsDoNotFailWhenAttributeFlushFails() async throws {
 		storage.setAppUserId("old_user")
 		try appactor.customerAttributesManager.enqueueAttributes(
