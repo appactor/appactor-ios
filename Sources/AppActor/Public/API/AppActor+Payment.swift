@@ -342,7 +342,7 @@ extension AppActor {
             if let processor = paymentProcessor {
                 await processor.drainAll()
             }
-            try await customerAttributesManager.flush(appUserId: currentId)
+            try await flushCustomerAttributesBestEffortBeforeIdentityTransition(appUserId: currentId)
 
             // Clear user-specific caches before switching identity.
             if let etagMgr = paymentETagManager {
@@ -443,7 +443,7 @@ extension AppActor {
             if let processor = paymentProcessor {
                 await processor.drainAll()
             }
-            try await customerAttributesManager.flush(appUserId: storage.ensureAppUserId())
+            try await flushCustomerAttributesBestEffortBeforeIdentityTransition(appUserId: storage.ensureAppUserId())
         } catch {
             if let watcher = transactionWatcher {
                 await watcher.endIdentityTransition()
@@ -614,5 +614,17 @@ extension AppActor {
     /// The `request_id` from the last server response, for debugging.
     var lastPaymentRequestId: String? {
         paymentStorage?.lastRequestId
+    }
+}
+
+private extension AppActor {
+    func flushCustomerAttributesBestEffortBeforeIdentityTransition(appUserId: String) async throws {
+        do {
+            try await customerAttributesManager.flush(appUserId: appUserId)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            Log.customer.warn("Customer attribute flush failed during identity transition; continuing with queued mutations")
+        }
     }
 }

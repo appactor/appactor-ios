@@ -249,13 +249,69 @@ final class CustomerAttributesTests: XCTestCase {
                 ["adjust_adid": "adj_123"],
             ]
         )
-        XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.provider, "custom")
-        XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.providerName, "facebook")
-        XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.network, "facebook")
-        XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.source, "facebook")
+		XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.provider, "custom")
+		XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.providerName, "facebook")
+		XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.network, "facebook")
+		XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.source, "facebook")
 		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.provider, "custom")
+		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.providerName, "facebook")
+		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.network, "facebook")
+		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.source, "facebook")
 		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaignName, "spring_sale")
 		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaign, "spring_sale")
+	}
+
+	func testAttributionHelperMergeUsesQueuedPayloadAfterTransientFailure() async throws {
+		let offline = AppActorError.networkError(URLError(.notConnectedToInternet))
+		client.patchAttributionHandler = { _, _ in throw offline }
+
+		try await appactor.setMediaSource("facebook")
+
+		let appUserId = try XCTUnwrap(storage.currentAppUserId)
+		let queued = try XCTUnwrap(appactor.customerAttributesManager.pendingBucket(appUserId: appUserId)?.attribution)
+		XCTAssertEqual(queued.providerName, "facebook")
+		XCTAssertEqual(queued.network, "facebook")
+		XCTAssertEqual(queued.source, "facebook")
+
+		client.patchAttributionHandler = nil
+		try await appactor.setCampaign("spring_sale")
+
+		let request = try XCTUnwrap(client.patchAttributionCalls.last?.request.attribution)
+		XCTAssertEqual(request.provider, "custom")
+		XCTAssertEqual(request.providerName, "facebook")
+		XCTAssertEqual(request.network, "facebook")
+		XCTAssertEqual(request.source, "facebook")
+		XCTAssertEqual(request.campaignName, "spring_sale")
+		XCTAssertEqual(request.campaign, "spring_sale")
+	}
+
+	func testIdentityTransitionsDoNotFailWhenAttributeFlushFails() async throws {
+		storage.setAppUserId("old_user")
+		try appactor.customerAttributesManager.enqueueAttributes(
+			appUserId: "old_user",
+			attributes: ["bad_server_value": .string("still_queued")]
+		)
+		client.patchAttributesHandler = { _, _ in
+			throw AppActorError.validationError("server rejected attribute")
+		}
+		client.loginHandler = { request in
+			AppActorLoginResult(
+				appUserId: request.newAppUserId,
+				customerInfo: AppActorCustomerInfo(appUserId: request.newAppUserId),
+				customerETag: "login_etag",
+				requestId: "req_login",
+				signatureVerified: false
+			)
+		}
+
+		let info = try await appactor.logIn(newAppUserId: "identified_user")
+
+		XCTAssertEqual(info.appUserId, "identified_user")
+		XCTAssertEqual(client.loginCalls.count, 1)
+		XCTAssertEqual(
+			appactor.customerAttributesManager.pendingBucket(appUserId: "old_user")?.attributes["bad_server_value"],
+			.string("still_queued")
+		)
 	}
 
 	func testAttributionCanonicalFieldsValidateBeforeSending() async throws {

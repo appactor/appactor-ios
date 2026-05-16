@@ -416,21 +416,23 @@ extension AppActor {
 		keyword: String? = nil,
 		creative: String? = nil
 	) async throws {
-		var attribution = AppActorAttribution(
-			provider: "custom",
-			providerName: providerName,
-			campaignName: campaignName,
-			adGroupName: adGroupName,
-			adName: adName,
-			creativeName: creativeName,
-			keyword: keyword
-		)
-		attribution.network = network
-		attribution.source = source
-		attribution.campaign = campaign
-		attribution.adGroup = adGroup
-		attribution.ad = ad
-		attribution.creative = creative
+		var patch = AppActorAttribution()
+		patch.provider = "custom"
+		patch.providerName = providerName
+		patch.campaignName = campaignName
+		patch.adGroupName = adGroupName
+		patch.adName = adName
+		patch.creativeName = creativeName
+		patch.keyword = keyword
+		patch.network = network
+		patch.source = source
+		patch.campaign = campaign
+		patch.adGroup = adGroup
+		patch.ad = ad
+		patch.creative = creative
+
+		let appUserId = customerAttributesManager.ensureAppUserId()
+		let attribution = customerAttributesManager.mergeCustomAttribution(appUserId: appUserId, patch: patch)
 		try await updateAttribution(attribution)
 	}
 

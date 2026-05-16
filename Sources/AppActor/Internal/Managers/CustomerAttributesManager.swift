@@ -8,6 +8,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: any AppActorPaymentStorage
     private var client: (any AppActorPaymentClientProtocol)?
+    private var customAttributionSnapshots: [String: AppActorAttribution] = [:]
 
     init(
         storage: any AppActorPaymentStorage = AppActorUserDefaultsPaymentStorage(),
@@ -34,6 +35,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
                 storage.remove(forKey: AppActorPaymentStorageKey.customerAttributesQueue)
                 defaultStorage.remove(forKey: AppActorPaymentStorageKey.customerAttributesQueue)
             }
+            customAttributionSnapshots.removeAll()
             storage = defaultStorage
             client = nil
         }
@@ -93,6 +95,41 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
             trimQueuedUsers(&state, preserving: appUserId)
+        }
+    }
+
+    func mergeCustomAttribution(
+        appUserId: String,
+        patch: AppActorAttribution
+    ) -> AppActorAttribution {
+        lock.withLock {
+            let queuedAttribution = loadState(from: storage).buckets[appUserId]?.attribution
+            var merged = customAttributionSnapshots[appUserId] ?? queuedAttribution ?? AppActorAttribution()
+            merged.provider = patch.provider ?? merged.provider ?? "custom"
+            merged.status = patch.status ?? merged.status
+            merged.providerName = patch.providerName ?? merged.providerName
+            merged.campaignId = patch.campaignId ?? merged.campaignId
+            merged.campaignName = patch.campaignName ?? merged.campaignName
+            merged.adGroupId = patch.adGroupId ?? merged.adGroupId
+            merged.adGroupName = patch.adGroupName ?? merged.adGroupName
+            merged.adId = patch.adId ?? merged.adId
+            merged.adName = patch.adName ?? merged.adName
+            merged.creativeId = patch.creativeId ?? merged.creativeId
+            merged.creativeName = patch.creativeName ?? merged.creativeName
+            merged.keywordId = patch.keywordId ?? merged.keywordId
+            merged.keyword = patch.keyword ?? merged.keyword
+            merged.network = patch.network ?? merged.network
+            merged.source = patch.source ?? merged.source
+            merged.medium = patch.medium ?? merged.medium
+            merged.campaign = patch.campaign ?? merged.campaign
+            merged.adGroup = patch.adGroup ?? merged.adGroup
+            merged.ad = patch.ad ?? merged.ad
+            merged.creative = patch.creative ?? merged.creative
+            merged.clickId = patch.clickId ?? merged.clickId
+            merged.attributedAt = patch.attributedAt ?? merged.attributedAt
+            merged.metadata.merge(patch.metadata) { _, new in new }
+            customAttributionSnapshots[appUserId] = merged
+            return merged
         }
     }
 
