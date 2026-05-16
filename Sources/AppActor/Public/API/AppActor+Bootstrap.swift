@@ -53,6 +53,8 @@ extension AppActor {
 
         self.isBootstrapComplete = true
 
+        try? await flushPendingCustomerAttributeWritesForCurrentUser()
+
         // Drain any PurchaseIntents that arrived before bootstrap completed
         if #available(iOS 16.4, macOS 14.4, tvOS 16.4, watchOS 9.4, *) {
             let pending = pendingPurchaseIntents.compactMap { $0 as? PurchaseIntent }

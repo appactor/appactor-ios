@@ -153,14 +153,41 @@ final class PaymentClientSignatureTests: XCTestCase {
         XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "country" })?.value, "TR")
     }
 
-    private func makeClient() -> AppActorPaymentClient {
+    func testAttributeMutationPathsPreserveEncodedSegments() async throws {
+        PaymentClientURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 204,
+                httpVersion: "HTTP/1.1",
+                headerFields: [:]
+            )!
+            return (response, Data())
+        }
+
+        _ = try await makeClient(requireSignatures: false).deleteAttribute(
+            appUserId: "user/with/slash",
+            key: "$email"
+        )
+
+        let requests = PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests }
+        XCTAssertEqual(requests.count, 1)
+        let components = URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)
+        XCTAssertEqual(
+            components?.percentEncodedPath,
+            "/v1/payment/users/user%2Fwith%2Fslash/attributes/$email"
+        )
+        XCTAssertEqual(requests[0].httpMethod, "DELETE")
+    }
+
+    private func makeClient(requireSignatures: Bool = true) -> AppActorPaymentClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PaymentClientURLProtocol.self]
         return AppActorPaymentClient(
             baseURL: URL(string: "https://api.appactor.test")!,
             apiKey: "pk_test_signature",
             session: URLSession(configuration: config),
-            maxRetries: 2
+            maxRetries: 2,
+            requireSignatures: requireSignatures
         )
     }
 }

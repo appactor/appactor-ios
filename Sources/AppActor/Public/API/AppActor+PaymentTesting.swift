@@ -25,6 +25,7 @@ extension AppActor {
         self.paymentStorage = storage
         self.paymentClient = client
         self.paymentCurrentUser = nil
+        self.customerAttributesManager.updateDependencies(storage: storage, client: client)
         self.offeringsManager = offeringsManager ?? AppActorOfferingsManager(client: client, etagManager: etagManager)
         self.paymentOfferings = nil
         self.remoteConfigManager = remoteConfigManager ?? AppActorRemoteConfigManager(client: client, etagManager: etagManager)

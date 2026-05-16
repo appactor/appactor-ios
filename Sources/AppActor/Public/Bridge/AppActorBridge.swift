@@ -200,6 +200,109 @@ public final class AppActorBridge {
         }
     }
 
+    // MARK: - Customer Attributes
+
+    public func setAttributes(
+        _ attributes: [String: AppActorAttributeValue],
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.setAttributes(attributes)
+        }
+    }
+
+    public func setAttribute(
+        _ key: String,
+        value: AppActorAttributeValue,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.setAttribute(key, value: value)
+        }
+    }
+
+    public func unsetAttribute(
+        _ key: String,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.unsetAttribute(key)
+        }
+    }
+
+    public func setEmail(
+        _ email: String?,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.setEmail(email)
+        }
+    }
+
+    public func setDisplayName(
+        _ displayName: String?,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.setDisplayName(displayName)
+        }
+    }
+
+    public func setPhoneNumber(
+        _ phoneNumber: String?,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.setPhoneNumber(phoneNumber)
+        }
+    }
+
+    public func setPushToken(
+        _ pushToken: String?,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.setPushToken(pushToken)
+        }
+    }
+
+    public func collectDeviceIdentifiers(
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.collectDeviceIdentifiers()
+        }
+    }
+
+    public func setIntegrationIdentifier(
+        _ key: String,
+        value: String,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.setIntegrationIdentifier(key, value: value)
+        }
+    }
+
+    public func updateAttribution(
+        _ attribution: AppActorAttribution,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.updateAttribution(attribution)
+        }
+    }
+
     // MARK: - Offerings
 
     /// Fetches offerings from the server.

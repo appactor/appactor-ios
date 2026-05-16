@@ -91,4 +91,8 @@ extension AppActor {
         get { paymentContext.storeKitSilentSyncFetcher }
         set { paymentContext.storeKitSilentSyncFetcher = newValue }
     }
+
+    var customerAttributesManager: AppActorCustomerAttributesManager {
+        paymentContext.customerAttributesManager
+    }
 }

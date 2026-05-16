@@ -14,6 +14,7 @@ protocol AppActorPaymentStorage: Sendable {
 enum AppActorPaymentStorageKey {
     static let appUserId = "appactor_billing_app_user_id"
     static let lastRequestId = "appactor_billing_last_request_id"
+    static let customerAttributesQueue = "appactor_customer_attributes_queue_v1"
 
     // App Account Token (for StoreKit purchase → Apple transaction binding)
     static let appAccountToken = "appactor_app_account_token"

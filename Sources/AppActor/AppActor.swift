@@ -546,6 +546,7 @@ final class AppActorPaymentContext {
     var offeringsManager: AppActorOfferingsManager?
     var experimentManager: AppActorExperimentManager?
     var remoteConfigManager: AppActorRemoteConfigManager?
+    var customerAttributesManager = AppActorCustomerAttributesManager()
     var asaManager: AppActorASAManager?
     var storeKitSilentSyncFetcher: (any AppActorStoreKitSilentSyncFetcherProtocol)?
     var appStoreSync: @Sendable () async throws -> Void = AppActorPaymentContext.defaultAppStoreSync

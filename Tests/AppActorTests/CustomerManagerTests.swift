@@ -70,6 +70,18 @@ final class RetrySimulatingMockClient: AppActorPaymentClientProtocol, @unchecked
             signatureVerified: false
         )
     }
+    func patchAttributes(appUserId: String, request: AppActorSetAttributesRequest) async throws -> AppActorMutationResult {
+        AppActorMutationResult(requestId: nil)
+    }
+    func deleteAttribute(appUserId: String, key: String) async throws -> AppActorMutationResult {
+        AppActorMutationResult(requestId: nil)
+    }
+    func patchIntegrationIdentifiers(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest) async throws -> AppActorMutationResult {
+        AppActorMutationResult(requestId: nil)
+    }
+    func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult {
+        AppActorMutationResult(requestId: nil)
+    }
     func getRemoteConfigs(appUserId: String?, appVersion: String?, country: String?, eTag: String?) async throws -> AppActorRemoteConfigFetchResult {
         .fresh([], eTag: nil, requestId: "req_mock_rc", signatureVerified: false)
     }

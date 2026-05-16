@@ -11,6 +11,10 @@ protocol AppActorPaymentClientProtocol: Sendable {
     func getRemoteConfigs(appUserId: String?, appVersion: String?, country: String?, eTag: String?) async throws -> AppActorRemoteConfigFetchResult
     func postReceipt(_ request: AppActorReceiptPostRequest) async throws -> AppActorReceiptPostResponse
     func postRestore(_ request: AppActorRestoreRequest) async throws -> AppActorRestoreResult
+    func patchAttributes(appUserId: String, request: AppActorSetAttributesRequest) async throws -> AppActorMutationResult
+    func deleteAttribute(appUserId: String, key: String) async throws -> AppActorMutationResult
+    func patchIntegrationIdentifiers(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest) async throws -> AppActorMutationResult
+    func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult
 
     // Experiments
     func postExperimentAssignment(experimentKey: String, appUserId: String, appVersion: String?, country: String?) async throws -> AppActorExperimentFetchResult
@@ -470,6 +474,57 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         }
     }
 
+    // MARK: - Customer Attributes
+
+    func patchAttributes(
+        appUserId: String,
+        request: AppActorSetAttributesRequest
+    ) async throws -> AppActorMutationResult {
+        let encodedId = encodedPathSegment(appUserId)
+        return try await performMutation(
+            method: "PATCH",
+            path: "/v1/payment/users/\(encodedId)/attributes",
+            body: request
+        )
+    }
+
+    func deleteAttribute(
+        appUserId: String,
+        key: String
+    ) async throws -> AppActorMutationResult {
+        let encodedId = encodedPathSegment(appUserId)
+        let encodedKey = encodedPathSegment(key)
+        return try await performMutation(
+            method: "DELETE",
+            path: "/v1/payment/users/\(encodedId)/attributes/\(encodedKey)",
+            body: Optional<AppActorSetAttributesRequest>.none
+        )
+    }
+
+    func patchIntegrationIdentifiers(
+        appUserId: String,
+        request: AppActorSetIntegrationIdentifiersRequest
+    ) async throws -> AppActorMutationResult {
+        let encodedId = encodedPathSegment(appUserId)
+        return try await performMutation(
+            method: "PATCH",
+            path: "/v1/payment/users/\(encodedId)/integration-identifiers",
+            body: request
+        )
+    }
+
+    func patchAttribution(
+        appUserId: String,
+        request: AppActorUpdateAttributionRequest
+    ) async throws -> AppActorMutationResult {
+        let encodedId = encodedPathSegment(appUserId)
+        return try await performMutation(
+            method: "PATCH",
+            path: "/v1/payment/users/\(encodedId)/attribution",
+            body: request
+        )
+    }
+
     // MARK: - ASA Endpoints
 
     func postASAAttribution(
@@ -561,6 +616,79 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         }
     }
 
+    private func performMutation<Body: Encodable>(
+        method: String,
+        path: String,
+        body: Body?
+    ) async throws -> AppActorMutationResult {
+        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
+            throw AppActorError.networkError(URLError(.badURL))
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = method
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body {
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.httpBody = try encoder.encode(body)
+        }
+        let nonce = applyAuth(to: &urlRequest, path: path)
+        urlRequest.timeoutInterval = 30
+
+        do {
+            let (data, http, _) = try await performRawRequest(urlRequest, path: path, sentNonce: nonce)
+            let requestId = extractRequestId(from: data)
+
+            switch http.statusCode {
+            case 200..<300:
+                return AppActorMutationResult(requestId: requestId)
+
+            case 429:
+                let errorInfo = parseErrorEnvelope(from: data)
+                let retryAfter = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
+                    ?? errorInfo?.retryAfterSeconds
+                throw AppActorError.serverError(
+                    httpStatus: 429,
+                    code: errorInfo?.code ?? "RATE_LIMIT_EXCEEDED",
+                    message: errorInfo?.message ?? "Rate limited",
+                    details: errorInfo?.details,
+                    requestId: requestId,
+                    scope: errorInfo?.scope,
+                    retryAfterSeconds: retryAfter
+                )
+
+            case 400..<500:
+                let errorInfo = parseErrorEnvelope(from: data)
+                throw AppActorError.serverError(
+                    httpStatus: http.statusCode,
+                    code: errorInfo?.code,
+                    message: errorInfo?.message,
+                    details: errorInfo?.details,
+                    requestId: requestId,
+                    scope: errorInfo?.scope,
+                    retryAfterSeconds: errorInfo?.retryAfterSeconds
+                )
+
+            default:
+                let errorInfo = parseErrorEnvelope(from: data)
+                throw AppActorError.serverError(
+                    httpStatus: http.statusCode,
+                    code: errorInfo?.code ?? "INTERNAL_ERROR",
+                    message: errorInfo?.message,
+                    details: errorInfo?.details,
+                    requestId: requestId
+                )
+            }
+        } catch let error as AppActorError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch {
+            throw AppActorError.networkError(error)
+        }
+    }
+
     // MARK: - Internal Networking
 
     /// Normalize an ETag value: trim whitespace, return nil if empty.
@@ -580,6 +708,12 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         default:
             return nil
         }
+    }
+
+    private func encodedPathSegment(_ value: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove("/")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     /// Applies authentication header and optionally generates a nonce for response signature verification.

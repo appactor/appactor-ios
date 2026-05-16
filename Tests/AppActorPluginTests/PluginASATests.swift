@@ -89,6 +89,10 @@ private struct PluginASATestClient: AppActorPaymentClientProtocol {
     func getRemoteConfigs(appUserId: String?, appVersion: String?, country: String?, eTag: String?) async throws -> AppActorRemoteConfigFetchResult { fatalError("unused in PluginASATests") }
     func postReceipt(_ request: AppActorReceiptPostRequest) async throws -> AppActorReceiptPostResponse { fatalError("unused in PluginASATests") }
     func postRestore(_ request: AppActorRestoreRequest) async throws -> AppActorRestoreResult { fatalError("unused in PluginASATests") }
+    func patchAttributes(appUserId: String, request: AppActorSetAttributesRequest) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
+    func deleteAttribute(appUserId: String, key: String) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
+    func patchIntegrationIdentifiers(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
+    func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
     func postExperimentAssignment(experimentKey: String, appUserId: String, appVersion: String?, country: String?) async throws -> AppActorExperimentFetchResult { fatalError("unused in PluginASATests") }
     func postASAAttribution(_ request: AppActorASAAttributionRequest) async throws -> AppActorASAAttributionResponseDTO { fatalError("unused in PluginASATests") }
     func postASAPurchaseEvent(_ request: AppActorASAPurchaseEventRequest) async throws -> AppActorASAPurchaseEventResponseDTO { fatalError("unused in PluginASATests") }

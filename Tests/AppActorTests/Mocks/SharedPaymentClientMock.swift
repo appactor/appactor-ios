@@ -16,6 +16,10 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
     var getCustomerHandler: ((String, String?) async throws -> AppActorCustomerFetchResult)?
     var postReceiptHandler: ((AppActorReceiptPostRequest) async throws -> AppActorReceiptPostResponse)?
     var postRestoreHandler: ((AppActorRestoreRequest) async throws -> AppActorRestoreResult)?
+    var patchAttributesHandler: ((String, AppActorSetAttributesRequest) async throws -> AppActorMutationResult)?
+    var deleteAttributeHandler: ((String, String) async throws -> AppActorMutationResult)?
+    var patchIntegrationIdentifiersHandler: ((String, AppActorSetIntegrationIdentifiersRequest) async throws -> AppActorMutationResult)?
+    var patchAttributionHandler: ((String, AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult)?
     var getRemoteConfigsHandler: ((String?, String?, String?, String?) async throws -> AppActorRemoteConfigFetchResult)?
     var postExperimentAssignmentHandler: ((String, String, String?, String?) async throws -> AppActorExperimentFetchResult)?
 
@@ -45,6 +49,22 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
 
     private var _postRestoreCalls: [AppActorRestoreRequest] = []
     var postRestoreCalls: [AppActorRestoreRequest] { queue.sync { _postRestoreCalls } }
+
+    private var _patchAttributesCalls: [(appUserId: String, request: AppActorSetAttributesRequest)] = []
+    var patchAttributesCalls: [(appUserId: String, request: AppActorSetAttributesRequest)] { queue.sync { _patchAttributesCalls } }
+
+    private var _deleteAttributeCalls: [(appUserId: String, key: String)] = []
+    var deleteAttributeCalls: [(appUserId: String, key: String)] { queue.sync { _deleteAttributeCalls } }
+
+    private var _patchIntegrationIdentifiersCalls: [(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest)] = []
+    var patchIntegrationIdentifiersCalls: [(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest)] {
+        queue.sync { _patchIntegrationIdentifiersCalls }
+    }
+
+    private var _patchAttributionCalls: [(appUserId: String, request: AppActorUpdateAttributionRequest)] = []
+    var patchAttributionCalls: [(appUserId: String, request: AppActorUpdateAttributionRequest)] {
+        queue.sync { _patchAttributionCalls }
+    }
 
     private var _getRemoteConfigsCalls: [(appUserId: String?, appVersion: String?, country: String?, eTag: String?)] = []
     var getRemoteConfigsCalls: [(appUserId: String?, appVersion: String?, country: String?, eTag: String?)] {
@@ -131,6 +151,41 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
             customerETag: "mock_etag",
             signatureVerified: false
         )
+    }
+
+    func patchAttributes(appUserId: String, request: AppActorSetAttributesRequest) async throws -> AppActorMutationResult {
+        queue.sync { _patchAttributesCalls.append((appUserId: appUserId, request: request)) }
+        if let handler = patchAttributesHandler {
+            return try await handler(appUserId, request)
+        }
+        return AppActorMutationResult(requestId: "req_mock_attributes")
+    }
+
+    func deleteAttribute(appUserId: String, key: String) async throws -> AppActorMutationResult {
+        queue.sync { _deleteAttributeCalls.append((appUserId: appUserId, key: key)) }
+        if let handler = deleteAttributeHandler {
+            return try await handler(appUserId, key)
+        }
+        return AppActorMutationResult(requestId: "req_mock_attribute_delete")
+    }
+
+    func patchIntegrationIdentifiers(
+        appUserId: String,
+        request: AppActorSetIntegrationIdentifiersRequest
+    ) async throws -> AppActorMutationResult {
+        queue.sync { _patchIntegrationIdentifiersCalls.append((appUserId: appUserId, request: request)) }
+        if let handler = patchIntegrationIdentifiersHandler {
+            return try await handler(appUserId, request)
+        }
+        return AppActorMutationResult(requestId: "req_mock_integration_identifiers")
+    }
+
+    func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult {
+        queue.sync { _patchAttributionCalls.append((appUserId: appUserId, request: request)) }
+        if let handler = patchAttributionHandler {
+            return try await handler(appUserId, request)
+        }
+        return AppActorMutationResult(requestId: "req_mock_attribution")
     }
 
     func getRemoteConfigs(appUserId: String?, appVersion: String?, country: String?, eTag: String?) async throws -> AppActorRemoteConfigFetchResult {

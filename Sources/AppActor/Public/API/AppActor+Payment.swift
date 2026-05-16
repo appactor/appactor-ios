@@ -77,6 +77,7 @@ extension AppActor {
         self.paymentStorage = storage
         self.paymentClient = client
         self.paymentCurrentUser = nil
+        self.customerAttributesManager.updateDependencies(storage: storage, client: client)
 
         // Centralized ETag + response cache manager (shared by all managers).
         // Passes the verification mode so cached entries track whether they were
@@ -219,6 +220,7 @@ extension AppActor {
         if let processor = self.paymentProcessor {
             await processor.drainAll()
         }
+        try? await flushPendingCustomerAttributeWritesForCurrentUser()
         guard !Task.isCancelled else { return }
 
         // Only refresh customer info if cache is stale (>5 min)
@@ -340,6 +342,7 @@ extension AppActor {
             if let processor = paymentProcessor {
                 await processor.drainAll()
             }
+            try await customerAttributesManager.flush(appUserId: currentId)
 
             // Clear user-specific caches before switching identity.
             if let etagMgr = paymentETagManager {
@@ -434,10 +437,18 @@ extension AppActor {
             await watcher.beginIdentityTransition()
         }
 
-        // Wait for in-flight receipt POSTs to complete before identity transition.
-        // Prevents transaction loss when a receipt is being posted during logout.
-        if let processor = paymentProcessor {
-            await processor.drainAll()
+        do {
+            // Wait for in-flight receipt POSTs to complete before identity transition.
+            // Prevents transaction loss when a receipt is being posted during logout.
+            if let processor = paymentProcessor {
+                await processor.drainAll()
+            }
+            try await customerAttributesManager.flush(appUserId: storage.ensureAppUserId())
+        } catch {
+            if let watcher = transactionWatcher {
+                await watcher.endIdentityTransition()
+            }
+            throw error
         }
 
         // Clear user-specific caches on identity switch.
@@ -552,6 +563,7 @@ extension AppActor {
             storage.clearAsaSentOriginalTransactionIds()
             storage.remove(forKey: AppActorPaymentStorageKey.asaInstallDate)
             storage.clearAsaTokenOnlyAttempts()
+            storage.remove(forKey: AppActorPaymentStorageKey.customerAttributesQueue)
             storage.clearLegacyIdentityState()
         }
 
@@ -572,6 +584,7 @@ extension AppActor {
         remoteConfigManager = nil
         experimentManager = nil
         asaManager = nil
+        customerAttributesManager.resetToDefaultStorage(clearQueue: true)
 
         AppActorAtomicJSONQueueStore.deletePersistedFile()
         AppActorASAFileEventStore.deletePersistedFile()
