@@ -94,6 +94,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             bucket.attribution = attribution
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
+            customAttributionSnapshots[appUserId] = attribution
             trimQueuedUsers(&state, preserving: appUserId)
         }
     }

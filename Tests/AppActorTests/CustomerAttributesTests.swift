@@ -261,6 +261,19 @@ final class CustomerAttributesTests: XCTestCase {
 		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaign, "spring_sale")
 	}
 
+	func testDirectAttributionUpdateRefreshesHelperMergeSnapshot() async throws {
+		try await appactor.setMediaSource("facebook")
+		try await appactor.updateAttribution(network: "tiktok", source: "tiktok")
+		try await appactor.setCampaign("spring_sale")
+
+		let request = try XCTUnwrap(client.patchAttributionCalls.last?.request.attribution)
+		XCTAssertEqual(request.providerName, "tiktok")
+		XCTAssertEqual(request.network, "tiktok")
+		XCTAssertEqual(request.source, "tiktok")
+		XCTAssertEqual(request.campaignName, "spring_sale")
+		XCTAssertEqual(request.campaign, "spring_sale")
+	}
+
 	func testAttributionHelperMergeUsesQueuedPayloadAfterTransientFailure() async throws {
 		let offline = AppActorError.networkError(URLError(.notConnectedToInternet))
 		client.patchAttributionHandler = { _, _ in throw offline }
