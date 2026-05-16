@@ -148,13 +148,15 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     }
 
     func pendingBucket(appUserId: String) -> PendingBucket? {
-        let storage = currentStorage()
-        return loadState(from: storage).buckets[appUserId]
+        lock.withLock {
+            loadState(from: storage).buckets[appUserId]
+        }
     }
 
     func pendingUserIds() -> [String] {
-        let storage = currentStorage()
-        return Array(loadState(from: storage).buckets.keys).sorted()
+        lock.withLock {
+            Array(loadState(from: storage).buckets.keys).sorted()
+        }
     }
 
     private func removeFlushedAttributes(
@@ -205,10 +207,11 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     }
 
     private func mutateState(_ mutate: (inout PendingState) throws -> Void) throws {
-        let storage = currentStorage()
-        var state = loadState(from: storage)
-        try mutate(&state)
-        saveState(state, to: storage)
+        try lock.withLock {
+            var state = loadState(from: storage)
+            try mutate(&state)
+            saveState(state, to: storage)
+        }
     }
 
     private func currentStorage() -> any AppActorPaymentStorage {

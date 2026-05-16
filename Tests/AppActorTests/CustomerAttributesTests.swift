@@ -36,7 +36,8 @@ final class CustomerAttributesTests: XCTestCase {
             "age": .number(42),
             "subscriber": .bool(true),
             "created_at": .date(date),
-            "tags": .array([.string("ios"), .number(2), .bool(false)]),
+            "tags": .array([.string("ios"), .string("watch")]),
+            "flags": .array([.bool(true), .bool(false)]),
         ])
 
         let data = try JSONEncoder().encode(request)
@@ -51,8 +52,17 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(createdAt["valueType"] as? String, "date")
         let tags = try XCTUnwrap(attributes["tags"] as? [Any])
         XCTAssertEqual(tags[0] as? String, "ios")
-        XCTAssertEqual(tags[1] as? Double, 2)
-        XCTAssertEqual(tags[2] as? Bool, false)
+        XCTAssertEqual(tags[1] as? String, "watch")
+        let flags = try XCTUnwrap(attributes["flags"] as? [Any])
+        XCTAssertEqual(flags[0] as? Bool, true)
+        XCTAssertEqual(flags[1] as? Bool, false)
+    }
+
+    func testAttributeValueDecodesDateEnvelopeFromPluginPayload() throws {
+        let data = #"{"value":"1970-01-01T00:00:00.000Z","valueType":"date"}"#.data(using: .utf8)!
+        let value = try JSONDecoder().decode(AppActorAttributeValue.self, from: data)
+
+        XCTAssertEqual(value, .date(Date(timeIntervalSince1970: 0)))
     }
 
     func testAttributionConvenienceFieldsEncodeCanonicalBackendKeys() throws {
@@ -101,6 +111,34 @@ final class CustomerAttributesTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("bad/key", value: "bad")) { error in
             XCTAssertEqual((error as? AppActorError)?.kind, .validation)
         }
+    }
+
+    func testAttributeArraysRejectMixedValuesAndDates() async throws {
+        await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("mixed", value: .array([.string("a"), .number(1)]))) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
+        await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("dates", value: .array([.date(Date())]))) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
+    }
+
+    func testEmailAndPhoneHelpersValidateFormats() async throws {
+        await XCTAssertThrowsErrorAsync(try await appactor.setEmail("bad-email")) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
+        await XCTAssertThrowsErrorAsync(try await appactor.setPhoneNumber("abc")) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
+    }
+
+    func testCollectDeviceIdentifiersSendsSystemAttributes() async throws {
+        try await appactor.collectDeviceIdentifiers()
+
+        let attributes = try XCTUnwrap(client.patchAttributesCalls.last?.request.attributes)
+        XCTAssertEqual(attributes[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))
+        XCTAssertEqual(attributes[AppActorAttributeKey.platform], .string("macos"))
+        XCTAssertNotNil(attributes[AppActorAttributeKey.locale])
+        XCTAssertNotNil(attributes[AppActorAttributeKey.timezone])
     }
 
     func testQueueCoalescesTransientFailuresAndFlushesLatestValues() async throws {
@@ -197,6 +235,58 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(client.patchAttributionCalls.last?.request.attribution.network, "apple_search_ads")
         XCTAssertEqual(client.patchAttributionCalls.last?.request.attribution.metadata["source_detail"], .string("exact"))
     }
+
+	func testRevenueCatStyleIntegrationAndAttributionHelpers() async throws {
+		try await appactor.setAppsflyerID("af_123")
+		try await appactor.setAdjustID("adj_123")
+		try await appactor.setMediaSource("facebook")
+		try await appactor.setCampaign("spring_sale")
+
+        XCTAssertEqual(
+            client.patchIntegrationIdentifiersCalls.map { $0.request.integrationIdentifiers },
+            [
+                ["appsflyer_id": "af_123"],
+                ["adjust_adid": "adj_123"],
+            ]
+        )
+        XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.provider, "custom")
+        XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.providerName, "facebook")
+        XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.network, "facebook")
+        XCTAssertEqual(client.patchAttributionCalls[0].request.attribution.source, "facebook")
+		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.provider, "custom")
+		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaignName, "spring_sale")
+		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaign, "spring_sale")
+	}
+
+	func testAttributionCanonicalFieldsValidateBeforeSending() async throws {
+		await XCTAssertThrowsErrorAsync(
+			try await appactor.updateAttribution(AppActorAttribution(
+				provider: "custom",
+				providerName: " facebook"
+			))
+		) { error in
+			XCTAssertTrue(String(describing: error).contains("provider_name"))
+		}
+
+		await XCTAssertThrowsErrorAsync(
+			try await appactor.updateAttribution(AppActorAttribution(
+				provider: String(repeating: "x", count: 65),
+				campaignName: "spring"
+			))
+		) { error in
+			XCTAssertTrue(String(describing: error).contains("provider"))
+		}
+
+		await XCTAssertThrowsErrorAsync(
+			try await appactor.updateAttribution(AppActorAttribution(
+				provider: "custom",
+				campaignName: String(repeating: "x", count: 1_025)
+			))
+		) { error in
+			XCTAssertTrue(String(describing: error).contains("campaign_name"))
+		}
+		XCTAssertTrue(client.patchAttributionCalls.isEmpty)
+	}
 }
 
 private final class AttributeFlushInjectionState: @unchecked Sendable {

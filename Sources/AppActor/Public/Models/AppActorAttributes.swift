@@ -14,6 +14,17 @@ public enum AppActorAttributeValue: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
+        if let envelope = try? container.decode(AppActorAttributeTypedEnvelope.self),
+           envelope.valueType == "date" {
+            guard let date = Self.isoFormatter.date(from: envelope.value) else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Invalid AppActor date attribute value"
+                )
+            }
+            self = .date(date)
+            return
+        }
         if let bool = try? container.decode(Bool.self) {
             self = .bool(bool)
             return
@@ -63,9 +74,21 @@ public enum AppActorAttributeValue: Sendable, Equatable, Codable {
     }()
 }
 
-private struct AppActorAttributeTypedEnvelope: Encodable {
+private struct AppActorAttributeTypedEnvelope: Codable {
     let value: String
     let valueType: String
+}
+
+public enum AppActorIntegrationIdentifier: String, Sendable, Codable, CaseIterable {
+    case appsflyerId = "appsflyer_id"
+    case adjustId = "adjust_adid"
+    case branchId = "branch_id"
+    case firebaseAppInstanceId = "firebase_app_instance_id"
+    case amplitudeUserId = "amplitude_user_id"
+    case amplitudeDeviceId = "amplitude_device_id"
+    case mixpanelDistinctId = "mixpanel_distinct_id"
+    case facebookAnonymousId = "fb_anon_id"
+    case oneSignalId = "onesignal_id"
 }
 
 extension AppActorAttributeValue: ExpressibleByStringLiteral {
@@ -299,6 +322,15 @@ enum AppActorAttributeKey {
     static let phoneNumber = "$phoneNumber"
     static let apnsToken = "$apnsToken"
     static let idfv = "$idfv"
+    static let bundleId = "$bundleId"
+    static let locale = "$locale"
+    static let timezone = "$timezone"
+    static let platform = "$platform"
+    static let deviceModel = "$deviceModel"
+    static let osVersion = "$osVersion"
+    static let sdkVersion = "$sdkVersion"
+    static let appVersion = "$appVersion"
+    static let appBuild = "$appBuild"
     private static let allowedCustomCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-")
 
     static func validateCustom(_ key: String) throws {
@@ -330,7 +362,8 @@ enum AppActorAttributeKey {
 
     static func validateReserved(_ key: String) throws {
         switch key {
-        case email, displayName, phoneNumber, apnsToken, idfv:
+        case email, displayName, phoneNumber, apnsToken, idfv,
+            bundleId, locale, timezone, platform, deviceModel, osVersion, sdkVersion, appVersion, appBuild:
             return
         default:
             throw AppActorError.validationError("Unknown reserved attribute key '\(key)'")
@@ -369,12 +402,59 @@ enum AppActorAttributeKey {
             guard values.count <= 20 else {
                 throw AppActorError.validationError("Attribute '\(key)' array value must contain at most 20 items")
             }
+            var itemKind: String?
             for item in values {
-                if case .array = item {
+                let currentKind: String
+                switch item {
+                case .string:
+                    currentKind = "string"
+                case .number:
+                    currentKind = "number"
+                case .bool:
+                    currentKind = "boolean"
+                case .date:
+                    throw AppActorError.validationError("Attribute '\(key)' array value must not contain dates")
+                case .array:
                     throw AppActorError.validationError("Attribute '\(key)' array value must not contain nested arrays")
                 }
+                if let itemKind, itemKind != currentKind {
+                    throw AppActorError.validationError("Attribute '\(key)' array value must contain values of one primitive type")
+                }
+                itemKind = currentKind
                 try validateValue(item, key: key)
             }
+        }
+    }
+
+    static func validateEmail(_ email: String) throws {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed == email, !email.isEmpty else {
+            throw AppActorError.validationError("Email must not be empty or padded with whitespace")
+        }
+        guard email.utf8.count <= 320 else {
+            throw AppActorError.validationError("Email must be at most 320 bytes")
+        }
+        let pattern = #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#
+        guard email.range(of: pattern, options: .regularExpression) != nil else {
+            throw AppActorError.validationError("Email must be a valid email address")
+        }
+    }
+
+    static func validatePhoneNumber(_ phoneNumber: String) throws {
+        let trimmed = phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed == phoneNumber, !phoneNumber.isEmpty else {
+            throw AppActorError.validationError("Phone number must not be empty or padded with whitespace")
+        }
+        guard phoneNumber.utf8.count <= 64 else {
+            throw AppActorError.validationError("Phone number must be at most 64 bytes")
+        }
+        let digitCount = phoneNumber.filter(\.isNumber).count
+        guard digitCount >= 3 else {
+            throw AppActorError.validationError("Phone number must contain at least 3 digits")
+        }
+        let pattern = #"^[+0-9().\-\s]+$"#
+        guard phoneNumber.range(of: pattern, options: .regularExpression) != nil else {
+            throw AppActorError.validationError("Phone number contains unsupported characters")
         }
     }
 }

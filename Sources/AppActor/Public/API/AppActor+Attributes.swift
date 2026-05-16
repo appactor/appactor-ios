@@ -39,6 +39,9 @@ extension AppActor {
     }
 
     public func setEmail(_ email: String?) async throws {
+        if let email {
+            try AppActorAttributeKey.validateEmail(email)
+        }
         try await setReservedAttribute(AppActorAttributeKey.email, value: email.map { .string($0) })
     }
 
@@ -55,6 +58,9 @@ extension AppActor {
     }
 
     public func setPhoneNumber(_ phoneNumber: String?) async throws {
+        if let phoneNumber {
+            try AppActorAttributeKey.validatePhoneNumber(phoneNumber)
+        }
         try await setReservedAttribute(AppActorAttributeKey.phoneNumber, value: phoneNumber.map { .string($0) })
     }
 
@@ -81,10 +87,29 @@ extension AppActor {
     public func collectDeviceIdentifiers() async throws {
         var attributes: [String: AppActorAttributeValue] = [:]
 
+        attributes[AppActorAttributeKey.sdkVersion] = .string(AppActorSDK.version)
+        attributes[AppActorAttributeKey.platform] = .string(Self.platformName)
+        attributes[AppActorAttributeKey.locale] = .string(Locale.current.identifier)
+        attributes[AppActorAttributeKey.timezone] = .string(TimeZone.current.identifier)
+
+        if let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty {
+            attributes[AppActorAttributeKey.bundleId] = .string(bundleId)
+        }
+        if let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+           !appVersion.isEmpty {
+            attributes[AppActorAttributeKey.appVersion] = .string(appVersion)
+        }
+        if let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+           !appBuild.isEmpty {
+            attributes[AppActorAttributeKey.appBuild] = .string(appBuild)
+        }
+
         #if canImport(UIKit) && !os(watchOS)
         if let idfv = UIDevice.current.identifierForVendor?.uuidString {
             attributes[AppActorAttributeKey.idfv] = .string(idfv)
         }
+        attributes[AppActorAttributeKey.deviceModel] = .string(UIDevice.current.model)
+        attributes[AppActorAttributeKey.osVersion] = .string(UIDevice.current.systemVersion)
         #endif
 
         guard !attributes.isEmpty else {
@@ -116,6 +141,62 @@ extension AppActor {
             value: value
         )
         try await flushIfConfigured(appUserId: appUserId)
+    }
+
+    public static func setIntegrationIdentifier(_ type: AppActorIntegrationIdentifier, value: String) async throws {
+        try await shared.setIntegrationIdentifier(type, value: value)
+    }
+
+    public func setIntegrationIdentifier(_ type: AppActorIntegrationIdentifier, value: String) async throws {
+        try await setIntegrationIdentifier(type.rawValue, value: value)
+    }
+
+    public static func setAppsflyerID(_ appsflyerID: String) async throws {
+        try await shared.setAppsflyerID(appsflyerID)
+    }
+
+    public func setAppsflyerID(_ appsflyerID: String) async throws {
+        try await setIntegrationIdentifier(.appsflyerId, value: appsflyerID)
+    }
+
+    public static func setAppsFlyerID(_ appsFlyerID: String) async throws {
+        try await shared.setAppsFlyerID(appsFlyerID)
+    }
+
+    public func setAppsFlyerID(_ appsFlyerID: String) async throws {
+        try await setAppsflyerID(appsFlyerID)
+    }
+
+    public static func setAdjustID(_ adjustID: String) async throws {
+        try await shared.setAdjustID(adjustID)
+    }
+
+    public func setAdjustID(_ adjustID: String) async throws {
+        try await setIntegrationIdentifier(.adjustId, value: adjustID)
+    }
+
+    public static func setBranchID(_ branchID: String) async throws {
+        try await shared.setBranchID(branchID)
+    }
+
+    public func setBranchID(_ branchID: String) async throws {
+        try await setIntegrationIdentifier(.branchId, value: branchID)
+    }
+
+    public static func setFirebaseAppInstanceID(_ firebaseAppInstanceID: String) async throws {
+        try await shared.setFirebaseAppInstanceID(firebaseAppInstanceID)
+    }
+
+    public func setFirebaseAppInstanceID(_ firebaseAppInstanceID: String) async throws {
+        try await setIntegrationIdentifier(.firebaseAppInstanceId, value: firebaseAppInstanceID)
+    }
+
+    public static func setOneSignalID(_ oneSignalID: String) async throws {
+        try await shared.setOneSignalID(oneSignalID)
+    }
+
+    public func setOneSignalID(_ oneSignalID: String) async throws {
+        try await setIntegrationIdentifier(.oneSignalId, value: oneSignalID)
     }
 
     public static func updateAttribution(_ attribution: AppActorAttribution) async throws {
@@ -181,6 +262,58 @@ extension AppActor {
         ))
     }
 
+    public static func setMediaSource(_ mediaSource: String) async throws {
+        try await shared.setMediaSource(mediaSource)
+    }
+
+    public func setMediaSource(_ mediaSource: String) async throws {
+        try await updateCustomAttribution(
+            providerName: mediaSource,
+            network: mediaSource,
+            source: mediaSource
+        )
+    }
+
+    public static func setCampaign(_ campaign: String) async throws {
+        try await shared.setCampaign(campaign)
+    }
+
+    public func setCampaign(_ campaign: String) async throws {
+        try await updateCustomAttribution(campaignName: campaign, campaign: campaign)
+    }
+
+    public static func setAdGroup(_ adGroup: String) async throws {
+        try await shared.setAdGroup(adGroup)
+    }
+
+    public func setAdGroup(_ adGroup: String) async throws {
+        try await updateCustomAttribution(adGroupName: adGroup, adGroup: adGroup)
+    }
+
+    public static func setAd(_ ad: String) async throws {
+        try await shared.setAd(ad)
+    }
+
+    public func setAd(_ ad: String) async throws {
+        try await updateCustomAttribution(adName: ad, ad: ad)
+    }
+
+    public static func setKeyword(_ keyword: String) async throws {
+        try await shared.setKeyword(keyword)
+    }
+
+    public func setKeyword(_ keyword: String) async throws {
+        try await updateCustomAttribution(keyword: keyword)
+    }
+
+    public static func setCreative(_ creative: String) async throws {
+        try await shared.setCreative(creative)
+    }
+
+    public func setCreative(_ creative: String) async throws {
+        try await updateCustomAttribution(creativeName: creative, creative: creative)
+    }
+
     func flushPendingCustomerAttributeWritesForCurrentUser() async throws {
         guard let appUserId = paymentStorage?.currentAppUserId else { return }
         try await customerAttributesManager.flush(appUserId: appUserId)
@@ -229,30 +362,106 @@ extension AppActor {
         }
     }
 
-    private func validateAttribution(_ attribution: AppActorAttribution) throws {
-        for (key, value) in attribution.metadata {
-            try AppActorAttributeKey.validateCustom(key)
-            try AppActorAttributeKey.validateValue(value, key: key)
-        }
-        let values = [
-            attribution.network,
-            attribution.source,
-            attribution.medium,
-            attribution.campaign,
-            attribution.adGroup,
-            attribution.ad,
-            attribution.keyword,
-            attribution.creative,
-            attribution.clickId,
-        ].compactMap { $0 }
-        for value in values {
-            guard value.utf8.count <= 1024 else {
-                throw AppActorError.validationError("Attribution string values must be at most 1024 bytes")
-            }
-        }
-    }
+	private func validateAttribution(_ attribution: AppActorAttribution) throws {
+		for (key, value) in attribution.metadata {
+			try AppActorAttributeKey.validateCustom(key)
+			try AppActorAttributeKey.validateValue(value, key: key)
+		}
+		if let provider = attribution.provider {
+			try AppActorAttributeKey.validateAttributionString(provider, field: "provider", maxBytes: 64)
+		}
+		let values: [(String, String?)] = [
+			("status", attribution.status),
+			("provider_name", attribution.providerName),
+			("campaign_id", attribution.campaignId),
+			("campaign_name", attribution.campaignName),
+			("ad_group_id", attribution.adGroupId),
+			("ad_group_name", attribution.adGroupName),
+			("ad_id", attribution.adId),
+			("ad_name", attribution.adName),
+			("creative_id", attribution.creativeId),
+			("creative_name", attribution.creativeName),
+			("keyword_id", attribution.keywordId),
+			("network", attribution.network),
+			("source", attribution.source),
+			("medium", attribution.medium),
+			("campaign", attribution.campaign),
+			("ad_group", attribution.adGroup),
+			("ad", attribution.ad),
+			("keyword", attribution.keyword),
+			("creative", attribution.creative),
+			("click_id", attribution.clickId),
+			("attributed_at", attribution.attributedAt),
+		]
+		for (field, value) in values {
+			try AppActorAttributeKey.validateAttributionString(value, field: field)
+		}
+	}
 
-    private static func hexString(from data: Data) -> String {
-        data.map { String(format: "%02x", $0) }.joined()
-    }
+	private static func hexString(from data: Data) -> String {
+		data.map { String(format: "%02x", $0) }.joined()
+	}
+
+	private func updateCustomAttribution(
+		providerName: String? = nil,
+		campaignName: String? = nil,
+		adGroupName: String? = nil,
+		adName: String? = nil,
+		creativeName: String? = nil,
+		network: String? = nil,
+		source: String? = nil,
+		campaign: String? = nil,
+		adGroup: String? = nil,
+		ad: String? = nil,
+		keyword: String? = nil,
+		creative: String? = nil
+	) async throws {
+		var attribution = AppActorAttribution(
+			provider: "custom",
+			providerName: providerName,
+			campaignName: campaignName,
+			adGroupName: adGroupName,
+			adName: adName,
+			creativeName: creativeName,
+			keyword: keyword
+		)
+		attribution.network = network
+		attribution.source = source
+		attribution.campaign = campaign
+		attribution.adGroup = adGroup
+		attribution.ad = ad
+		attribution.creative = creative
+		try await updateAttribution(attribution)
+	}
+
+	private static var platformName: String {
+		#if os(iOS)
+		return "ios"
+		#elseif os(tvOS)
+		return "tvos"
+		#elseif os(watchOS)
+		return "watchos"
+		#elseif os(macOS)
+		return "macos"
+		#else
+		return "apple"
+		#endif
+	}
+}
+
+private extension AppActorAttributeKey {
+	static func validateAttributionString(
+		_ value: String?,
+		field: String,
+		maxBytes: Int = 1024
+	) throws {
+		guard let value else { return }
+		let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard trimmed == value, !value.isEmpty else {
+			throw AppActorError.validationError("Attribution field '\(field)' must not be empty or padded with whitespace")
+		}
+		guard value.utf8.count <= maxBytes else {
+			throw AppActorError.validationError("Attribution field '\(field)' must be at most \(maxBytes) bytes")
+		}
+	}
 }
