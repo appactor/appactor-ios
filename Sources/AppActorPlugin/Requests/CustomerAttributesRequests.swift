@@ -129,11 +129,21 @@ struct CollectDeviceIdentifiersRequest: AppActorPluginRequest {
     }
 }
 
+struct CollectProfileContextRequest: AppActorPluginRequest {
+    static let method = "collect_profile_context"
+
+    @MainActor
+    func execute() async throws -> AppActorPluginResult {
+        try await AppActor.shared.collectProfileContext()
+        return .successVoid
+    }
+}
+
 struct SetIntegrationIdentifierRequest: AppActorPluginRequest {
     static let method = "set_integration_identifier"
 
     let key: String
-    let value: String
+    let value: String?
 
     private enum CodingKeys: String, CodingKey {
         case key
@@ -145,7 +155,7 @@ struct SetIntegrationIdentifierRequest: AppActorPluginRequest {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         key = try container.decodeIfPresent(String.self, forKey: .key)
             ?? container.decode(String.self, forKey: .type)
-        value = try container.decode(String.self, forKey: .value)
+        value = try container.decodeIfPresent(String.self, forKey: .value)
     }
 
     @MainActor

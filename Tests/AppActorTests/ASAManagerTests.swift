@@ -62,6 +62,26 @@ final class ASAAttributionTests: XCTestCase {
         XCTAssertTrue(storage.asaAttributionCompleted)
     }
 
+    func testDebugAttributionLogsDoNotLeakUserIdOrTokenPrefix() async {
+        let capturedLogs = LockedLogCollector()
+        AppActorLogger.testSink = { level, message in
+            capturedLogs.append(level: level, message: message)
+        }
+        defer { AppActorLogger.testSink = nil }
+
+        let previousLevel = AppActorLogger.level
+        AppActorLogger.level = .debug
+        defer { AppActorLogger.level = previousLevel }
+
+        let manager = makeManager(debugMode: true)
+        _ = await manager.performAttributionIfNeeded()
+
+        let logText = capturedLogs.snapshot().map(\.message).joined(separator: "\n")
+        XCTAssertFalse(logText.contains("user_123"))
+        XCTAssertFalse(logText.contains("mock-attribution-token"))
+        XCTAssertFalse(logText.contains("mock-attribution-tok"))
+    }
+
     // MARK: - Already Completed
 
     func testAttributionSkipsWhenAlreadyCompleted() async {

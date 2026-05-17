@@ -79,6 +79,9 @@ final class RetrySimulatingMockClient: AppActorPaymentClientProtocol, @unchecked
     func patchIntegrationIdentifiers(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest) async throws -> AppActorMutationResult {
         AppActorMutationResult(requestId: nil)
     }
+    func deleteIntegrationIdentifier(appUserId: String, key: String) async throws -> AppActorMutationResult {
+        AppActorMutationResult(requestId: nil)
+    }
     func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult {
         AppActorMutationResult(requestId: nil)
     }

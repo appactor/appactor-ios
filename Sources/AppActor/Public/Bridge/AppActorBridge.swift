@@ -282,14 +282,33 @@ public final class AppActorBridge {
         }
     }
 
+    public func collectProfileContext(
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.collectProfileContext()
+        }
+    }
+
     public func setIntegrationIdentifier(
         _ key: String,
-        value: String,
+        value: String?,
         onSuccess: (() -> Void)? = nil,
         onError: ((AppActorBridgeError) -> Void)? = nil
     ) {
         launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
             try await AppActor.shared.setIntegrationIdentifier(key, value: value)
+        }
+    }
+
+    public func unsetIntegrationIdentifier(
+        _ key: String,
+        onSuccess: (() -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
+            try await AppActor.shared.unsetIntegrationIdentifier(key)
         }
     }
 

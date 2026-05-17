@@ -79,6 +79,10 @@ private final class PluginAttributesTestClient: AppActorPaymentClientProtocol, @
         AppActorMutationResult(requestId: nil)
     }
 
+    func deleteIntegrationIdentifier(appUserId: String, key: String) async throws -> AppActorMutationResult {
+        AppActorMutationResult(requestId: nil)
+    }
+
     func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult {
         queue.sync { _attributionCalls.append((appUserId, request)) }
         return AppActorMutationResult(requestId: nil)
@@ -141,6 +145,22 @@ final class PluginCustomerAttributesTests: XCTestCase {
         XCTAssertEqual(envelope["success"] as? Bool, true)
         XCTAssertEqual(client.attributionCalls.last?.1.attribution.network, "apple_search_ads")
         XCTAssertEqual(client.attributionCalls.last?.1.attribution.metadata["keyword"], .string("swift"))
+    }
+
+    func testCollectProfileContextRequestRoutesToNativeSDK() async throws {
+        let json = await AppActorPlugin.shared.execute(
+            method: "collect_profile_context",
+            withJson: #"{}"#
+        )
+        let envelope = try parseEnvelope(json)
+        let attributes = try XCTUnwrap(client.attributeCalls.last?.1.attributes)
+
+        XCTAssertEqual(envelope["success"] as? Bool, true)
+        XCTAssertEqual(attributes[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))
+        XCTAssertEqual(attributes[AppActorAttributeKey.platform], .string("macos"))
+        XCTAssertNotNil(attributes[AppActorAttributeKey.locale])
+        XCTAssertNotNil(attributes[AppActorAttributeKey.timezone])
+        XCTAssertNil(attributes[AppActorAttributeKey.idfv])
     }
 
     func testUpdateAttributionRequestPreservesSnakeCaseAcquisitionFields() async throws {

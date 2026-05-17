@@ -79,6 +79,24 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
         try mutateState { state in
             var bucket = state.buckets[appUserId] ?? PendingBucket()
             bucket.integrationIdentifiers[key] = value
+            bucket.unsetIntegrationIdentifierKeys.removeAll { $0 == key }
+            try enforceCaps(bucket)
+            bucket.updatedAt = Date()
+            state.buckets[appUserId] = bucket
+            trimQueuedUsers(&state, preserving: appUserId)
+        }
+    }
+
+    func unsetIntegrationIdentifier(
+        appUserId: String,
+        key: String
+    ) throws {
+        try mutateState { state in
+            var bucket = state.buckets[appUserId] ?? PendingBucket()
+            bucket.integrationIdentifiers.removeValue(forKey: key)
+            if !bucket.unsetIntegrationIdentifierKeys.contains(key) {
+                bucket.unsetIntegrationIdentifierKeys.append(key)
+            }
             try enforceCaps(bucket)
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
@@ -176,6 +194,13 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
                     }
                 }
 
+                if !bucket.unsetIntegrationIdentifierKeys.isEmpty {
+                    for key in bucket.unsetIntegrationIdentifierKeys {
+                        _ = try await client.deleteIntegrationIdentifier(appUserId: appUserId, key: key)
+                        removeFlushedUnsetIntegrationIdentifier(appUserId: appUserId, key: key)
+                    }
+                }
+
                 if let attribution = bucket.attribution {
                     _ = try await client.patchAttribution(
                         appUserId: appUserId,
@@ -236,6 +261,14 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             for (key, value) in identifiers where bucket.integrationIdentifiers[key] == value {
                 bucket.integrationIdentifiers.removeValue(forKey: key)
             }
+            state.update(bucket, for: appUserId)
+        }
+    }
+
+    private func removeFlushedUnsetIntegrationIdentifier(appUserId: String, key: String) {
+        try? mutateState { state in
+            guard var bucket = state.buckets[appUserId] else { return }
+            bucket.unsetIntegrationIdentifierKeys.removeAll { $0 == key }
             state.update(bucket, for: appUserId)
         }
     }
@@ -326,7 +359,7 @@ private func enforceCaps(_ bucket: AppActorCustomerAttributesManager.PendingBuck
     guard bucket.attributes.count + bucket.unsetAttributeKeys.count <= AppActorCustomerAttributesManager.maxQueuedAttributesPerUser else {
         throw AppActorError.validationError("Too many queued customer attribute mutations")
     }
-    guard bucket.integrationIdentifiers.count <= AppActorCustomerAttributesManager.maxQueuedIntegrationIdentifiersPerUser else {
+    guard bucket.integrationIdentifiers.count + bucket.unsetIntegrationIdentifierKeys.count <= AppActorCustomerAttributesManager.maxQueuedIntegrationIdentifiersPerUser else {
         throw AppActorError.validationError("Too many queued integration identifiers")
     }
 }
@@ -366,13 +399,50 @@ extension AppActorCustomerAttributesManager {
         var attributes: [String: AppActorAttributeValue] = [:]
         var unsetAttributeKeys: [String] = []
         var integrationIdentifiers: [String: String] = [:]
+        var unsetIntegrationIdentifierKeys: [String] = []
         var attribution: AppActorAttribution?
         var updatedAt: Date = Date()
+
+        init(
+            attributes: [String: AppActorAttributeValue] = [:],
+            unsetAttributeKeys: [String] = [],
+            integrationIdentifiers: [String: String] = [:],
+            unsetIntegrationIdentifierKeys: [String] = [],
+            attribution: AppActorAttribution? = nil,
+            updatedAt: Date = Date()
+        ) {
+            self.attributes = attributes
+            self.unsetAttributeKeys = unsetAttributeKeys
+            self.integrationIdentifiers = integrationIdentifiers
+            self.unsetIntegrationIdentifierKeys = unsetIntegrationIdentifierKeys
+            self.attribution = attribution
+            self.updatedAt = updatedAt
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case attributes
+            case unsetAttributeKeys
+            case integrationIdentifiers
+            case unsetIntegrationIdentifierKeys
+            case attribution
+            case updatedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            attributes = try container.decodeIfPresent([String: AppActorAttributeValue].self, forKey: .attributes) ?? [:]
+            unsetAttributeKeys = try container.decodeIfPresent([String].self, forKey: .unsetAttributeKeys) ?? []
+            integrationIdentifiers = try container.decodeIfPresent([String: String].self, forKey: .integrationIdentifiers) ?? [:]
+            unsetIntegrationIdentifierKeys = try container.decodeIfPresent([String].self, forKey: .unsetIntegrationIdentifierKeys) ?? []
+            attribution = try container.decodeIfPresent(AppActorAttribution.self, forKey: .attribution)
+            updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        }
 
         var isEmpty: Bool {
             attributes.isEmpty
                 && unsetAttributeKeys.isEmpty
                 && integrationIdentifiers.isEmpty
+                && unsetIntegrationIdentifierKeys.isEmpty
                 && attribution == nil
         }
     }

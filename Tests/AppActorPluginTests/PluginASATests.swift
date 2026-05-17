@@ -92,6 +92,7 @@ private struct PluginASATestClient: AppActorPaymentClientProtocol {
     func patchAttributes(appUserId: String, request: AppActorSetAttributesRequest) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
     func deleteAttribute(appUserId: String, key: String) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
     func patchIntegrationIdentifiers(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
+    func deleteIntegrationIdentifier(appUserId: String, key: String) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
     func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult { fatalError("unused in PluginASATests") }
     func postExperimentAssignment(experimentKey: String, appUserId: String, appVersion: String?, country: String?) async throws -> AppActorExperimentFetchResult { fatalError("unused in PluginASATests") }
     func postASAAttribution(_ request: AppActorASAAttributionRequest) async throws -> AppActorASAAttributionResponseDTO { fatalError("unused in PluginASATests") }

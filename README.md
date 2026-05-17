@@ -49,6 +49,38 @@ let result = try await AppActor.shared.purchase(package: offerings.current?.mont
 let isPremium = AppActor.shared.customerInfo.hasActiveEntitlement("premium")
 ```
 
+## Customer Attributes & Profile Context
+
+`setAttributes(_:)` is for developer-defined custom attributes only. Custom keys
+must not start with `$`; AppActor system profile keys are collected through
+dedicated helpers so the API can route them into the server profile-current store
+instead of the custom attributes table.
+
+```swift
+try await AppActor.shared.setAttributes([
+    "plan": "pro",
+    "favorite_category": "watch_faces"
+])
+
+try await AppActor.shared.collectProfileContext()
+```
+
+`collectProfileContext()` sends supported system context such as `$appVersion`,
+`$appBuild`, `$sdkVersion`, `$platform`, `$osVersion`, `$deviceModel`,
+`$bundleId`, `$locale`, `$timezone`, `$localeCountry`, `$storefrontCountry`, and
+`$attConsentStatus` when available. `$ipCountry` is server/proxy-derived; the iOS
+SDK does not perform IP geolocation.
+
+AppActor does not collect IDFV by default. If you intentionally need device ID
+collection, call `collectDeviceIdentifiers()`, which includes the same profile
+context and may also send `$idfv` on supported iOS devices. The host app is
+responsible for the matching App Store privacy disclosure when it opts in.
+
+Integration identifiers (`setAppsflyerID`, `setAdjustID`, custom integration
+IDs) and acquisition helpers (`updateAttribution`, `setCampaign`, etc.) stay on
+their integration/attribution endpoints; they are not written through
+`setAttributes(_:)`.
+
 ## Payment Restore & Retry Policy
 
 `configure()` starts the SDK, identifies the local AppActor user, fetches offerings,

@@ -14,6 +14,7 @@ protocol AppActorPaymentClientProtocol: Sendable {
     func patchAttributes(appUserId: String, request: AppActorSetAttributesRequest) async throws -> AppActorMutationResult
     func deleteAttribute(appUserId: String, key: String) async throws -> AppActorMutationResult
     func patchIntegrationIdentifiers(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest) async throws -> AppActorMutationResult
+    func deleteIntegrationIdentifier(appUserId: String, key: String) async throws -> AppActorMutationResult
     func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult
 
     // Experiments
@@ -510,6 +511,19 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             method: "PATCH",
             path: "/v1/payment/users/\(encodedId)/integration-identifiers",
             body: request
+        )
+    }
+
+    func deleteIntegrationIdentifier(
+        appUserId: String,
+        key: String
+    ) async throws -> AppActorMutationResult {
+        let encodedId = encodedPathSegment(appUserId)
+        let encodedKey = encodedPathSegment(key)
+        return try await performMutation(
+            method: "DELETE",
+            path: "/v1/payment/users/\(encodedId)/integration-identifiers/\(encodedKey)",
+            body: Optional<AppActorSetIntegrationIdentifiersRequest>.none
         )
     }
 

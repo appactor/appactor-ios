@@ -366,6 +366,10 @@ enum AppActorAttributeKey {
     static let sdkVersion = "$sdkVersion"
     static let appVersion = "$appVersion"
     static let appBuild = "$appBuild"
+    static let storefrontCountry = "$storefrontCountry"
+    static let ipCountry = "$ipCountry"
+    static let localeCountry = "$localeCountry"
+    static let attConsentStatus = "$attConsentStatus"
     private static let allowedCustomCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-")
 
     static func validateCustom(_ key: String) throws {
@@ -385,6 +389,9 @@ enum AppActorAttributeKey {
         guard !key.lowercased().hasPrefix("appactor.") else {
             throw AppActorError.validationError("Custom attribute key '\(key)' must not start with 'appactor.'")
         }
+        guard !key.lowercased().hasPrefix("integration.") else {
+            throw AppActorError.validationError("Custom attribute key '\(key)' must not start with 'integration.'. Use setIntegrationIdentifier() instead.")
+        }
     }
 
     static func validateReservedOrCustom(_ key: String) throws {
@@ -398,7 +405,8 @@ enum AppActorAttributeKey {
     static func validateReserved(_ key: String) throws {
         switch key {
         case email, displayName, phoneNumber, apnsToken, idfv,
-            bundleId, locale, timezone, platform, deviceModel, osVersion, sdkVersion, appVersion, appBuild:
+            bundleId, locale, timezone, platform, deviceModel, osVersion, sdkVersion, appVersion, appBuild,
+            storefrontCountry, ipCountry, localeCountry, attConsentStatus:
             return
         default:
             throw AppActorError.validationError("Unknown reserved attribute key '\(key)'")

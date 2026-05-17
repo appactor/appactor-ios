@@ -105,7 +105,7 @@ actor AppActorASAManager {
         }
 
         if options.debugMode {
-            Log.attribution.debug("Got attribution token (\(token.prefix(20))...)")
+            Log.attribution.debug("Got attribution token.")
         }
 
         // 2. Require only a local app user ID under the RC-style identity model.
@@ -152,8 +152,11 @@ actor AppActorASAManager {
             asaAttributionResponse: appleAttributionResponse
         )
 
-        // Log the request payload for debugging
-        Log.attribution.info("→ POST /v1/asa/attribution | userId: \(request.userId), token: \(request.attributionToken.prefix(20))..., osVersion: \(request.osVersion ?? "n/a"), appVersion: \(request.appVersion ?? "n/a"), libVersion: \(request.libVersion), firstInstallOnDevice: \(request.firstInstallOnDevice), firstInstallOnAccount: \(request.firstInstallOnAccount), installDate: \(request.installDate ?? "n/a"), hasAppleResponse: \(request.asaAttributionResponse != nil)")
+        if options.debugMode {
+            let firstInstallOnDevice = request.firstInstallOnDevice.map(String.init(describing:)) ?? "n/a"
+            let firstInstallOnAccount = request.firstInstallOnAccount.map(String.init(describing:)) ?? "n/a"
+            Log.attribution.debug("→ POST /v1/asa/attribution | tokenPresent: true, osVersion: \(request.osVersion ?? "n/a"), appVersion: \(request.appVersion ?? "n/a"), libVersion: \(request.libVersion ?? "n/a"), firstInstallOnDevice: \(firstInstallOnDevice), firstInstallOnAccount: \(firstInstallOnAccount), installDate: \(request.installDate ?? "n/a"), hasAppleResponse: \(request.asaAttributionResponse != nil)")
+        }
 
         // 5. POST with retry for transient failures
         var lastRetryAfter: TimeInterval? = nil

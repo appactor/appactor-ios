@@ -105,10 +105,16 @@ final class CustomerAttributesTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("appactor.plan", value: "bad")) { error in
             XCTAssertEqual((error as? AppActorError)?.kind, .validation)
         }
+        await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("integration.adjust_id", value: "bad")) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
         await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("bad key", value: "bad")) { error in
             XCTAssertEqual((error as? AppActorError)?.kind, .validation)
         }
         await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("bad/key", value: "bad")) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
+        await XCTAssertThrowsErrorAsync(try await appactor.setAttributes([AppActorAttributeKey.appVersion: "1.2.3"])) { error in
             XCTAssertEqual((error as? AppActorError)?.kind, .validation)
         }
     }
@@ -131,7 +137,21 @@ final class CustomerAttributesTests: XCTestCase {
         }
     }
 
-    func testCollectDeviceIdentifiersSendsSystemAttributes() async throws {
+    func testCollectProfileContextSendsServerRoutedSystemAttributesWithoutIdfv() async throws {
+        try await appactor.collectProfileContext()
+
+        let attributes = try XCTUnwrap(client.patchAttributesCalls.last?.request.attributes)
+        XCTAssertEqual(attributes[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))
+        XCTAssertEqual(attributes[AppActorAttributeKey.platform], .string("macos"))
+        XCTAssertNotNil(attributes[AppActorAttributeKey.locale])
+        XCTAssertNotNil(attributes[AppActorAttributeKey.timezone])
+        XCTAssertNotNil(attributes[AppActorAttributeKey.osVersion])
+        XCTAssertNotNil(attributes[AppActorAttributeKey.deviceModel])
+        XCTAssertNil(attributes[AppActorAttributeKey.idfv])
+        XCTAssertTrue(attributes.keys.allSatisfy { $0.hasPrefix("$") })
+    }
+
+    func testCollectDeviceIdentifiersUsesProfileCurrentSystemRoute() async throws {
         try await appactor.collectDeviceIdentifiers()
 
         let attributes = try XCTUnwrap(client.patchAttributesCalls.last?.request.attributes)
@@ -139,6 +159,8 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(attributes[AppActorAttributeKey.platform], .string("macos"))
         XCTAssertNotNil(attributes[AppActorAttributeKey.locale])
         XCTAssertNotNil(attributes[AppActorAttributeKey.timezone])
+        XCTAssertTrue(client.patchIntegrationIdentifiersCalls.isEmpty)
+        XCTAssertTrue(client.patchAttributionCalls.isEmpty)
     }
 
     func testQueueCoalescesTransientFailuresAndFlushesLatestValues() async throws {
@@ -161,6 +183,33 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertTrue(pending.isEmpty)
         XCTAssertEqual(client.patchAttributesCalls.last?.request.attributes["plan"], .string("pro"))
         XCTAssertEqual(client.deleteAttributeCalls.last?.key, "legacy")
+    }
+
+    func testOfflineQueuePreservesDateBoolAndListAttributeValues() async throws {
+        let offline = AppActorError.networkError(URLError(.notConnectedToInternet))
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        client.patchAttributesHandler = { _, _ in throw offline }
+
+        try await appactor.setAttributes([
+            "created_at": .date(createdAt),
+            "subscriber": .bool(true),
+            "tags": .array([.string("ios"), .string("pro")]),
+        ])
+
+        let appUserId = try XCTUnwrap(storage.currentAppUserId)
+        var pending = try XCTUnwrap(appactor.customerAttributesManager.pendingBucket(appUserId: appUserId))
+        XCTAssertEqual(pending.attributes["created_at"], .date(createdAt))
+        XCTAssertEqual(pending.attributes["subscriber"], .bool(true))
+        XCTAssertEqual(pending.attributes["tags"], .array([.string("ios"), .string("pro")]))
+
+        client.patchAttributesHandler = nil
+        try await appactor.flushPendingCustomerAttributeWritesForCurrentUser()
+
+        pending = appactor.customerAttributesManager.pendingBucket(appUserId: appUserId) ?? .init()
+        XCTAssertTrue(pending.isEmpty)
+        XCTAssertEqual(client.patchAttributesCalls.last?.request.attributes["created_at"], .date(createdAt))
+        XCTAssertEqual(client.patchAttributesCalls.last?.request.attributes["subscriber"], .bool(true))
+        XCTAssertEqual(client.patchAttributesCalls.last?.request.attributes["tags"], .array([.string("ios"), .string("pro")]))
     }
 
     func testFlushPreservesConcurrentAttributeMutationForSameKey() async throws {
@@ -234,6 +283,17 @@ final class CustomerAttributesTests: XCTestCase {
         )
         XCTAssertEqual(client.patchAttributionCalls.last?.request.attribution.network, "apple_search_ads")
         XCTAssertEqual(client.patchAttributionCalls.last?.request.attribution.metadata["source_detail"], .string("exact"))
+    }
+
+    func testNilIntegrationIdentifierClearsExistingIdentifier() async throws {
+        try await appactor.setIntegrationIdentifier("firebase_app_instance_id", value: "fid_123")
+        try await appactor.setIntegrationIdentifier("firebase_app_instance_id", value: nil)
+
+        XCTAssertEqual(
+            client.patchIntegrationIdentifiersCalls.last?.request.integrationIdentifiers["firebase_app_instance_id"],
+            "fid_123"
+        )
+        XCTAssertEqual(client.deleteIntegrationIdentifierCalls.map(\.key), ["firebase_app_instance_id"])
     }
 
 	func testIntegrationIdentifierFlushBatchesToBackendRequestLimit() async throws {

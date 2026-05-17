@@ -19,6 +19,7 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
     var patchAttributesHandler: ((String, AppActorSetAttributesRequest) async throws -> AppActorMutationResult)?
     var deleteAttributeHandler: ((String, String) async throws -> AppActorMutationResult)?
     var patchIntegrationIdentifiersHandler: ((String, AppActorSetIntegrationIdentifiersRequest) async throws -> AppActorMutationResult)?
+    var deleteIntegrationIdentifierHandler: ((String, String) async throws -> AppActorMutationResult)?
     var patchAttributionHandler: ((String, AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult)?
     var getRemoteConfigsHandler: ((String?, String?, String?, String?) async throws -> AppActorRemoteConfigFetchResult)?
     var postExperimentAssignmentHandler: ((String, String, String?, String?) async throws -> AppActorExperimentFetchResult)?
@@ -59,6 +60,11 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
     private var _patchIntegrationIdentifiersCalls: [(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest)] = []
     var patchIntegrationIdentifiersCalls: [(appUserId: String, request: AppActorSetIntegrationIdentifiersRequest)] {
         queue.sync { _patchIntegrationIdentifiersCalls }
+    }
+
+    private var _deleteIntegrationIdentifierCalls: [(appUserId: String, key: String)] = []
+    var deleteIntegrationIdentifierCalls: [(appUserId: String, key: String)] {
+        queue.sync { _deleteIntegrationIdentifierCalls }
     }
 
     private var _patchAttributionCalls: [(appUserId: String, request: AppActorUpdateAttributionRequest)] = []
@@ -178,6 +184,14 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
             return try await handler(appUserId, request)
         }
         return AppActorMutationResult(requestId: "req_mock_integration_identifiers")
+    }
+
+    func deleteIntegrationIdentifier(appUserId: String, key: String) async throws -> AppActorMutationResult {
+        queue.sync { _deleteIntegrationIdentifierCalls.append((appUserId: appUserId, key: key)) }
+        if let handler = deleteIntegrationIdentifierHandler {
+            return try await handler(appUserId, key)
+        }
+        return AppActorMutationResult(requestId: "req_mock_integration_identifier_delete")
     }
 
     func patchAttribution(appUserId: String, request: AppActorUpdateAttributionRequest) async throws -> AppActorMutationResult {
