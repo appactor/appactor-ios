@@ -371,6 +371,26 @@ enum AppActorAttributeKey {
     static let localeCountry = "$localeCountry"
     static let attConsentStatus = "$attConsentStatus"
     private static let allowedCustomCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-")
+    private static let legacyProfileCurrentAliases: Set<String> = [
+        "appVersion",
+        "appBuild",
+        "sdkVersion",
+        "platform",
+        "platformFlavor",
+        "platformVersion",
+        "osVersion",
+        "deviceModel",
+        "bundleId",
+        "locale",
+        "timezone",
+        "storefrontCountry",
+        "ipCountry",
+        "localeCountry",
+        "attConsentStatus",
+        "deviceLocale",
+        "userCountry",
+        "userCountrySource",
+    ]
 
     static func validateCustom(_ key: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -391,6 +411,9 @@ enum AppActorAttributeKey {
         }
         guard !key.lowercased().hasPrefix("integration.") else {
             throw AppActorError.validationError("Custom attribute key '\(key)' must not start with 'integration.'. Use setIntegrationIdentifier() instead.")
+        }
+        guard !legacyProfileCurrentAliases.contains(key) else {
+            throw AppActorError.validationError("Custom attribute key '\(key)' is reserved for profile context. Use collectProfileContext() or the reserved '$' helper key instead.")
         }
     }
 

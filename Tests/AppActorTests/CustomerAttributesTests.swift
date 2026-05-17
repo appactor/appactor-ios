@@ -108,6 +108,15 @@ final class CustomerAttributesTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("integration.adjust_id", value: "bad")) { error in
             XCTAssertEqual((error as? AppActorError)?.kind, .validation)
         }
+        await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("appVersion", value: "bad")) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
+        await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("platform", value: "bad")) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
+        await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("userCountry", value: "bad")) { error in
+            XCTAssertEqual((error as? AppActorError)?.kind, .validation)
+        }
         await XCTAssertThrowsErrorAsync(try await appactor.setAttribute("bad key", value: "bad")) { error in
             XCTAssertEqual((error as? AppActorError)?.kind, .validation)
         }
