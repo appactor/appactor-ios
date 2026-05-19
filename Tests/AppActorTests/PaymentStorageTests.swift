@@ -116,12 +116,14 @@ final class PaymentStorageTests: XCTestCase {
     func testClearAllKeepsLastRequestId() {
         storage.setAppUserId("user")
         storage.set("legacy-server", forKey: AppActorPaymentStorageKey.legacyServerUserId)
+        storage.set("{}", forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
         storage.setLastRequestId("req_xyz")
 
         storage.clearAll()
 
         XCTAssertNil(storage.currentAppUserId)
         XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.legacyServerUserId))
+        XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts))
         XCTAssertEqual(storage.lastRequestId, "req_xyz", "lastRequestId should survive clearAll")
     }
 }

@@ -151,6 +151,7 @@ final class PaymentProcessorTests: XCTestCase {
         let request = AppActorPaymentProcessor.makeRequest(from: item)
 
         XCTAssertEqual(request.clientPurchaseAttemptStartedAt, "2023-11-14T22:13:20.000Z")
+        XCTAssertEqual(request.clientObservedAt, "2023-11-14T22:13:20.000Z")
         XCTAssertEqual(request.clientDeliverySource, "queue_retry")
         XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-retry")
     }

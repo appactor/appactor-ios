@@ -564,6 +564,7 @@ extension AppActor {
             storage.remove(forKey: AppActorPaymentStorageKey.asaInstallDate)
             storage.clearAsaTokenOnlyAttempts()
             storage.remove(forKey: AppActorPaymentStorageKey.customerAttributesQueue)
+            storage.remove(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
             storage.clearLegacyIdentityState()
         }
 

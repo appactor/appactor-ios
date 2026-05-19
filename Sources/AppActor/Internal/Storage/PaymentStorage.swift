@@ -15,6 +15,7 @@ enum AppActorPaymentStorageKey {
     static let appUserId = "appactor_billing_app_user_id"
     static let lastRequestId = "appactor_billing_last_request_id"
     static let customerAttributesQueue = "appactor_customer_attributes_queue_v1"
+    static let pendingPurchaseContexts = "appactor_pending_purchase_contexts_v1"
 
     // App Account Token (for StoreKit purchase → Apple transaction binding)
     static let appAccountToken = "appactor_app_account_token"
@@ -130,6 +131,7 @@ extension AppActorPaymentStorage {
     func clearAll() {
         remove(forKey: AppActorPaymentStorageKey.appUserId)
         remove(forKey: AppActorPaymentStorageKey.appAccountToken)
+        remove(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
         clearLegacyIdentityState()
         // Note: lastRequestId is kept for debugging.
     }

@@ -111,10 +111,12 @@ extension AppActor {
         let foregroundPurchase = await AppActorForegroundPurchaseScope.begin(
             watcher: transactionWatcher,
             productId: product.id,
+            appUserId: purchaseAppUserId,
             clientPurchaseContext: clientPurchaseContext
         )
-        defer {
-            foregroundPurchase.end(
+
+        func endForegroundPurchase() async {
+            await foregroundPurchase.end(
                 handledTransactionId: handledForegroundTransactionId,
                 preserveContextForPending: preserveForegroundContextForPending
             )
@@ -122,121 +124,132 @@ extension AppActor {
 
         // Execute the StoreKit purchase
         let result: Product.PurchaseResult
+        let purchaseResult: AppActorPurchaseResult
         do {
             result = try await product.purchase(options: options)
         } catch {
             if let skError = error as? StoreKitError, case .userCancelled = skError {
+                await endForegroundPurchase()
                 return .cancelled
             }
+            await endForegroundPurchase()
             throw AppActorError.fromPurchaseError(error)
         }
 
-        switch result {
-        case .success(let verificationResult):
-            switch verificationResult {
-            case .verified(let transaction):
-                handledForegroundTransactionId = String(transaction.id)
-                let appTransaction = await storeKitSilentSyncFetcher?.appTransaction()
+        do {
+            switch result {
+            case .success(let verificationResult):
+                switch verificationResult {
+                case .verified(let transaction):
+                    handledForegroundTransactionId = String(transaction.id)
+                    let appTransaction = await storeKitSilentSyncFetcher?.appTransaction()
 
-                // ASA purchase event tracking is handled centrally by
-                // TransactionWatcher via Transaction.updates — no manual
-                // enqueue needed here. Watcher start is kicked off in
-                // configureInternal() before bootstrap, so it will
-                // be listening well before any user-initiated purchase
-                // can complete (StoreKit dialog requires human interaction).
+                    // ASA purchase event tracking is handled centrally by
+                    // TransactionWatcher via Transaction.updates — no manual
+                    // enqueue needed here. Watcher start is kicked off in
+                    // configureInternal() before bootstrap, so it will
+                    // be listening well before any user-initiated purchase
+                    // can complete (StoreKit dialog requires human interaction).
 
-                let jws = verificationResult.jwsRepresentation
-                let item = AppActorPaymentProcessor.makePaymentQueueItem(
-                    from: transaction,
-                    jws: jws,
-                    source: .purchase,
-                    appUserId: purchaseAppUserId,
-                    signedAppTransactionInfo: appTransaction?.jwsRepresentation,
-                    offeringId: offeringId,
-                    packageId: packageId,
-                    clientPurchaseContext: clientPurchaseContext
-                )
-
-                let postResult = await processor.enqueueAndAwait(
-                    item: item,
-                    transaction: transaction
-                )
-
-                switch postResult {
-                case .success(let customerInfo):
-                    guard let customerInfo else {
-                        throw AppActorError.clientError(
-                            kind: .receiptPostFailed,
-                            code: "NO_CUSTOMER_INFO",
-                            message: "Server returned ok but no customer info"
-                        )
-                    }
-                    // Update @Published customerInfo immediately so UI reflects
-                    // premium state as soon as purchase() returns.
-                    await setCustomerInfoIfIdentityMatches(customerInfo, expectedAppUserId: purchaseAppUserId)
-                    return .success(
-                        customerInfo: customerInfo,
-                        purchaseInfo: purchaseInfo(for: transaction)
+                    let jws = verificationResult.jwsRepresentation
+                    let item = AppActorPaymentProcessor.makePaymentQueueItem(
+                        from: transaction,
+                        jws: jws,
+                        source: .purchase,
+                        appUserId: purchaseAppUserId,
+                        signedAppTransactionInfo: appTransaction?.jwsRepresentation,
+                        offeringId: offeringId,
+                        packageId: packageId,
+                        clientPurchaseContext: clientPurchaseContext
                     )
-                case .alreadyPosted:
-                    // Another code path already finished the POST and we no longer
-                    // have an in-memory terminal result for this key. Re-fetch the
-                    // latest customer snapshot before surfacing a result.
-                    // Fall back to cached customerInfo if the network call fails.
-                    let info = (try? await getCustomerInfo()) ?? self.customerInfo
-                    await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: purchaseAppUserId)
-                    return .success(
-                        customerInfo: info,
-                        purchaseInfo: purchaseInfo(for: transaction)
+
+                    let postResult = await processor.enqueueAndAwait(
+                        item: item,
+                        transaction: transaction
                     )
-                case .permanentlyRejected(let errorCode, let message, let requestId):
-                    throw AppActorError.clientError(
-                        kind: .receiptPostFailed,
-                        code: errorCode,
-                        message: message ?? "Server permanently rejected the receipt",
-                        requestId: requestId
-                    )
-                case .queued:
-                    // Server didn't confirm in time — compute offline entitlements
-                    // from StoreKit transactions. Receipt stays queued for background retry.
-                    if let offlineInfo = await queuedPurchaseOfflineCustomerInfo(appUserId: purchaseAppUserId) {
-                        await setCustomerInfoIfIdentityMatches(offlineInfo, expectedAppUserId: purchaseAppUserId)
-                        return .success(
-                            customerInfo: offlineInfo,
+
+                    switch postResult {
+                    case .success(let customerInfo):
+                        guard let customerInfo else {
+                            throw AppActorError.clientError(
+                                kind: .receiptPostFailed,
+                                code: "NO_CUSTOMER_INFO",
+                                message: "Server returned ok but no customer info"
+                            )
+                        }
+                        // Update @Published customerInfo immediately so UI reflects
+                        // premium state as soon as purchase() returns.
+                        await setCustomerInfoIfIdentityMatches(customerInfo, expectedAppUserId: purchaseAppUserId)
+                        purchaseResult = .success(
+                            customerInfo: customerInfo,
                             purchaseInfo: purchaseInfo(for: transaction)
                         )
+                    case .alreadyPosted:
+                        // Another code path already finished the POST and we no longer
+                        // have an in-memory terminal result for this key. Re-fetch the
+                        // latest customer snapshot before surfacing a result.
+                        // Fall back to cached customerInfo if the network call fails.
+                        let info = (try? await getCustomerInfo()) ?? self.customerInfo
+                        await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: purchaseAppUserId)
+                        purchaseResult = .success(
+                            customerInfo: info,
+                            purchaseInfo: purchaseInfo(for: transaction)
+                        )
+                    case .permanentlyRejected(let errorCode, let message, let requestId):
+                        throw AppActorError.clientError(
+                            kind: .receiptPostFailed,
+                            code: errorCode,
+                            message: message ?? "Server permanently rejected the receipt",
+                            requestId: requestId
+                        )
+                    case .queued:
+                        // Server didn't confirm in time — compute offline entitlements
+                        // from StoreKit transactions. Receipt stays queued for background retry.
+                        if let offlineInfo = await queuedPurchaseOfflineCustomerInfo(appUserId: purchaseAppUserId) {
+                            await setCustomerInfoIfIdentityMatches(offlineInfo, expectedAppUserId: purchaseAppUserId)
+                            purchaseResult = .success(
+                                customerInfo: offlineInfo,
+                                purchaseInfo: purchaseInfo(for: transaction)
+                            )
+                        } else {
+                            // No offline entitlements available — fall through to error
+                            throw AppActorError.clientError(
+                                kind: .receiptQueuedForRetry,
+                                code: "RECEIPT_QUEUED",
+                                message: "Purchase succeeded but server did not confirm in time. Receipt is queued for automatic retry."
+                            )
+                        }
                     }
-                    // No offline entitlements available — fall through to error
+
+                case .unverified(_, let error):
+                    Log.receipts.error("Purchase verification failed: \(error.localizedDescription)")
                     throw AppActorError.clientError(
-                        kind: .receiptQueuedForRetry,
-                        code: "RECEIPT_QUEUED",
-                        message: "Purchase succeeded but server did not confirm in time. Receipt is queued for automatic retry."
+                        kind: .receiptPostFailed,
+                        code: "VERIFICATION_FAILED",
+                        message: "Transaction verification failed: \(error.localizedDescription)",
+                        underlying: error
                     )
                 }
 
-            case .unverified(_, let error):
-                Log.receipts.error("Purchase verification failed: \(error.localizedDescription)")
-                throw AppActorError.clientError(
-                    kind: .receiptPostFailed,
-                    code: "VERIFICATION_FAILED",
-                    message: "Transaction verification failed: \(error.localizedDescription)",
-                    underlying: error
-                )
+            case .userCancelled:
+                purchaseResult = .cancelled
+
+            case .pending:
+                preserveForegroundContextForPending = true
+                paymentContext.pendingProductCounts[product.id, default: 0] += 1
+                Log.receipts.debug("Purchase deferred (pending): \(product.id)")
+                purchaseResult = .pending
+
+            @unknown default:
+                Log.receipts.warn("Unknown PurchaseResult case for product \(product.id) — treating as pending")
+                purchaseResult = .pending
             }
-
-        case .userCancelled:
-            return .cancelled
-
-        case .pending:
-            preserveForegroundContextForPending = true
-            paymentContext.pendingProductCounts[product.id, default: 0] += 1
-            Log.receipts.debug("Purchase deferred (pending): \(product.id)")
-            return .pending
-
-        @unknown default:
-            Log.receipts.warn("Unknown PurchaseResult case for product \(product.id) — treating as pending")
-            return .pending
+        } catch {
+            await endForegroundPurchase()
+            throw error
         }
+        await endForegroundPurchase()
+        return purchaseResult
     }
 
     private func purchaseInfo(for transaction: Transaction) -> AppActorPurchaseInfo {
