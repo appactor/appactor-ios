@@ -188,10 +188,10 @@ actor AppActorTransactionWatcher {
         }
         foregroundPurchaseContexts.removeValue(forKey: token)
         let capturedAppUserId = foregroundPurchaseAppUserIds.removeValue(forKey: token) ?? appUserId
-        if preserveContextForPending, handledTransactionId == nil, let context {
+        let buffered = foregroundPurchaseBuffer.removeValue(forKey: token) ?? []
+        if preserveContextForPending, handledTransactionId == nil, buffered.isEmpty, let context {
             pendingPurchaseContexts.append(context, productId: productId, appUserId: capturedAppUserId)
         }
-        let buffered = foregroundPurchaseBuffer.removeValue(forKey: token) ?? []
         for item in buffered {
             let source: AppActorPaymentQueueItem.Source =
                 handledTransactionId == String(item.transaction.id) ? .purchase : item.source
@@ -259,8 +259,10 @@ actor AppActorTransactionWatcher {
         clientPurchaseContext: AppActorClientPurchaseContext? = nil
     ) async {
         let observedContext = clientPurchaseContext ?? AppActorClientPurchaseContext.forQueueSource(source)
-        if source == .transactionUpdates, let token = foregroundPurchaseProductTokens[transaction.productID] {
-            let capturedUserId = storage.ensureAppUserId()
+        if source == .transactionUpdates,
+           transaction.originalID == transaction.id,
+           let token = foregroundPurchaseProductTokens[transaction.productID] {
+            let capturedUserId = foregroundPurchaseAppUserIds[token] ?? storage.ensureAppUserId()
             let foregroundContext = (foregroundPurchaseContexts[token] ?? observedContext)
                 .replacingDeliverySource(.transactionUpdates, observedAt: Date())
             let buffered = BufferedTransaction(
