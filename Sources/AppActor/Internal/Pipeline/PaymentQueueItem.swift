@@ -29,11 +29,11 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// Optional AppTransaction JWS used to enrich receipt posts with app-level metadata.
     var signedAppTransactionInfo: String?
 
-    /// The app user ID currently associated with this receipt for server posting.
+    /// The app user ID associated with this receipt for server posting.
     ///
-    /// This usually matches the user at the time the transaction was first observed,
-    /// but it may migrate to a newer current identity if the same unfinished
-    /// transaction is re-enqueued after an anon/login transition or app relaunch.
+    /// Purchase-originated items preserve the user captured at purchase time across
+    /// later sweep/current-identity re-enqueues. Background-only items may still
+    /// migrate to the current identity to avoid stale-user queue gates after relaunch.
     var appUserId: String
 
     /// The product identifier.
@@ -182,6 +182,7 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         let previousSources = sources
         let existingIntent = Self.resolvedSourceIntent(stored: sourceIntent, sources: previousSources)
         let incomingIntent = Self.resolvedSourceIntent(stored: incoming.sourceIntent, sources: incoming.sources)
+        let shouldAdoptIncomingAppUserId = shouldAdoptAppUserId(from: incoming)
         sources = sources.union(incoming.sources)
         sourceIntent = incomingIntent.priority > existingIntent.priority ? incomingIntent : existingIntent
         lastSeenAt = incoming.lastSeenAt
@@ -193,10 +194,7 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
             clientPurchaseContext = incoming.clientPurchaseContext
         }
 
-        // If the same unfinished transaction is observed again under a newer app user,
-        // adopt that identity so relaunch recovery doesn't strand the queued receipt
-        // behind an identity gate for a stale user ID.
-        if appUserId != incoming.appUserId, phase != .posting, phase != .needsFinish {
+        if shouldAdoptIncomingAppUserId {
             appUserId = incoming.appUserId
             nextRetryAt = min(nextRetryAt, incoming.nextRetryAt)
             claimedAt = nil
@@ -215,6 +213,34 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         guard let existing = clientPurchaseContext else { return true }
         if incoming.hasPurchaseAttempt && !existing.hasPurchaseAttempt { return true }
         if incoming.clientDeliverySource == .purchaseFlow && existing.clientDeliverySource != .purchaseFlow { return true }
+        return false
+    }
+
+    private func shouldAdoptAppUserId(from incoming: AppActorPaymentQueueItem) -> Bool {
+        guard appUserId != incoming.appUserId, phase != .posting, phase != .needsFinish else {
+            return false
+        }
+
+        let existingHasPurchaseBinding = Self.hasCapturedPurchaseBinding(
+            context: clientPurchaseContext,
+            offeringId: offeringId,
+            packageId: packageId
+        )
+
+        // Preserve the original purchase-user binding once a purchase flow has
+        // captured it. Otherwise, allow newer observations to refresh stale
+        // background identities so the queue can still make progress after login.
+        return !existingHasPurchaseBinding
+    }
+
+    private static func hasCapturedPurchaseBinding(
+        context: AppActorClientPurchaseContext?,
+        offeringId: String?,
+        packageId: String?
+    ) -> Bool {
+        if context?.hasPurchaseAttempt == true { return true }
+        if context?.clientDeliverySource == .purchaseFlow { return true }
+        if offeringId != nil || packageId != nil { return true }
         return false
     }
 }

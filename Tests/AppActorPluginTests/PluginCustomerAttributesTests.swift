@@ -147,6 +147,24 @@ final class PluginCustomerAttributesTests: XCTestCase {
         XCTAssertEqual(client.attributionCalls.last?.1.attribution.metadata["keyword"], .string("swift"))
     }
 
+    func testSetIntegrationIdentifierRequiresValueFieldButAllowsNullClear() async throws {
+        let missingValue = await AppActorPlugin.shared.execute(
+            method: "set_integration_identifier",
+            withJson: #"{"key":"firebase_app_instance_id"}"#
+        )
+        let missingEnvelope = try parseEnvelope(missingValue)
+
+        XCTAssertNotEqual(missingEnvelope["success"] as? Bool, true)
+
+        let explicitNull = await AppActorPlugin.shared.execute(
+            method: "set_integration_identifier",
+            withJson: #"{"key":"firebase_app_instance_id","value":null}"#
+        )
+        let nullEnvelope = try parseEnvelope(explicitNull)
+
+        XCTAssertEqual(nullEnvelope["success"] as? Bool, true)
+    }
+
     func testCollectProfileContextRequestRoutesToNativeSDK() async throws {
         let json = await AppActorPlugin.shared.execute(
             method: "collect_profile_context",

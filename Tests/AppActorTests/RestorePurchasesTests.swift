@@ -259,6 +259,16 @@ final class RestorePurchasesTests: XCTestCase {
         XCTAssertEqual(mockClient.getCustomerCalls.count, 1)
     }
 
+    func testRestoreBulkPartitionHonorsBackendTransactionLimit() {
+        let entries = Array(0..<101)
+
+        let partition = AppActor.restoreBulkPartition(entries)
+
+        XCTAssertEqual(partition.bulk.count, 100)
+        XCTAssertEqual(partition.overflow, [100])
+        XCTAssertLessThanOrEqual(partition.bulk.count, AppActor.restoreBulkTransactionLimit)
+    }
+
     // MARK: - Published State Update
 
     func testRestorePurchasesUpdatesPublishedCustomerInfo() async throws {

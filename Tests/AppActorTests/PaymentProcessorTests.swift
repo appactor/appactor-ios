@@ -182,6 +182,66 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-merge")
     }
 
+    func testQueueMergePreservesCapturedPurchaseAppUserIdWhenSweepReenqueuesUnderNewUser() {
+        let purchase = makeItem(
+            appUserId: "purchase_user",
+            source: .purchase,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientPurchaseAttemptStartedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                clientObservedAt: Date(timeIntervalSince1970: 1_700_000_001),
+                clientDeliverySource: .purchaseFlow,
+                clientPurchaseAttemptId: "attempt-ios-user-binding"
+            )
+        )
+        store.upsert(purchase)
+
+        var sweep = makeItem(
+            appUserId: "current_user",
+            source: .sweep,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientObservedAt: Date(timeIntervalSince1970: 1_700_000_010),
+                clientDeliverySource: .unfinished
+            )
+        )
+        sweep.jws = "jws_from_sweep"
+        store.upsert(sweep)
+
+        let merged = store.allItems().first!
+        XCTAssertEqual(merged.appUserId, "purchase_user")
+        XCTAssertEqual(merged.jws, "jws_from_sweep")
+        XCTAssertTrue(merged.sources.contains(.sweep))
+
+        let request = AppActorPaymentProcessor.makeRequest(from: merged)
+        XCTAssertEqual(request.appUserId, "purchase_user")
+        XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-user-binding")
+    }
+
+    func testQueueMergeRefreshesStaleBackgroundAppUserIdWhenNoPurchaseBindingExists() {
+        let background = makeItem(
+            appUserId: "stale_user",
+            source: .transactionUpdates,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientObservedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                clientDeliverySource: .transactionUpdates
+            )
+        )
+        store.upsert(background)
+
+        let sweep = makeItem(
+            appUserId: "current_user",
+            source: .sweep,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientObservedAt: Date(timeIntervalSince1970: 1_700_000_010),
+                clientDeliverySource: .unfinished
+            )
+        )
+        store.upsert(sweep)
+
+        let request = AppActorPaymentProcessor.makeRequest(from: store.allItems().first!)
+        XCTAssertEqual(request.appUserId, "current_user")
+        XCTAssertEqual(request.clientDeliverySource, "transaction_updates")
+    }
+
     func testSweepIntentUpgradesToPurchaseWhenPurchaseSourceArrives() {
         let item1 = makeItem(source: .sweep, sourceIntent: nil)
         store.upsert(item1)

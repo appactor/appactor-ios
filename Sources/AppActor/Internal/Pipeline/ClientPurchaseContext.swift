@@ -144,13 +144,28 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
         persist()
     }
 
-    mutating func consume(productId: String, observedAt: Date = Date()) -> AppActorPendingPurchaseContextMatch? {
+    mutating func consume(
+        productId: String,
+        observedAt: Date = Date(),
+        deliverySource: AppActorClientDeliverySource = .transactionUpdates,
+        transactionPurchaseDate: Date? = nil,
+        transactionReason: AppActorTransactionReason = .unknown
+    ) -> AppActorPendingPurchaseContextMatch? {
         pruneExpired(now: observedAt)
         guard var entries = contextsByProductId[productId], !entries.isEmpty else {
             persist()
             return nil
         }
-        let entry = entries.removeFirst()
+        let entry = entries[0]
+        guard Self.shouldConsume(
+            entry: entry,
+            transactionPurchaseDate: transactionPurchaseDate,
+            transactionReason: transactionReason
+        ) else {
+            persist()
+            return nil
+        }
+        entries.removeFirst()
         if entries.isEmpty {
             contextsByProductId.removeValue(forKey: productId)
         } else {
@@ -159,7 +174,7 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
         persist()
         return AppActorPendingPurchaseContextMatch(
             appUserId: entry.appUserId,
-            context: entry.context.replacingDeliverySource(.transactionUpdates, observedAt: observedAt)
+            context: entry.context.replacingDeliverySource(deliverySource, observedAt: observedAt)
         )
     }
 
@@ -188,6 +203,23 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
            let raw = String(data: data, encoding: .utf8) {
             storage.set(raw, forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
         }
+    }
+
+    private static func shouldConsume(
+        entry: StoredEntry,
+        transactionPurchaseDate: Date?,
+        transactionReason: AppActorTransactionReason
+    ) -> Bool {
+        if transactionReason == .renewal {
+            return false
+        }
+
+        guard let transactionPurchaseDate,
+              let attemptStartedAt = entry.context.clientPurchaseAttemptStartedAt else {
+            return true
+        }
+
+        return transactionPurchaseDate >= attemptStartedAt.addingTimeInterval(-60)
     }
 
     private static func load(from storage: any AppActorPaymentStorage) -> [String: [StoredEntry]] {

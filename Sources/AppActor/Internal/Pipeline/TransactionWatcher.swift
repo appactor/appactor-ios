@@ -259,9 +259,22 @@ actor AppActorTransactionWatcher {
         clientPurchaseContext: AppActorClientPurchaseContext? = nil
     ) async {
         let observedContext = clientPurchaseContext ?? AppActorClientPurchaseContext.forQueueSource(source)
-        if source == .transactionUpdates,
-           transaction.originalID == transaction.id,
-           let token = foregroundPurchaseProductTokens[transaction.productID] {
+        let jwsPayload = AppActorASATransactionSupport.decodeJWSPayload(jws)
+        let transactionReason = AppActorASATransactionSupport.resolveReason(
+            for: transaction,
+            jwsPayload: jwsPayload
+        )
+        if let token = foregroundPurchaseProductTokens[transaction.productID],
+           Self.shouldBufferForegroundTransaction(
+               source: source,
+               transactionProductId: transaction.productID,
+               transactionId: String(transaction.id),
+               originalTransactionId: String(transaction.originalID),
+               purchaseDate: transaction.purchaseDate,
+               transactionReason: transactionReason,
+               foregroundProductId: transaction.productID,
+               foregroundContext: foregroundPurchaseContexts[token]
+           ) {
             let capturedUserId = foregroundPurchaseAppUserIds[token] ?? storage.ensureAppUserId()
             let foregroundContext = (foregroundPurchaseContexts[token] ?? observedContext)
                 .replacingDeliverySource(.transactionUpdates, observedAt: Date())
@@ -277,7 +290,11 @@ actor AppActorTransactionWatcher {
             return
         }
 
-        let pendingMatch = pendingPurchaseContextMatch(for: transaction, source: source)
+        let pendingMatch = pendingPurchaseContextMatch(
+            for: transaction,
+            source: source,
+            transactionReason: transactionReason
+        )
         let effectiveContext = pendingMatch?.context ?? observedContext
         let capturedAppUserId = pendingMatch?.appUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -309,12 +326,48 @@ actor AppActorTransactionWatcher {
 
     private func pendingPurchaseContextMatch(
         for transaction: Transaction,
-        source: AppActorPaymentQueueItem.Source
+        source: AppActorPaymentQueueItem.Source,
+        transactionReason: AppActorTransactionReason
     ) -> AppActorPendingPurchaseContextMatch? {
-        guard source == .transactionUpdates, transaction.originalID == transaction.id else {
+        guard source == .transactionUpdates || source == .sweep else {
             return nil
         }
-        return pendingPurchaseContexts.consume(productId: transaction.productID, observedAt: Date())
+        return pendingPurchaseContexts.consume(
+            productId: transaction.productID,
+            observedAt: Date(),
+            deliverySource: source.defaultClientDeliverySource,
+            transactionPurchaseDate: transaction.purchaseDate,
+            transactionReason: transactionReason
+        )
+    }
+
+    static func shouldBufferForegroundTransaction(
+        source: AppActorPaymentQueueItem.Source,
+        transactionProductId: String,
+        transactionId: String,
+        originalTransactionId: String,
+        purchaseDate: Date,
+        transactionReason: AppActorTransactionReason,
+        foregroundProductId: String,
+        foregroundContext: AppActorClientPurchaseContext?
+    ) -> Bool {
+        guard source == .transactionUpdates,
+              transactionProductId == foregroundProductId else {
+            return false
+        }
+        if originalTransactionId == transactionId {
+            return true
+        }
+        if transactionReason == .renewal {
+            return false
+        }
+        if transactionReason == .purchase {
+            return true
+        }
+        guard let attemptStartedAt = foregroundContext?.clientPurchaseAttemptStartedAt else {
+            return false
+        }
+        return purchaseDate >= attemptStartedAt.addingTimeInterval(-60)
     }
 
     /// Enqueues a verified transaction with an explicit appUserId.

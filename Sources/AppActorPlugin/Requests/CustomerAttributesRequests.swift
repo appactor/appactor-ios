@@ -155,6 +155,15 @@ struct SetIntegrationIdentifierRequest: AppActorPluginRequest {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         key = try container.decodeIfPresent(String.self, forKey: .key)
             ?? container.decode(String.self, forKey: .type)
+        guard container.contains(.value) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.value,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "set_integration_identifier requires value; pass null to clear."
+                )
+            )
+        }
         value = try container.decodeIfPresent(String.self, forKey: .value)
     }
 

@@ -29,6 +29,8 @@ public final class AppActor: ObservableObject {
     /// instance state.
     public nonisolated static let shared = AppActor()
 
+    static let restoreBulkTransactionLimit = 100
+
     // MARK: - Published Properties (SwiftUI-friendly)
 
     /// The current customer info. Starts as `.empty`. Updated after each server sync.
@@ -126,7 +128,7 @@ public final class AppActor: ObservableObject {
 
     // MARK: - Restore & Sync Purchases
 
-    /// Restores purchases by sending all current transactions to the server in a single bulk request.
+    /// Restores purchases by sending current transactions to the server in a backend-sized bulk request.
     ///
     /// **Payment mode only.** Should only be called on explicit user action
     /// (e.g. a "Restore Purchases" button). Reads `Transaction.currentEntitlements` directly
@@ -199,12 +201,10 @@ public final class AppActor: ObservableObject {
             return info
         }
 
-        // Step 3: Build bulk restore request (max transactions per batch)
-        let maxBulkTransactions = 500
-        let toSend = Array(collected.prefix(maxBulkTransactions))
-        let overflow = collected.count > maxBulkTransactions ? Array(collected.suffix(from: maxBulkTransactions)) : []
+        // Step 3: Build bulk restore request within the backend API contract.
+        let (toSend, overflow) = Self.restoreBulkPartition(collected)
         if !overflow.isEmpty {
-            Log.sdk.warn("Restore: \(collected.count) transactions found, sending first 500 via bulk, remaining \(overflow.count) via single-receipt pipeline")
+            Log.sdk.warn("Restore: \(collected.count) transactions found, sending first \(Self.restoreBulkTransactionLimit) via bulk, remaining \(overflow.count) via single-receipt pipeline")
         }
         let items = toSend.map { entry in
             AppActorRestoreTransactionItem(
@@ -249,7 +249,12 @@ public final class AppActor: ObservableObject {
             // Step 6: Route overflow through single-receipt pipeline
             if !overflow.isEmpty {
                 for entry in overflow {
-                    await watcher.handleVerifiedTransaction(entry.transaction, jws: entry.jws, source: .restore)
+                    await watcher.handleVerifiedTransaction(
+                        entry.transaction,
+                        jws: entry.jws,
+                        source: .restore,
+                        clientPurchaseContext: restoreContext
+                    )
                 }
                 await processor.drainAll()
             }
@@ -297,6 +302,14 @@ public final class AppActor: ObservableObject {
             return result.customerInfo.withVerification(verification)
         }
         return try await customerManager.getCustomerInfo(appUserId: appUserId, forceRefresh: true)
+    }
+
+    static func restoreBulkPartition<T>(_ entries: [T]) -> (bulk: [T], overflow: [T]) {
+        let bulk = Array(entries.prefix(restoreBulkTransactionLimit))
+        let overflow = entries.count > restoreBulkTransactionLimit
+            ? Array(entries.suffix(from: restoreBulkTransactionLimit))
+            : []
+        return (bulk, overflow)
     }
 
     /// Drains the local receipt queue and refreshes customer info from the server.

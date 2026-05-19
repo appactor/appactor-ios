@@ -118,6 +118,69 @@ final class PipelineEdgeCaseTests: XCTestCase {
         XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts))
     }
 
+    func testPendingPurchaseContextBufferRestoresUnfinishedDeliverySourceAfterRelaunch() {
+        let storage = InMemoryPaymentStorage()
+        let startedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let completedAt = startedAt.addingTimeInterval(3_600)
+        let context = AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-ios-unfinished"
+        )
+        var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
+
+        firstBoot.append(context, productId: "com.test.yearly", appUserId: "user-pending", recordedAt: startedAt)
+
+        var secondBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
+        let resolved = secondBoot.consume(
+            productId: "com.test.yearly",
+            observedAt: completedAt,
+            deliverySource: .unfinished,
+            transactionPurchaseDate: completedAt,
+            transactionReason: .purchase
+        )
+
+        XCTAssertEqual(resolved?.appUserId, "user-pending")
+        XCTAssertEqual(resolved?.context.clientPurchaseAttemptStartedAt, startedAt)
+        XCTAssertEqual(resolved?.context.clientObservedAt, completedAt)
+        XCTAssertEqual(resolved?.context.clientDeliverySource, .unfinished)
+        XCTAssertEqual(resolved?.context.clientPurchaseAttemptId, "attempt-ios-unfinished")
+        XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts))
+    }
+
+    func testPendingPurchaseContextBufferDoesNotConsumeRenewal() {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let renewalAt = startedAt.addingTimeInterval(3_600)
+        let context = AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-ios-renewal"
+        )
+        var buffer = AppActorPendingPurchaseContextBuffer()
+
+        buffer.append(context, productId: "com.test.monthly")
+
+        let renewalMatch = buffer.consume(
+            productId: "com.test.monthly",
+            observedAt: renewalAt,
+            deliverySource: .transactionUpdates,
+            transactionPurchaseDate: renewalAt,
+            transactionReason: .renewal
+        )
+        let purchaseMatch = buffer.consume(
+            productId: "com.test.monthly",
+            observedAt: renewalAt,
+            deliverySource: .transactionUpdates,
+            transactionPurchaseDate: renewalAt,
+            transactionReason: .purchase
+        )
+
+        XCTAssertNil(renewalMatch)
+        XCTAssertEqual(purchaseMatch?.context.clientPurchaseAttemptId, "attempt-ios-renewal")
+    }
+
     func testPendingPurchaseContextBufferDropsExpiredPersistedAttempts() {
         let storage = InMemoryPaymentStorage()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -163,6 +226,52 @@ final class PipelineEdgeCaseTests: XCTestCase {
 
         // No crash, no assertion failure = success
         // (Full integration test would require real StoreKit transactions)
+    }
+
+    func testForegroundPurchaseBuffersUpgradeStylePurchaseUpdate() {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let context = AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-ios-upgrade"
+        )
+
+        let shouldBuffer = AppActorTransactionWatcher.shouldBufferForegroundTransaction(
+            source: .transactionUpdates,
+            transactionProductId: "com.test.yearly",
+            transactionId: "200",
+            originalTransactionId: "100",
+            purchaseDate: startedAt.addingTimeInterval(30),
+            transactionReason: .purchase,
+            foregroundProductId: "com.test.yearly",
+            foregroundContext: context
+        )
+
+        XCTAssertTrue(shouldBuffer)
+    }
+
+    func testForegroundPurchaseDoesNotBufferPassiveRenewalUpdate() {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let context = AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-ios-renewal-guard"
+        )
+
+        let shouldBuffer = AppActorTransactionWatcher.shouldBufferForegroundTransaction(
+            source: .transactionUpdates,
+            transactionProductId: "com.test.yearly",
+            transactionId: "200",
+            originalTransactionId: "100",
+            purchaseDate: startedAt.addingTimeInterval(30),
+            transactionReason: .renewal,
+            foregroundProductId: "com.test.yearly",
+            foregroundContext: context
+        )
+
+        XCTAssertFalse(shouldBuffer)
     }
 
     // MARK: - Fix #19: Identity change during drain
