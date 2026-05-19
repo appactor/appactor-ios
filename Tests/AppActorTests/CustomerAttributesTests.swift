@@ -410,6 +410,25 @@ final class CustomerAttributesTests: XCTestCase {
 		XCTAssertEqual(merged.metadata["source_detail"], .string("organic_social"))
 	}
 
+	func testInvalidAttributionHelperInputDoesNotPoisonMergeSnapshot() async throws {
+		try await appactor.setMediaSource("facebook")
+
+		await XCTAssertThrowsErrorAsync(try await appactor.setCampaign(" spring_sale")) { error in
+			XCTAssertTrue(String(describing: error).contains("campaign"))
+		}
+
+		try await appactor.setAdGroup("retargeting")
+
+		let request = try XCTUnwrap(client.patchAttributionCalls.last?.request.attribution)
+		XCTAssertEqual(request.providerName, "facebook")
+		XCTAssertEqual(request.network, "facebook")
+		XCTAssertEqual(request.source, "facebook")
+		XCTAssertNil(request.campaignName)
+		XCTAssertNil(request.campaign)
+		XCTAssertEqual(request.adGroupName, "retargeting")
+		XCTAssertEqual(request.adGroup, "retargeting")
+	}
+
 	func testAllUserAttributeFlushDrainsPreviousIdentityQueue() async throws {
 		storage.setAppUserId("old_user")
 		let offline = AppActorError.networkError(URLError(.notConnectedToInternet))

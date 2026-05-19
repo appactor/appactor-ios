@@ -525,10 +525,11 @@ extension AppActor {
 		patch.ad = ad
 		patch.creative = creative
 
-		let appUserId = customerAttributesManager.ensureAppUserId()
-		let attribution = customerAttributesManager.mergeCustomAttribution(appUserId: appUserId, patch: patch)
-		try await updateAttribution(attribution)
-	}
+			let appUserId = customerAttributesManager.ensureAppUserId()
+			try validateAttribution(patch)
+			let attribution = customerAttributesManager.mergeCustomAttribution(appUserId: appUserId, patch: patch)
+			try await updateAttribution(attribution)
+		}
 
 	private static var platformName: String {
 		#if os(iOS)

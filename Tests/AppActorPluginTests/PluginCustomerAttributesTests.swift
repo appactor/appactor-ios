@@ -165,6 +165,25 @@ final class PluginCustomerAttributesTests: XCTestCase {
         XCTAssertEqual(nullEnvelope["success"] as? Bool, true)
     }
 
+    func testReservedProfileHelpersRequireValueFieldButAllowNullClear() async throws {
+        let cases = [
+            ("set_email", #"{"unexpected":"x"}"#, #"{"email":null}"#),
+            ("set_display_name", #"{}"#, #"{"display_name":null}"#),
+            ("set_phone_number", #"{}"#, #"{"phone_number":null}"#),
+            ("set_push_token", #"{}"#, #"{"push_token":null}"#),
+        ]
+
+        for (method, missingPayload, nullPayload) in cases {
+            let missing = await AppActorPlugin.shared.execute(method: method, withJson: missingPayload)
+            let missingEnvelope = try parseEnvelope(missing)
+            XCTAssertNotEqual(missingEnvelope["success"] as? Bool, true, "\(method) should reject missing value")
+
+            let explicitNull = await AppActorPlugin.shared.execute(method: method, withJson: nullPayload)
+            let nullEnvelope = try parseEnvelope(explicitNull)
+            XCTAssertEqual(nullEnvelope["success"] as? Bool, true, "\(method) should allow explicit null clear")
+        }
+    }
+
     func testCollectProfileContextRequestRoutesToNativeSDK() async throws {
         let json = await AppActorPlugin.shared.execute(
             method: "collect_profile_context",

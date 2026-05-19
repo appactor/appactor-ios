@@ -596,16 +596,19 @@ final class AppActorPaymentContext {
         productId: String,
         receiptContext: AppActorReceiptCustomerUpdateContext
     ) -> Bool {
+        guard receiptContext.isDeferredPurchaseResolution else {
+            return false
+        }
+
         if let count = pendingProductCounts[productId], count > 0 {
             if count <= 1 {
                 pendingProductCounts.removeValue(forKey: productId)
             } else {
                 pendingProductCounts[productId] = count - 1
             }
-            return true
         }
 
-        return receiptContext.isDeferredPurchaseResolution
+        return true
     }
 
     var offerings: AppActorOfferings?

@@ -14,6 +14,9 @@ extension AppActor {
         let verboseBootstrap = (paymentConfig?.options.logLevel ?? AppActorLogger.level) >= .verbose
         let watcher = transactionWatcher
 
+        // Wire receipt callbacks before Transaction.updates can enqueue work.
+        await wireReceiptCustomerInfoUpdateHandler()
+
         // ── Phase 1: Watcher setup (must complete before transactions arrive) ──
         if let watcher {
             let t0 = CFAbsoluteTimeGetCurrent()
@@ -95,6 +98,16 @@ extension AppActor {
         ) {
             Log.receipts.info("Deferred purchase resolved: \(receiptContext.productId)")
             paymentContext.deferredPurchaseHandler?(receiptContext.productId, info)
+        }
+    }
+
+    func wireReceiptCustomerInfoUpdateHandler() async {
+        if let processor = self.paymentProcessor {
+            await processor.setCustomerInfoUpdateHandler { [weak self] info, receiptContext in
+                Task { @MainActor [weak self] in
+                    await self?.handleReceiptCustomerInfoUpdate(info, receiptContext: receiptContext)
+                }
+            }
         }
     }
 
@@ -182,14 +195,8 @@ extension AppActor {
             await etagMgr.clearUnverifiedIfNeeded()
         }
 
-        // 0b. Wire customer info updates BEFORE any receipt processing.
-        if let processor = self.paymentProcessor {
-            await processor.setCustomerInfoUpdateHandler { [weak self] info, receiptContext in
-                Task { @MainActor [weak self] in
-                    await self?.handleReceiptCustomerInfoUpdate(info, receiptContext: receiptContext)
-                }
-            }
-        }
+        // 0b. Keep handler wiring idempotent for tests and custom setup paths.
+        await wireReceiptCustomerInfoUpdateHandler()
         logStep("setup")
 
         // 1. Fire-and-forget: warm offerings cache in the background.

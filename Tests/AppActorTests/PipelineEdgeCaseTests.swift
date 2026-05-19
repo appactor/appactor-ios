@@ -261,6 +261,64 @@ final class PipelineEdgeCaseTests: XCTestCase {
         await appactor.reset()
     }
 
+    @MainActor
+    func testDeferredPurchaseCallbackDoesNotOverfireForNonDeferredReceipt() async {
+        let appactor = AppActor.shared
+        await appactor.reset()
+
+        let storage = InMemoryPaymentStorage()
+        storage.setAppUserId("user-pending")
+        appactor.configureForTesting(
+            config: AppActorPaymentConfiguration(
+                apiKey: "pk_test_deferred_guard",
+                baseURL: URL(string: "https://api.test.appactor.com")!
+            ),
+            client: MockPaymentClient(),
+            storage: storage
+        )
+
+        var callbackCount = 0
+        appactor.onDeferredPurchaseResolved = { _, _ in
+            callbackCount += 1
+        }
+        appactor.paymentContext.pendingProductCounts["com.test.yearly"] = 1
+
+        await appactor.handleReceiptCustomerInfoUpdate(
+            AppActorCustomerInfo(appUserId: "user-pending"),
+            receiptContext: AppActorReceiptCustomerUpdateContext(
+                appUserId: "user-pending",
+                productId: "com.test.yearly",
+                sourceIntent: .sync,
+                clientPurchaseContext: AppActorClientPurchaseContext(
+                    clientObservedAt: Date(),
+                    clientDeliverySource: .foregroundSync
+                )
+            )
+        )
+
+        XCTAssertEqual(callbackCount, 0)
+        XCTAssertEqual(appactor.paymentContext.pendingProductCounts["com.test.yearly"], 1)
+
+        await appactor.handleReceiptCustomerInfoUpdate(
+            AppActorCustomerInfo(appUserId: "user-pending"),
+            receiptContext: AppActorReceiptCustomerUpdateContext(
+                appUserId: "user-pending",
+                productId: "com.test.yearly",
+                sourceIntent: .purchase,
+                clientPurchaseContext: AppActorClientPurchaseContext(
+                    clientPurchaseAttemptStartedAt: Date(),
+                    clientObservedAt: Date(),
+                    clientDeliverySource: .transactionUpdates,
+                    clientPurchaseAttemptId: "attempt-ios-deferred-guard"
+                )
+            )
+        )
+
+        XCTAssertEqual(callbackCount, 1)
+        XCTAssertNil(appactor.paymentContext.pendingProductCounts["com.test.yearly"])
+        await appactor.reset()
+    }
+
     func testPendingPurchaseContextBufferDoesNotConsumeRenewal() {
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let renewalAt = startedAt.addingTimeInterval(3_600)

@@ -1,6 +1,45 @@
 import Foundation
 import AppActor
 
+private struct AppActorPluginDynamicCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(intValue: Int) {
+        return nil
+    }
+}
+
+private func decodeRequiredNullableString(
+    from decoder: Decoder,
+    method: String,
+    keys: [String]
+) throws -> String? {
+    let container = try decoder.container(keyedBy: AppActorPluginDynamicCodingKey.self)
+    for key in keys {
+        let codingKey = AppActorPluginDynamicCodingKey(key)
+        if container.contains(codingKey) {
+            return try container.decodeIfPresent(String.self, forKey: codingKey)
+        }
+    }
+    let firstKey = AppActorPluginDynamicCodingKey(keys.first ?? "value")
+    throw DecodingError.keyNotFound(
+        firstKey,
+        DecodingError.Context(
+            codingPath: decoder.codingPath,
+            debugDescription: "\(method) requires one of: \(keys.joined(separator: ", ")); pass null to clear."
+        )
+    )
+}
+
 struct SetAttributesRequest: AppActorPluginRequest {
     static let method = "set_attributes"
 
@@ -43,6 +82,14 @@ struct SetEmailRequest: AppActorPluginRequest {
 
     let email: String?
 
+    init(from decoder: Decoder) throws {
+        email = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value", "email"]
+        )
+    }
+
     @MainActor
     func execute() async throws -> AppActorPluginResult {
         try await AppActor.shared.setEmail(email)
@@ -61,9 +108,11 @@ struct SetDisplayNameRequest: AppActorPluginRequest {
     }
 
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
-            ?? container.decodeIfPresent(String.self, forKey: .displayNameSnake)
+        displayName = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value", CodingKeys.displayName.rawValue, CodingKeys.displayNameSnake.rawValue]
+        )
     }
 
     @MainActor
@@ -84,9 +133,11 @@ struct SetPhoneNumberRequest: AppActorPluginRequest {
     }
 
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        phoneNumber = try container.decodeIfPresent(String.self, forKey: .phoneNumber)
-            ?? container.decodeIfPresent(String.self, forKey: .phoneNumberSnake)
+        phoneNumber = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value", CodingKeys.phoneNumber.rawValue, CodingKeys.phoneNumberSnake.rawValue]
+        )
     }
 
     @MainActor
@@ -107,9 +158,11 @@ struct SetPushTokenRequest: AppActorPluginRequest {
     }
 
     init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        pushToken = try container.decodeIfPresent(String.self, forKey: .pushToken)
-            ?? container.decodeIfPresent(String.self, forKey: .pushTokenSnake)
+        pushToken = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value", CodingKeys.pushToken.rawValue, CodingKeys.pushTokenSnake.rawValue]
+        )
     }
 
     @MainActor
