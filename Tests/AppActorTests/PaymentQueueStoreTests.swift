@@ -178,4 +178,51 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertTrue(freshStore.consumePurgedDeadLetters().isEmpty, "Purged record should be consumed only once")
     }
 
+    func testQueuedClientPurchaseContextPersistsAcrossDiskReload() {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let observedAt = startedAt.addingTimeInterval(2)
+        let item = AppActorPaymentQueueItem(
+            key: "apple:context",
+            bundleId: "com.test",
+            environment: "sandbox",
+            transactionId: "context_tx",
+            jws: "jws_payload",
+            signedAppTransactionInfo: nil,
+            appUserId: "user_123",
+            productId: "com.test.monthly",
+            originalTransactionId: "context_tx",
+            storefront: "USA",
+            offeringId: nil,
+            packageId: nil,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientPurchaseAttemptStartedAt: startedAt,
+                clientObservedAt: observedAt,
+                clientDeliverySource: .purchaseFlow,
+                clientPurchaseAttemptId: "attempt-ios-disk",
+                sdkOriginated: true,
+                sdkVersion: "9.9.9"
+            ),
+            phase: .needsPost,
+            attemptCount: 0,
+            nextRetryAt: startedAt,
+            firstSeenAt: startedAt,
+            lastSeenAt: observedAt,
+            lastError: nil,
+            sources: [.purchase],
+            claimedAt: nil
+        )
+        store.upsert(item)
+
+        let freshStore = AppActorAtomicJSONQueueStore(directory: tempDir)
+        let snapshot = freshStore.snapshot()
+        XCTAssertEqual(snapshot.count, 1)
+        let context = snapshot.first?.clientPurchaseContext
+
+        XCTAssertEqual(context?.clientPurchaseAttemptStartedAt, startedAt)
+        XCTAssertEqual(context?.clientObservedAt, observedAt)
+        XCTAssertEqual(context?.clientDeliverySource, .purchaseFlow)
+        XCTAssertEqual(context?.clientPurchaseAttemptId, "attempt-ios-disk")
+        XCTAssertEqual(context?.sdkVersion, "9.9.9")
+    }
+
 }

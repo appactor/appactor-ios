@@ -168,12 +168,19 @@ public final class AppActor: ObservableObject {
         // Step 2: If no transactions, just refresh customer info
         if collected.isEmpty {
             if let restoreAppTransaction {
+                let restoreContext = AppActorClientPurchaseContext.restoreFlow()
                 let result = try await client.postRestore(
                     AppActorRestoreRequest(
                         appUserId: appUserId,
                         sourceIntent: "restore",
                         transactions: [],
-                        signedAppTransactionInfo: restoreAppTransaction.jwsRepresentation
+                        signedAppTransactionInfo: restoreAppTransaction.jwsRepresentation,
+                        clientPurchaseAttemptStartedAt: restoreContext.clientPurchaseAttemptStartedAtString,
+                        clientObservedAt: restoreContext.clientObservedAtString,
+                        clientDeliverySource: restoreContext.clientDeliverySource.rawValue,
+                        clientPurchaseAttemptId: restoreContext.clientPurchaseAttemptId,
+                        sdkOriginated: restoreContext.sdkOriginated,
+                        sdkVersion: restoreContext.sdkVersion
                     )
                 )
                 let info = try await resolveRestoreCustomerInfo(
@@ -205,11 +212,18 @@ public final class AppActor: ObservableObject {
                 jwsRepresentation: entry.jws
             )
         }
+        let restoreContext = AppActorClientPurchaseContext.restoreFlow()
         let request = AppActorRestoreRequest(
             appUserId: appUserId,
             sourceIntent: "restore",
             transactions: items,
-            signedAppTransactionInfo: restoreAppTransaction?.jwsRepresentation
+            signedAppTransactionInfo: restoreAppTransaction?.jwsRepresentation,
+            clientPurchaseAttemptStartedAt: restoreContext.clientPurchaseAttemptStartedAtString,
+            clientObservedAt: restoreContext.clientObservedAtString,
+            clientDeliverySource: restoreContext.clientDeliverySource.rawValue,
+            clientPurchaseAttemptId: restoreContext.clientPurchaseAttemptId,
+            sdkOriginated: restoreContext.sdkOriginated,
+            sdkVersion: restoreContext.sdkVersion
         )
 
         do {
@@ -380,7 +394,8 @@ public final class AppActor: ObservableObject {
         appUserId: String,
         appTransaction: AppActorSilentSyncAppTransaction?
     ) -> AppActorReceiptPostRequest {
-        AppActorReceiptPostRequest(
+        let context = AppActorClientPurchaseContext.foregroundSync()
+        return AppActorReceiptPostRequest(
             appUserId: appUserId,
             appId: transaction.bundleId,
             environment: transaction.environment,
@@ -394,7 +409,13 @@ public final class AppActor: ObservableObject {
             idempotencyKey: AppActorPaymentQueueItem.makeKey(transactionId: transaction.transactionId),
             originalTransactionId: transaction.originalTransactionId,
             offeringId: nil,
-            packageId: nil
+            packageId: nil,
+            clientPurchaseAttemptStartedAt: context.clientPurchaseAttemptStartedAtString,
+            clientObservedAt: context.clientObservedAtString,
+            clientDeliverySource: context.clientDeliverySource.rawValue,
+            clientPurchaseAttemptId: context.clientPurchaseAttemptId,
+            sdkOriginated: context.sdkOriginated,
+            sdkVersion: context.sdkVersion
         )
     }
 
@@ -402,6 +423,7 @@ public final class AppActor: ObservableObject {
         appTransaction: AppActorSilentSyncAppTransaction,
         appUserId: String
     ) -> AppActorReceiptPostRequest {
+        let context = AppActorClientPurchaseContext.foregroundSync()
         return AppActorReceiptPostRequest(
             appUserId: appUserId,
             appId: appTransaction.bundleId,
@@ -416,7 +438,13 @@ public final class AppActor: ObservableObject {
             idempotencyKey: nil,
             originalTransactionId: nil,
             offeringId: nil,
-            packageId: nil
+            packageId: nil,
+            clientPurchaseAttemptStartedAt: context.clientPurchaseAttemptStartedAtString,
+            clientObservedAt: context.clientObservedAtString,
+            clientDeliverySource: context.clientDeliverySource.rawValue,
+            clientPurchaseAttemptId: context.clientPurchaseAttemptId,
+            sdkOriginated: context.sdkOriginated,
+            sdkVersion: context.sdkVersion
         )
     }
 

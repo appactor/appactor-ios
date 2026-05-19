@@ -38,7 +38,8 @@ final class PaymentProcessorTests: XCTestCase {
         appUserId: String = "user_123",
         source: AppActorPaymentQueueItem.Source = .purchase,
         sourceIntent: AppActorPaymentQueueItem.SourceIntent? = nil,
-        signedAppTransactionInfo: String? = nil
+        signedAppTransactionInfo: String? = nil,
+        clientPurchaseContext: AppActorClientPurchaseContext? = nil
     ) -> AppActorPaymentQueueItem {
         AppActorPaymentQueueItem(
             key: key,
@@ -53,6 +54,7 @@ final class PaymentProcessorTests: XCTestCase {
             storefront: "USA",
             offeringId: nil,
             packageId: nil,
+            clientPurchaseContext: clientPurchaseContext,
             phase: phase,
             attemptCount: attemptCount,
             nextRetryAt: Date(),
@@ -108,6 +110,75 @@ final class PaymentProcessorTests: XCTestCase {
 
         let request = AppActorPaymentProcessor.makeRequest(from: store.allItems().first!)
         XCTAssertEqual(request.sourceIntent, "restore")
+    }
+
+    func testReceiptRequestIncludesClientPurchaseAttemptContext() {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let observedAt = startedAt.addingTimeInterval(2)
+        let item = makeItem(clientPurchaseContext: AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: observedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-ios-1",
+            sdkOriginated: true,
+            sdkVersion: "9.9.9"
+        ))
+
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertEqual(request.clientPurchaseAttemptStartedAt, "2023-11-14T22:13:20.000Z")
+        XCTAssertEqual(request.clientObservedAt, "2023-11-14T22:13:22.000Z")
+        XCTAssertEqual(request.clientDeliverySource, "purchase_flow")
+        XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-1")
+        XCTAssertEqual(request.sdkOriginated, true)
+        XCTAssertEqual(request.sdkVersion, "9.9.9")
+    }
+
+    func testReceiptRetryRequestKeepsAttemptButMarksQueueRetryDeliverySource() {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let item = makeItem(
+            attemptCount: 1,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientPurchaseAttemptStartedAt: startedAt,
+                clientObservedAt: startedAt,
+                clientDeliverySource: .purchaseFlow,
+                clientPurchaseAttemptId: "attempt-ios-retry",
+                sdkOriginated: true,
+                sdkVersion: "9.9.9"
+            )
+        )
+
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertEqual(request.clientPurchaseAttemptStartedAt, "2023-11-14T22:13:20.000Z")
+        XCTAssertEqual(request.clientDeliverySource, "queue_retry")
+        XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-retry")
+    }
+
+    func testQueueMergeAdoptsPurchaseAttemptContextOverBackgroundContext() {
+        let background = makeItem(
+            source: .transactionUpdates,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientObservedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                clientDeliverySource: .transactionUpdates
+            )
+        )
+        store.upsert(background)
+
+        let purchase = makeItem(
+            source: .purchase,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientPurchaseAttemptStartedAt: Date(timeIntervalSince1970: 1_700_000_010),
+                clientObservedAt: Date(timeIntervalSince1970: 1_700_000_012),
+                clientDeliverySource: .purchaseFlow,
+                clientPurchaseAttemptId: "attempt-ios-merge"
+            )
+        )
+        store.upsert(purchase)
+
+        let request = AppActorPaymentProcessor.makeRequest(from: store.allItems().first!)
+        XCTAssertEqual(request.clientDeliverySource, "purchase_flow")
+        XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-merge")
     }
 
     func testSweepIntentUpgradesToPurchaseWhenPurchaseSourceArrives() {

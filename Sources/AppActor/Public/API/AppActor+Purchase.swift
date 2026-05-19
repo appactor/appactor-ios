@@ -103,15 +103,21 @@ extension AppActor {
         let purchaseIdentity = attachAppAccountToken(to: options, storage: storage)
         let options = purchaseIdentity.options
         let purchaseAppUserId = storage.ensureAppUserId()
+        let clientPurchaseContext = AppActorClientPurchaseContext.purchaseAttempt()
         var handledForegroundTransactionId: String?
+        var preserveForegroundContextForPending = false
         Log.receipts.debug("Purchase with appAccountToken: \(String(purchaseIdentity.token.uuidString.lowercased().prefix(8)))…")
 
         let foregroundPurchase = await AppActorForegroundPurchaseScope.begin(
             watcher: transactionWatcher,
-            productId: product.id
+            productId: product.id,
+            clientPurchaseContext: clientPurchaseContext
         )
         defer {
-            foregroundPurchase.end(handledTransactionId: handledForegroundTransactionId)
+            foregroundPurchase.end(
+                handledTransactionId: handledForegroundTransactionId,
+                preserveContextForPending: preserveForegroundContextForPending
+            )
         }
 
         // Execute the StoreKit purchase
@@ -147,7 +153,8 @@ extension AppActor {
                     appUserId: purchaseAppUserId,
                     signedAppTransactionInfo: appTransaction?.jwsRepresentation,
                     offeringId: offeringId,
-                    packageId: packageId
+                    packageId: packageId,
+                    clientPurchaseContext: clientPurchaseContext
                 )
 
                 let postResult = await processor.enqueueAndAwait(
@@ -221,6 +228,7 @@ extension AppActor {
             return .cancelled
 
         case .pending:
+            preserveForegroundContextForPending = true
             paymentContext.pendingProductCounts[product.id, default: 0] += 1
             Log.receipts.debug("Purchase deferred (pending): \(product.id)")
             return .pending

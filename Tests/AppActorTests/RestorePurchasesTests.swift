@@ -354,7 +354,11 @@ final class RestorePurchasesTests: XCTestCase {
                 AppActorRestoreTransactionItem(transactionId: "100", jwsRepresentation: "jws_a"),
                 AppActorRestoreTransactionItem(transactionId: "200", jwsRepresentation: "jws_b"),
             ],
-            signedAppTransactionInfo: "app-transaction-jws"
+            signedAppTransactionInfo: "app-transaction-jws",
+            clientObservedAt: "2023-11-14T22:13:20Z",
+            clientDeliverySource: "restore_flow",
+            sdkOriginated: true,
+            sdkVersion: "9.9.9"
         )
 
         let encoder = JSONEncoder()
@@ -365,6 +369,10 @@ final class RestorePurchasesTests: XCTestCase {
         XCTAssertEqual(json["appUserId"] as? String, "user_123")
         XCTAssertEqual(json["sourceIntent"] as? String, "restore")
         XCTAssertEqual(json["signedAppTransactionInfo"] as? String, "app-transaction-jws")
+        XCTAssertEqual(json["clientObservedAt"] as? String, "2023-11-14T22:13:20Z")
+        XCTAssertEqual(json["clientDeliverySource"] as? String, "restore_flow")
+        XCTAssertEqual(json["sdkOriginated"] as? Bool, true)
+        XCTAssertEqual(json["sdkVersion"] as? String, "9.9.9")
         let txns = json["transactions"] as? [[String: Any]]
         XCTAssertEqual(txns?.count, 2)
         XCTAssertEqual(txns?[0]["transactionId"] as? String, "100")

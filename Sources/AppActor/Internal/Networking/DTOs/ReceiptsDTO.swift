@@ -19,6 +19,56 @@ struct AppActorReceiptPostRequest: Encodable, Sendable {
     let offeringId: String?
     /// The canonical backend package identifier for analytics attribution.
     let packageId: String?
+    let clientPurchaseAttemptStartedAt: String?
+    let clientObservedAt: String?
+    let clientDeliverySource: String?
+    let clientPurchaseAttemptId: String?
+    let sdkOriginated: Bool?
+    let sdkVersion: String?
+
+    init(
+        appUserId: String,
+        appId: String,
+        environment: String,
+        bundleId: String,
+        storefront: String?,
+        sourceIntent: String,
+        signedTransactionInfo: String?,
+        signedAppTransactionInfo: String?,
+        transactionId: String?,
+        productId: String?,
+        idempotencyKey: String?,
+        originalTransactionId: String?,
+        offeringId: String?,
+        packageId: String?,
+        clientPurchaseAttemptStartedAt: String? = nil,
+        clientObservedAt: String? = nil,
+        clientDeliverySource: String? = nil,
+        clientPurchaseAttemptId: String? = nil,
+        sdkOriginated: Bool? = nil,
+        sdkVersion: String? = nil
+    ) {
+        self.appUserId = appUserId
+        self.appId = appId
+        self.environment = environment
+        self.bundleId = bundleId
+        self.storefront = storefront
+        self.sourceIntent = sourceIntent
+        self.signedTransactionInfo = signedTransactionInfo
+        self.signedAppTransactionInfo = signedAppTransactionInfo
+        self.transactionId = transactionId
+        self.productId = productId
+        self.idempotencyKey = idempotencyKey
+        self.originalTransactionId = originalTransactionId
+        self.offeringId = offeringId
+        self.packageId = packageId
+        self.clientPurchaseAttemptStartedAt = clientPurchaseAttemptStartedAt
+        self.clientObservedAt = clientObservedAt
+        self.clientDeliverySource = clientDeliverySource
+        self.clientPurchaseAttemptId = clientPurchaseAttemptId
+        self.sdkOriginated = sdkOriginated
+        self.sdkVersion = sdkVersion
+    }
 }
 
 // MARK: - Response DTO

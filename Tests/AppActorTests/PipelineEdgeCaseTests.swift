@@ -71,6 +71,27 @@ final class PipelineEdgeCaseTests: XCTestCase {
 
     // MARK: - Fix #18b: Identity transition buffer captures correct appUserId
 
+    func testPendingPurchaseContextBufferKeepsAttemptAndRefreshesObservedAt() {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let completedAt = startedAt.addingTimeInterval(3_600)
+        let context = AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-ios-pending"
+        )
+        var buffer = AppActorPendingPurchaseContextBuffer()
+
+        buffer.append(context, productId: "com.test.monthly")
+        let resolved = buffer.consume(productId: "com.test.monthly", observedAt: completedAt)
+
+        XCTAssertEqual(resolved?.clientPurchaseAttemptStartedAt, startedAt)
+        XCTAssertEqual(resolved?.clientObservedAt, completedAt)
+        XCTAssertEqual(resolved?.clientDeliverySource, .transactionUpdates)
+        XCTAssertEqual(resolved?.clientPurchaseAttemptId, "attempt-ios-pending")
+        XCTAssertNil(buffer.consume(productId: "com.test.monthly", observedAt: completedAt))
+    }
+
     func testIdentityTransitionBufferCapturesAppUserId() async {
         let storage = InMemoryPaymentStorage()
         storage.set("user_A", forKey: AppActorPaymentStorageKey.appUserId)

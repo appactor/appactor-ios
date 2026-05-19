@@ -56,6 +56,10 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// or items persisted before this field was added.
     var packageId: String?
 
+    /// Additive SDK context sent to the backend for purchase classification.
+    /// Persisted with the queue item so retries keep the original attempt time/id.
+    var clientPurchaseContext: AppActorClientPurchaseContext? = nil
+
     // MARK: - Phase State Machine
 
     /// Current processing phase.
@@ -185,6 +189,9 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         // re-enqueuing an item that arrived earlier via sweep with nil context).
         if offeringId == nil { offeringId = incoming.offeringId }
         if packageId == nil { packageId = incoming.packageId }
+        if shouldAdoptClientPurchaseContext(from: incoming.clientPurchaseContext) {
+            clientPurchaseContext = incoming.clientPurchaseContext
+        }
 
         // If the same unfinished transaction is observed again under a newer app user,
         // adopt that identity so relaunch recovery doesn't strand the queued receipt
@@ -200,6 +207,29 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
             attemptCount = 0
             nextRetryAt = incoming.nextRetryAt
             claimedAt = nil
+        }
+    }
+
+    private func shouldAdoptClientPurchaseContext(from incoming: AppActorClientPurchaseContext?) -> Bool {
+        guard let incoming else { return false }
+        guard let existing = clientPurchaseContext else { return true }
+        if incoming.hasPurchaseAttempt && !existing.hasPurchaseAttempt { return true }
+        if incoming.clientDeliverySource == .purchaseFlow && existing.clientDeliverySource != .purchaseFlow { return true }
+        return false
+    }
+}
+
+extension AppActorPaymentQueueItem.Source {
+    var defaultClientDeliverySource: AppActorClientDeliverySource {
+        switch self {
+        case .purchase:
+            return .purchaseFlow
+        case .transactionUpdates:
+            return .transactionUpdates
+        case .restore:
+            return .currentEntitlements
+        case .sweep:
+            return .unfinished
         }
     }
 }

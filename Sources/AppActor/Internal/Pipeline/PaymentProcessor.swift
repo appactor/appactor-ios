@@ -768,7 +768,8 @@ actor AppActorPaymentProcessor {
         environment: AppActorTransactionEnvironment? = nil,
         signedAppTransactionInfo: String? = nil,
         offeringId: String? = nil,
-        packageId: String? = nil
+        packageId: String? = nil,
+        clientPurchaseContext: AppActorClientPurchaseContext? = nil
     ) -> AppActorPaymentQueueItem {
         let bundleId = Bundle.main.bundleIdentifier ?? "unknown"
         let resolvedJWSPayload = jwsPayload ?? AppActorASATransactionSupport.decodeJWSPayload(jws)
@@ -799,6 +800,7 @@ actor AppActorPaymentProcessor {
             storefront: storefront,
             offeringId: offeringId,
             packageId: packageId,
+            clientPurchaseContext: clientPurchaseContext ?? AppActorClientPurchaseContext.forQueueSource(source, observedAt: now),
             phase: .needsPost,
             attemptCount: 0,
             nextRetryAt: now,
@@ -813,7 +815,10 @@ actor AppActorPaymentProcessor {
 
     /// Builds a `AppActorReceiptPostRequest` from a `AppActorPaymentQueueItem`.
     static func makeRequest(from item: AppActorPaymentQueueItem) -> AppActorReceiptPostRequest {
-        AppActorReceiptPostRequest(
+        let context = item.attemptCount > 0
+            ? item.clientPurchaseContext?.replacingDeliverySource(.queueRetry)
+            : item.clientPurchaseContext
+        return AppActorReceiptPostRequest(
             appUserId: item.appUserId,
             appId: item.bundleId,
             environment: item.environment,
@@ -830,7 +835,13 @@ actor AppActorPaymentProcessor {
             idempotencyKey: item.key,
             originalTransactionId: item.originalTransactionId,
             offeringId: item.offeringId,
-            packageId: item.packageId
+            packageId: item.packageId,
+            clientPurchaseAttemptStartedAt: context?.clientPurchaseAttemptStartedAtString,
+            clientObservedAt: context?.clientObservedAtString,
+            clientDeliverySource: context?.clientDeliverySource.rawValue,
+            clientPurchaseAttemptId: context?.clientPurchaseAttemptId,
+            sdkOriginated: context?.sdkOriginated,
+            sdkVersion: context?.sdkVersion
         )
     }
 

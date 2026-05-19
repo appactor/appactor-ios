@@ -8,6 +8,36 @@ struct AppActorRestoreRequest: Encodable, Sendable {
     let sourceIntent: String
     let transactions: [AppActorRestoreTransactionItem]
     let signedAppTransactionInfo: String?
+    let clientPurchaseAttemptStartedAt: String?
+    let clientObservedAt: String?
+    let clientDeliverySource: String?
+    let clientPurchaseAttemptId: String?
+    let sdkOriginated: Bool?
+    let sdkVersion: String?
+
+    init(
+        appUserId: String,
+        sourceIntent: String,
+        transactions: [AppActorRestoreTransactionItem],
+        signedAppTransactionInfo: String?,
+        clientPurchaseAttemptStartedAt: String? = nil,
+        clientObservedAt: String? = nil,
+        clientDeliverySource: String? = nil,
+        clientPurchaseAttemptId: String? = nil,
+        sdkOriginated: Bool? = nil,
+        sdkVersion: String? = nil
+    ) {
+        self.appUserId = appUserId
+        self.sourceIntent = sourceIntent
+        self.transactions = transactions
+        self.signedAppTransactionInfo = signedAppTransactionInfo
+        self.clientPurchaseAttemptStartedAt = clientPurchaseAttemptStartedAt
+        self.clientObservedAt = clientObservedAt
+        self.clientDeliverySource = clientDeliverySource
+        self.clientPurchaseAttemptId = clientPurchaseAttemptId
+        self.sdkOriginated = sdkOriginated
+        self.sdkVersion = sdkVersion
+    }
 }
 
 /// A single transaction item within a bulk restore request.
