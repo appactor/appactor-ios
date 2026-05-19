@@ -297,6 +297,10 @@ actor AppActorTransactionWatcher {
         )
         let effectiveContext = pendingMatch?.context ?? observedContext
         let capturedAppUserId = pendingMatch?.appUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let enqueueSource = Self.queueSource(
+            for: source,
+            pendingPurchaseContextMatch: pendingMatch
+        )
 
         // During identity transition, buffer with the ownership user captured before the transition.
         if isIdentityTransitioning {
@@ -305,7 +309,7 @@ actor AppActorTransactionWatcher {
             } else {
                 let capturedUserId = capturedAppUserId?.isEmpty == false ? capturedAppUserId! : storage.ensureAppUserId()
                 pendingBuffer.append(BufferedTransaction(
-                    transaction: transaction, jws: jws, source: source,
+                    transaction: transaction, jws: jws, source: enqueueSource,
                     capturedAppUserId: capturedUserId,
                     clientPurchaseContext: effectiveContext
                 ))
@@ -318,7 +322,7 @@ actor AppActorTransactionWatcher {
         await enqueueWithUserId(
             transaction,
             jws: jws,
-            source: source,
+            source: enqueueSource,
             appUserId: appUserId,
             clientPurchaseContext: effectiveContext
         )
@@ -339,6 +343,19 @@ actor AppActorTransactionWatcher {
             transactionPurchaseDate: transaction.purchaseDate,
             transactionReason: transactionReason
         )
+    }
+
+    static func queueSource(
+        for source: AppActorPaymentQueueItem.Source,
+        pendingPurchaseContextMatch: AppActorPendingPurchaseContextMatch?
+    ) -> AppActorPaymentQueueItem.Source {
+        guard pendingPurchaseContextMatch != nil else { return source }
+        switch source {
+        case .transactionUpdates, .sweep:
+            return .purchase
+        case .purchase, .restore:
+            return source
+        }
     }
 
     static func shouldBufferForegroundTransaction(

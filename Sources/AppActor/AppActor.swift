@@ -592,6 +592,22 @@ final class AppActorPaymentContext {
     var storeKitSilentSyncFetcher: (any AppActorStoreKitSilentSyncFetcherProtocol)?
     var appStoreSync: @Sendable () async throws -> Void = AppActorPaymentContext.defaultAppStoreSync
 
+    func consumeDeferredPurchaseResolution(
+        productId: String,
+        receiptContext: AppActorReceiptCustomerUpdateContext
+    ) -> Bool {
+        if let count = pendingProductCounts[productId], count > 0 {
+            if count <= 1 {
+                pendingProductCounts.removeValue(forKey: productId)
+            } else {
+                pendingProductCounts[productId] = count - 1
+            }
+            return true
+        }
+
+        return receiptContext.isDeferredPurchaseResolution
+    }
+
     var offerings: AppActorOfferings?
     var remoteConfigs: AppActorRemoteConfigs?
 

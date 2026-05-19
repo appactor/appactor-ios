@@ -68,6 +68,36 @@ extension AppActor {
         Log.sdk.info("✅ Configure total: \(totalMs) ms")
     }
 
+    func handleReceiptCustomerInfoUpdate(
+        _ info: AppActorCustomerInfo,
+        receiptContext: AppActorReceiptCustomerUpdateContext
+    ) async {
+        guard let manager = customerManager,
+              let currentAppUserId = paymentStorage?.currentAppUserId else { return }
+        // F3 fix: only seed cache if the receipt belongs to the current user.
+        // A login/logout between enqueue and response could cause stale data.
+        guard receiptContext.appUserId == currentAppUserId else {
+            Log.customer.debug("Skipping customer cache seed — receipt userId (\(receiptContext.appUserId)) != current userId (\(currentAppUserId))")
+            _ = try? await getCustomerInfo()
+            return
+        }
+        await manager.seedCache(
+            info: info,
+            eTag: nil,
+            appUserId: currentAppUserId,
+            verified: info.verification == .verified
+        )
+        await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: currentAppUserId)
+
+        if paymentContext.consumeDeferredPurchaseResolution(
+            productId: receiptContext.productId,
+            receiptContext: receiptContext
+        ) {
+            Log.receipts.info("Deferred purchase resolved: \(receiptContext.productId)")
+            paymentContext.deferredPurchaseHandler?(receiptContext.productId, info)
+        }
+    }
+
     /// Handles an incoming PurchaseIntent.
     ///
     /// If bootstrap is not yet complete, queues the intent for later processing.
@@ -154,35 +184,9 @@ extension AppActor {
 
         // 0b. Wire customer info updates BEFORE any receipt processing.
         if let processor = self.paymentProcessor {
-            await processor.setCustomerInfoUpdateHandler { [weak self] info, receiptAppUserId, productId in
+            await processor.setCustomerInfoUpdateHandler { [weak self] info, receiptContext in
                 Task { @MainActor [weak self] in
-                    guard let self, let manager = self.customerManager,
-                          let currentAppUserId = self.paymentStorage?.currentAppUserId else { return }
-                    // F3 fix: only seed cache if the receipt belongs to the current user.
-                    // A login/logout between enqueue and response could cause stale data.
-                    guard receiptAppUserId == currentAppUserId else {
-                        Log.customer.debug("Skipping customer cache seed — receipt userId (\(receiptAppUserId)) != current userId (\(currentAppUserId))")
-                        _ = try? await self.getCustomerInfo()
-                        return
-                    }
-                    await manager.seedCache(
-                        info: info,
-                        eTag: nil,
-                        appUserId: currentAppUserId,
-                        verified: info.verification == .verified
-                    )
-                    await self.setCustomerInfoIfIdentityMatches(info, expectedAppUserId: currentAppUserId)
-
-                    // Fire deferred purchase callback if this product was previously pending
-                    if let count = self.paymentContext.pendingProductCounts[productId], count > 0 {
-                        if count <= 1 {
-                            self.paymentContext.pendingProductCounts.removeValue(forKey: productId)
-                        } else {
-                            self.paymentContext.pendingProductCounts[productId] = count - 1
-                        }
-                        Log.receipts.info("Deferred purchase resolved: \(productId)")
-                        self.paymentContext.deferredPurchaseHandler?(productId, info)
-                    }
+                    await self?.handleReceiptCustomerInfoUpdate(info, receiptContext: receiptContext)
                 }
             }
         }

@@ -1,6 +1,51 @@
 import Foundation
 import StoreKit
 
+struct AppActorReceiptCustomerUpdateContext: Sendable, Equatable {
+    let appUserId: String
+    let productId: String
+    let sourceIntent: AppActorPaymentQueueItem.SourceIntent
+    let clientPurchaseContext: AppActorClientPurchaseContext?
+
+    init(
+        appUserId: String,
+        productId: String,
+        sourceIntent: AppActorPaymentQueueItem.SourceIntent,
+        clientPurchaseContext: AppActorClientPurchaseContext?
+    ) {
+        self.appUserId = appUserId
+        self.productId = productId
+        self.sourceIntent = sourceIntent
+        self.clientPurchaseContext = clientPurchaseContext
+    }
+
+    init(item: AppActorPaymentQueueItem) {
+        self.init(
+            appUserId: item.appUserId,
+            productId: item.productId,
+            sourceIntent: AppActorPaymentQueueItem.resolvedSourceIntent(
+                stored: item.sourceIntent,
+                sources: item.sources
+            ),
+            clientPurchaseContext: item.clientPurchaseContext
+        )
+    }
+
+    var isDeferredPurchaseResolution: Bool {
+        guard let clientPurchaseContext,
+              clientPurchaseContext.hasPurchaseAttempt else {
+            return false
+        }
+
+        switch clientPurchaseContext.clientDeliverySource {
+        case .transactionUpdates, .unfinished:
+            return true
+        case .purchaseFlow, .currentEntitlements, .restoreFlow, .queueRetry, .foregroundSync:
+            return false
+        }
+    }
+}
+
 /// Single-actor payment pipeline: the ONLY code path allowed to POST receipts,
 /// finish transactions, or retry.
 ///
@@ -77,8 +122,8 @@ actor AppActorPaymentProcessor {
 
     /// Callback for customer info updates from successful receipt POSTs.
     /// Fired when the server returns customer info in a receipt response.
-    /// Includes the `appUserId` from the receipt so the caller can verify identity hasn't changed (F3 fix).
-    private var onCustomerInfoUpdated: (@Sendable (AppActorCustomerInfo, _ receiptAppUserId: String, _ productId: String) -> Void)?
+    /// Includes receipt context so the caller can verify identity and deferred-purchase state.
+    private var onCustomerInfoUpdated: (@Sendable (AppActorCustomerInfo, AppActorReceiptCustomerUpdateContext) -> Void)?
 
     private struct CompletedReceiptResult {
         let result: AppActorReceiptPostResult
@@ -332,7 +377,7 @@ actor AppActorPaymentProcessor {
     }
 
     /// Sets the handler called when a receipt POST returns updated customer info.
-    func setCustomerInfoUpdateHandler(_ handler: (@Sendable (AppActorCustomerInfo, _ receiptAppUserId: String, _ productId: String) -> Void)?) {
+    func setCustomerInfoUpdateHandler(_ handler: (@Sendable (AppActorCustomerInfo, AppActorReceiptCustomerUpdateContext) -> Void)?) {
         self.onCustomerInfoUpdated = handler
     }
 
@@ -619,7 +664,7 @@ actor AppActorPaymentProcessor {
             }
             rememberCompletedResult(key: item.key, result: .success(customerInfo))
             if let customerInfo {
-                onCustomerInfoUpdated?(customerInfo, item.appUserId, item.productId)
+                onCustomerInfoUpdated?(customerInfo, AppActorReceiptCustomerUpdateContext(item: item))
             }
             resumeContinuation(key: item.key, result: .success(customerInfo))
 

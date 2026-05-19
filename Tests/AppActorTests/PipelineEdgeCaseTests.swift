@@ -23,7 +23,10 @@ final class PipelineEdgeCaseTests: XCTestCase {
         transactionId: String = "12345",
         appUserId: String = "user_123",
         phase: AppActorPaymentQueueItem.Phase = .needsPost,
-        attemptCount: Int = 0
+        attemptCount: Int = 0,
+        source: AppActorPaymentQueueItem.Source = .purchase,
+        sourceIntent: AppActorPaymentQueueItem.SourceIntent? = nil,
+        clientPurchaseContext: AppActorClientPurchaseContext? = nil
     ) -> AppActorPaymentQueueItem {
         AppActorPaymentQueueItem(
             key: key,
@@ -38,13 +41,15 @@ final class PipelineEdgeCaseTests: XCTestCase {
             storefront: "USA",
             offeringId: nil,
             packageId: nil,
+            clientPurchaseContext: clientPurchaseContext,
             phase: phase,
             attemptCount: attemptCount,
             nextRetryAt: Date(),
             firstSeenAt: Date(),
             lastSeenAt: Date(),
             lastError: nil,
-            sources: [.purchase],
+            sources: [source],
+            sourceIntent: sourceIntent,
             claimedAt: nil
         )
     }
@@ -147,6 +152,113 @@ final class PipelineEdgeCaseTests: XCTestCase {
         XCTAssertEqual(resolved?.context.clientDeliverySource, .unfinished)
         XCTAssertEqual(resolved?.context.clientPurchaseAttemptId, "attempt-ios-unfinished")
         XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts))
+    }
+
+    func testPendingPurchaseResolvedFromUnfinishedUsesPurchaseIntentAndUnfinishedDelivery() {
+        let storage = InMemoryPaymentStorage()
+        let startedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let completedAt = startedAt.addingTimeInterval(3_600)
+        let context = AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-ios-unfinished-intent"
+        )
+        var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
+
+        firstBoot.append(context, productId: "com.test.yearly", appUserId: "user-pending", recordedAt: startedAt)
+
+        var secondBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
+        let resolved = secondBoot.consume(
+            productId: "com.test.yearly",
+            observedAt: completedAt,
+            deliverySource: .unfinished,
+            transactionPurchaseDate: completedAt,
+            transactionReason: .purchase
+        )
+        let queueSource = AppActorTransactionWatcher.queueSource(
+            for: .sweep,
+            pendingPurchaseContextMatch: resolved
+        )
+
+        let item = makeItem(
+            appUserId: resolved?.appUserId ?? "missing",
+            source: queueSource,
+            clientPurchaseContext: resolved?.context
+        )
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertEqual(queueSource, .purchase)
+        XCTAssertEqual(request.sourceIntent, "purchase")
+        XCTAssertEqual(request.clientDeliverySource, "unfinished")
+        XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-unfinished-intent")
+    }
+
+    func testPassiveUnfinishedSweepWithoutPendingContextStaysSyncIntent() {
+        let queueSource = AppActorTransactionWatcher.queueSource(
+            for: .sweep,
+            pendingPurchaseContextMatch: nil
+        )
+        let item = makeItem(
+            source: queueSource,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientObservedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                clientDeliverySource: .unfinished
+            )
+        )
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertEqual(queueSource, .sweep)
+        XCTAssertEqual(request.sourceIntent, "sync")
+        XCTAssertEqual(request.clientDeliverySource, "unfinished")
+        XCTAssertNil(request.clientPurchaseAttemptId)
+    }
+
+    @MainActor
+    func testDeferredPurchaseResolvedCallbackUsesPersistedPendingContextAfterRelaunch() async {
+        let appactor = AppActor.shared
+        await appactor.reset()
+
+        let storage = InMemoryPaymentStorage()
+        storage.setAppUserId("user-pending")
+        appactor.configureForTesting(
+            config: AppActorPaymentConfiguration(
+                apiKey: "pk_test_deferred",
+                baseURL: URL(string: "https://api.test.appactor.com")!
+            ),
+            client: MockPaymentClient(),
+            storage: storage
+        )
+
+        var callbackProductId: String?
+        var callbackUserId: String?
+        appactor.onDeferredPurchaseResolved = { productId, customerInfo in
+            callbackProductId = productId
+            callbackUserId = customerInfo.appUserId
+        }
+
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let completedAt = startedAt.addingTimeInterval(3_600)
+        let receiptContext = AppActorReceiptCustomerUpdateContext(
+            appUserId: "user-pending",
+            productId: "com.test.yearly",
+            sourceIntent: .purchase,
+            clientPurchaseContext: AppActorClientPurchaseContext(
+                clientPurchaseAttemptStartedAt: startedAt,
+                clientObservedAt: completedAt,
+                clientDeliverySource: .unfinished,
+                clientPurchaseAttemptId: "attempt-ios-callback"
+            )
+        )
+
+        await appactor.handleReceiptCustomerInfoUpdate(
+            AppActorCustomerInfo(appUserId: "user-pending"),
+            receiptContext: receiptContext
+        )
+
+        XCTAssertEqual(callbackProductId, "com.test.yearly")
+        XCTAssertEqual(callbackUserId, "user-pending")
+        await appactor.reset()
     }
 
     func testPendingPurchaseContextBufferDoesNotConsumeRenewal() {
