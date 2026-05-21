@@ -1,0 +1,11 @@
+{
+  "expirationDate" : 711692800,
+  "id" : "premium",
+  "isActive" : false,
+  "originalPurchaseDate" : 709692800,
+  "ownershipType" : "purchased",
+  "periodType" : "monthly",
+  "productID" : "com.app.monthly",
+  "subscriptionStatus" : "revoked",
+  "willRenew" : false
+}

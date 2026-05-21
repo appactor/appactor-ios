@@ -1,0 +1,12 @@
+{
+  "requestDate": "2026-02-14T22:42:17.027Z",
+  "requestDateMs": 1771108937027,
+  "customer": {
+    "managementUrl": null,
+    "firstSeen": "2026-02-14T22:42:04.583Z",
+    "lastSeen": "2026-02-14T22:42:04.583Z",
+    "entitlements": {},
+    "subscriptions": {},
+    "nonSubscriptions": {}
+  }
+}
