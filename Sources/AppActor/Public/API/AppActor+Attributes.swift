@@ -286,7 +286,7 @@ extension AppActor {
     }
 
     public func updateAttribution(_ attribution: AppActorAttribution) async throws {
-        try validateAttribution(attribution)
+        try validateAttribution(attribution, requireProvider: true)
         let appUserId = customerAttributesManager.ensureAppUserId()
         try customerAttributesManager.enqueueAttribution(appUserId: appUserId, attribution: attribution)
         try await flushIfConfigured(appUserId: appUserId)
@@ -344,56 +344,76 @@ extension AppActor {
         ))
     }
 
-    public static func setMediaSource(_ mediaSource: String) async throws {
+    public static func setMediaSource(_ mediaSource: String?) async throws {
         try await shared.setMediaSource(mediaSource)
     }
 
-    public func setMediaSource(_ mediaSource: String) async throws {
+    public func setMediaSource(_ mediaSource: String?) async throws {
         try await updateCustomAttribution(
             providerName: mediaSource,
             network: mediaSource,
-            source: mediaSource
+            source: mediaSource,
+            clearing: mediaSource == nil ? [.mediaSource] : []
         )
     }
 
-    public static func setCampaign(_ campaign: String) async throws {
+    public static func setCampaign(_ campaign: String?) async throws {
         try await shared.setCampaign(campaign)
     }
 
-    public func setCampaign(_ campaign: String) async throws {
-        try await updateCustomAttribution(campaignName: campaign, campaign: campaign)
+    public func setCampaign(_ campaign: String?) async throws {
+        try await updateCustomAttribution(
+            campaignName: campaign,
+            campaign: campaign,
+            clearing: campaign == nil ? [.campaign] : []
+        )
     }
 
-    public static func setAdGroup(_ adGroup: String) async throws {
+    public static func setAdGroup(_ adGroup: String?) async throws {
         try await shared.setAdGroup(adGroup)
     }
 
-    public func setAdGroup(_ adGroup: String) async throws {
-        try await updateCustomAttribution(adGroupName: adGroup, adGroup: adGroup)
+    public func setAdGroup(_ adGroup: String?) async throws {
+        try await updateCustomAttribution(
+            adGroupName: adGroup,
+            adGroup: adGroup,
+            clearing: adGroup == nil ? [.adGroup] : []
+        )
     }
 
-    public static func setAd(_ ad: String) async throws {
+    public static func setAd(_ ad: String?) async throws {
         try await shared.setAd(ad)
     }
 
-    public func setAd(_ ad: String) async throws {
-        try await updateCustomAttribution(adName: ad, ad: ad)
+    public func setAd(_ ad: String?) async throws {
+        try await updateCustomAttribution(
+            adName: ad,
+            ad: ad,
+            clearing: ad == nil ? [.ad] : []
+        )
     }
 
-    public static func setKeyword(_ keyword: String) async throws {
+    public static func setKeyword(_ keyword: String?) async throws {
         try await shared.setKeyword(keyword)
     }
 
-    public func setKeyword(_ keyword: String) async throws {
-        try await updateCustomAttribution(keyword: keyword)
+    public func setKeyword(_ keyword: String?) async throws {
+        try await updateCustomAttribution(
+            keyword: keyword,
+            clearing: keyword == nil ? [.keyword] : []
+        )
     }
 
-    public static func setCreative(_ creative: String) async throws {
+    public static func setCreative(_ creative: String?) async throws {
         try await shared.setCreative(creative)
     }
 
-    public func setCreative(_ creative: String) async throws {
-        try await updateCustomAttribution(creativeName: creative, creative: creative)
+    public func setCreative(_ creative: String?) async throws {
+        try await updateCustomAttribution(
+            creativeName: creative,
+            creative: creative,
+            clearing: creative == nil ? [.creative] : []
+        )
     }
 
     func flushPendingCustomerAttributeWritesForCurrentUser() async throws {
@@ -456,80 +476,88 @@ extension AppActor {
         }
     }
 
-	private func validateAttribution(_ attribution: AppActorAttribution) throws {
-		for (key, value) in attribution.metadata {
-			try AppActorAttributeKey.validateCustom(key)
-			try AppActorAttributeKey.validateValue(value, key: key)
-		}
-		if let provider = attribution.provider {
-			try AppActorAttributeKey.validateAttributionString(provider, field: "provider", maxBytes: 64)
-		}
-		let values: [(String, String?)] = [
-			("status", attribution.status),
-			("provider_name", attribution.providerName),
-			("campaign_id", attribution.campaignId),
-			("campaign_name", attribution.campaignName),
-			("ad_group_id", attribution.adGroupId),
-			("ad_group_name", attribution.adGroupName),
-			("ad_id", attribution.adId),
-			("ad_name", attribution.adName),
-			("creative_id", attribution.creativeId),
-			("creative_name", attribution.creativeName),
-			("keyword_id", attribution.keywordId),
-			("network", attribution.network),
-			("source", attribution.source),
-			("medium", attribution.medium),
-			("campaign", attribution.campaign),
-			("ad_group", attribution.adGroup),
-			("ad", attribution.ad),
-			("keyword", attribution.keyword),
-			("creative", attribution.creative),
-			("click_id", attribution.clickId),
-			("attributed_at", attribution.attributedAt),
-		]
-		for (field, value) in values {
-			try AppActorAttributeKey.validateAttributionString(value, field: field)
-		}
-	}
+    private func validateAttribution(_ attribution: AppActorAttribution, requireProvider: Bool = false) throws {
+        for (key, value) in attribution.metadata {
+            try AppActorAttributeKey.validateCustom(key)
+            try AppActorAttributeKey.validateValue(value, key: key)
+        }
+        if let provider = attribution.provider {
+            try AppActorAttributeKey.validateAttributionString(provider, field: "provider", maxBytes: 64)
+        } else if requireProvider {
+            throw AppActorError.validationError("Attribution provider is required.")
+        }
+        let values: [(String, String?)] = [
+            ("status", attribution.status),
+            ("provider_name", attribution.providerName),
+            ("campaign_id", attribution.campaignId),
+            ("campaign_name", attribution.campaignName),
+            ("ad_group_id", attribution.adGroupId),
+            ("ad_group_name", attribution.adGroupName),
+            ("ad_id", attribution.adId),
+            ("ad_name", attribution.adName),
+            ("creative_id", attribution.creativeId),
+            ("creative_name", attribution.creativeName),
+            ("keyword_id", attribution.keywordId),
+            ("network", attribution.network),
+            ("source", attribution.source),
+            ("medium", attribution.medium),
+            ("campaign", attribution.campaign),
+            ("ad_group", attribution.adGroup),
+            ("ad", attribution.ad),
+            ("keyword", attribution.keyword),
+            ("creative", attribution.creative),
+            ("click_id", attribution.clickId),
+            ("attributed_at", attribution.attributedAt),
+        ]
+        for (field, value) in values {
+            try AppActorAttributeKey.validateAttributionString(value, field: field)
+        }
+    }
 
-	private static func hexString(from data: Data) -> String {
-		data.map { String(format: "%02x", $0) }.joined()
-	}
+    private static func hexString(from data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
 
-	private func updateCustomAttribution(
-		providerName: String? = nil,
-		campaignName: String? = nil,
-		adGroupName: String? = nil,
-		adName: String? = nil,
-		creativeName: String? = nil,
-		network: String? = nil,
-		source: String? = nil,
-		campaign: String? = nil,
-		adGroup: String? = nil,
-		ad: String? = nil,
-		keyword: String? = nil,
-		creative: String? = nil
-	) async throws {
-		var patch = AppActorAttribution()
-		patch.provider = "custom"
-		patch.providerName = providerName
-		patch.campaignName = campaignName
-		patch.adGroupName = adGroupName
-		patch.adName = adName
-		patch.creativeName = creativeName
-		patch.keyword = keyword
-		patch.network = network
-		patch.source = source
-		patch.campaign = campaign
-		patch.adGroup = adGroup
-		patch.ad = ad
-		patch.creative = creative
+    private func updateCustomAttribution(
+        providerName: String? = nil,
+        campaignName: String? = nil,
+        adGroupName: String? = nil,
+        adName: String? = nil,
+        creativeName: String? = nil,
+        network: String? = nil,
+        source: String? = nil,
+        campaign: String? = nil,
+        adGroup: String? = nil,
+        ad: String? = nil,
+        keyword: String? = nil,
+        creative: String? = nil,
+        clearing fieldsToClear: Set<AppActorCustomAttributionField> = []
+    ) async throws {
+        var patch = AppActorAttribution()
+        patch.provider = "custom"
+        patch.providerName = providerName
+        patch.campaignName = campaignName
+        patch.adGroupName = adGroupName
+        patch.adName = adName
+        patch.creativeName = creativeName
+        patch.keyword = keyword
+        patch.network = network
+        patch.source = source
+        patch.campaign = campaign
+        patch.adGroup = adGroup
+        patch.ad = ad
+        patch.creative = creative
 
-			let appUserId = customerAttributesManager.ensureAppUserId()
-			try validateAttribution(patch)
-			let attribution = customerAttributesManager.mergeCustomAttribution(appUserId: appUserId, patch: patch)
-			try await updateAttribution(attribution)
-		}
+        let appUserId = customerAttributesManager.ensureAppUserId()
+        try validateAttribution(patch, requireProvider: false)
+        let attribution = customerAttributesManager.mergeCustomAttribution(
+            appUserId: appUserId,
+            patch: patch,
+            clearing: fieldsToClear
+        )
+        try validateAttribution(attribution, requireProvider: true)
+        try await updateAttribution(attribution)
+    }
 
 	private static var platformName: String {
 		#if os(iOS)

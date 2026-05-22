@@ -306,7 +306,7 @@ public struct AppActorAttribution: Sendable, Equatable, Codable {
         self.creativeId = try decode(.creativeId, .creativeId)
         self.creativeName = creativeName
         self.keywordId = try decode(.keywordId, .keywordId)
-        self.network = try decode(.network, .network) ?? provider
+        self.network = try decode(.network, .network)
         self.source = try decode(.source, .source) ?? providerName
         self.medium = try decode(.medium, .medium)
         self.campaign = try decode(.campaign, .campaign) ?? campaignName

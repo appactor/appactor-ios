@@ -138,13 +138,24 @@ final class PluginCustomerAttributesTests: XCTestCase {
     func testUpdateAttributionRequestRoutesToNativeSDK() async throws {
         let json = await AppActorPlugin.shared.execute(
             method: "update_attribution",
-            withJson: #"{"attribution":{"network":"apple_search_ads","campaign":"Launch","metadata":{"keyword":"swift"}}}"#
+            withJson: #"{"attribution":{"provider":"apple_search_ads","network":"apple_search_ads","campaign":"Launch","metadata":{"keyword":"swift"}}}"#
         )
         let envelope = try parseEnvelope(json)
 
         XCTAssertEqual(envelope["success"] as? Bool, true)
         XCTAssertEqual(client.attributionCalls.last?.1.attribution.network, "apple_search_ads")
         XCTAssertEqual(client.attributionCalls.last?.1.attribution.metadata["keyword"], .string("swift"))
+    }
+
+    func testUpdateAttributionRequestRejectsMissingProvider() async throws {
+        let json = await AppActorPlugin.shared.execute(
+            method: "update_attribution",
+            withJson: #"{"attribution":{"campaign":"Launch"}}"#
+        )
+        let envelope = try parseEnvelope(json)
+
+        XCTAssertNotEqual(envelope["success"] as? Bool, true)
+        XCTAssertTrue(client.attributionCalls.isEmpty)
     }
 
     func testSetIntegrationIdentifierRequiresValueFieldButAllowsNullClear() async throws {
@@ -179,6 +190,27 @@ final class PluginCustomerAttributesTests: XCTestCase {
             XCTAssertNotEqual(missingEnvelope["success"] as? Bool, true, "\(method) should reject missing value")
 
             let explicitNull = await AppActorPlugin.shared.execute(method: method, withJson: nullPayload)
+            let nullEnvelope = try parseEnvelope(explicitNull)
+            XCTAssertEqual(nullEnvelope["success"] as? Bool, true, "\(method) should allow explicit null clear")
+        }
+    }
+
+    func testAttributionHelpersRequireValueFieldButAllowNullClear() async throws {
+        let methods = [
+            "set_media_source",
+            "set_campaign",
+            "set_ad_group",
+            "set_ad",
+            "set_keyword",
+            "set_creative",
+        ]
+
+        for method in methods {
+            let missing = await AppActorPlugin.shared.execute(method: method, withJson: #"{}"#)
+            let missingEnvelope = try parseEnvelope(missing)
+            XCTAssertNotEqual(missingEnvelope["success"] as? Bool, true, "\(method) should reject missing value")
+
+            let explicitNull = await AppActorPlugin.shared.execute(method: method, withJson: #"{"value":null}"#)
             let nullEnvelope = try parseEnvelope(explicitNull)
             XCTAssertEqual(nullEnvelope["success"] as? Bool, true, "\(method) should allow explicit null clear")
         }
@@ -228,16 +260,22 @@ final class PluginCustomerAttributesTests: XCTestCase {
             method: "set_campaign",
             withJson: #"{"value":"spring_sale"}"#
         )
+        let clearMediaSource = await AppActorPlugin.shared.execute(
+            method: "set_media_source",
+            withJson: #"{"value":null}"#
+        )
         let mediaSourceEnvelope = try parseEnvelope(mediaSource)
         let campaignEnvelope = try parseEnvelope(campaign)
+        let clearMediaSourceEnvelope = try parseEnvelope(clearMediaSource)
         let attribution = try XCTUnwrap(client.attributionCalls.last?.1.attribution)
 
         XCTAssertEqual(mediaSourceEnvelope["success"] as? Bool, true)
         XCTAssertEqual(campaignEnvelope["success"] as? Bool, true)
+        XCTAssertEqual(clearMediaSourceEnvelope["success"] as? Bool, true)
         XCTAssertEqual(attribution.provider, "custom")
-        XCTAssertEqual(attribution.providerName, "facebook")
-        XCTAssertEqual(attribution.network, "facebook")
-        XCTAssertEqual(attribution.source, "facebook")
+        XCTAssertNil(attribution.providerName)
+        XCTAssertNil(attribution.network)
+        XCTAssertNil(attribution.source)
         XCTAssertEqual(attribution.campaignName, "spring_sale")
         XCTAssertEqual(attribution.campaign, "spring_sale")
     }

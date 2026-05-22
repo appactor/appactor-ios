@@ -255,7 +255,15 @@ struct UpdateAttributionRequest: AppActorPluginRequest {
 struct SetMediaSourceRequest: AppActorPluginRequest {
     static let method = "set_media_source"
 
-    let value: String
+    let value: String?
+
+    init(from decoder: Decoder) throws {
+        value = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value"]
+        )
+    }
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
@@ -267,7 +275,15 @@ struct SetMediaSourceRequest: AppActorPluginRequest {
 struct SetCampaignRequest: AppActorPluginRequest {
     static let method = "set_campaign"
 
-    let value: String
+    let value: String?
+
+    init(from decoder: Decoder) throws {
+        value = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value"]
+        )
+    }
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
@@ -279,7 +295,15 @@ struct SetCampaignRequest: AppActorPluginRequest {
 struct SetAdGroupRequest: AppActorPluginRequest {
     static let method = "set_ad_group"
 
-    let value: String
+    let value: String?
+
+    init(from decoder: Decoder) throws {
+        value = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value"]
+        )
+    }
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
@@ -291,7 +315,15 @@ struct SetAdGroupRequest: AppActorPluginRequest {
 struct SetAdRequest: AppActorPluginRequest {
     static let method = "set_ad"
 
-    let value: String
+    let value: String?
+
+    init(from decoder: Decoder) throws {
+        value = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value"]
+        )
+    }
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
@@ -303,7 +335,15 @@ struct SetAdRequest: AppActorPluginRequest {
 struct SetKeywordRequest: AppActorPluginRequest {
     static let method = "set_keyword"
 
-    let value: String
+    let value: String?
+
+    init(from decoder: Decoder) throws {
+        value = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value"]
+        )
+    }
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
@@ -315,7 +355,15 @@ struct SetKeywordRequest: AppActorPluginRequest {
 struct SetCreativeRequest: AppActorPluginRequest {
     static let method = "set_creative"
 
-    let value: String
+    let value: String?
+
+    init(from decoder: Decoder) throws {
+        value = try decodeRequiredNullableString(
+            from: decoder,
+            method: Self.method,
+            keys: ["value"]
+        )
+    }
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {

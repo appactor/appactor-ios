@@ -322,11 +322,11 @@ final class CustomerAttributesTests: XCTestCase {
 		XCTAssertNil(manager.pendingBucket(appUserId: "user_a"))
 	}
 
-	func testRevenueCatStyleIntegrationAndAttributionHelpers() async throws {
-		try await appactor.setAppsflyerID("af_123")
-		try await appactor.setAdjustID("adj_123")
-		try await appactor.setMediaSource("facebook")
-		try await appactor.setCampaign("spring_sale")
+		func testRevenueCatStyleIntegrationAndAttributionHelpers() async throws {
+			try await appactor.setAppsflyerID("af_123")
+			try await appactor.setAdjustID("adj_123")
+			try await appactor.setMediaSource("facebook")
+			try await appactor.setCampaign("spring_sale")
 
         XCTAssertEqual(
             client.patchIntegrationIdentifiersCalls.map { $0.request.integrationIdentifiers },
@@ -343,13 +343,58 @@ final class CustomerAttributesTests: XCTestCase {
 		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.providerName, "facebook")
 		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.network, "facebook")
 		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.source, "facebook")
-		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaignName, "spring_sale")
-		XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaign, "spring_sale")
-	}
+			XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaignName, "spring_sale")
+			XCTAssertEqual(client.patchAttributionCalls[1].request.attribution.campaign, "spring_sale")
+		}
+
+        func testAttributionHelperNilClearsSelectedFields() async throws {
+            try await appactor.setMediaSource("facebook")
+            try await appactor.setCampaign("spring_sale")
+            try await appactor.setMediaSource(nil)
+
+            let request = try XCTUnwrap(client.patchAttributionCalls.last?.request.attribution)
+            XCTAssertEqual(request.provider, "custom")
+            XCTAssertNil(request.providerName)
+            XCTAssertNil(request.network)
+            XCTAssertNil(request.source)
+            XCTAssertEqual(request.campaignName, "spring_sale")
+            XCTAssertEqual(request.campaign, "spring_sale")
+        }
+
+        func testAttributionHelperNilClearSurvivesPersistedQueueRoundtrip() async throws {
+            let offline = AppActorError.networkError(URLError(.notConnectedToInternet))
+            client.patchAttributionHandler = { _, _ in throw offline }
+
+            try await appactor.setMediaSource("facebook")
+            try await appactor.setCampaign("spring_sale")
+            try await appactor.setMediaSource(nil)
+
+            let appUserId = try XCTUnwrap(storage.currentAppUserId)
+            let rawQueue = try XCTUnwrap(storage.string(forKey: AppActorPaymentStorageKey.customerAttributesQueue))
+            XCTAssertFalse(rawQueue.contains("facebook"))
+
+            var keywordPatch = AppActorAttribution()
+            keywordPatch.provider = "custom"
+            keywordPatch.keyword = "swift"
+
+            let relaunchedManager = AppActorCustomerAttributesManager(storage: storage, client: client)
+            let merged = relaunchedManager.mergeCustomAttribution(
+                appUserId: appUserId,
+                patch: keywordPatch
+            )
+
+            XCTAssertEqual(merged.provider, "custom")
+            XCTAssertNil(merged.providerName)
+            XCTAssertNil(merged.network)
+            XCTAssertNil(merged.source)
+            XCTAssertEqual(merged.campaignName, "spring_sale")
+            XCTAssertEqual(merged.campaign, "spring_sale")
+            XCTAssertEqual(merged.keyword, "swift")
+        }
 
 	func testDirectAttributionUpdateRefreshesHelperMergeSnapshot() async throws {
-		try await appactor.setMediaSource("facebook")
-		try await appactor.updateAttribution(network: "tiktok", source: "tiktok")
+			try await appactor.setMediaSource("facebook")
+			try await appactor.updateAttribution(network: "tiktok", source: "tiktok")
 		try await appactor.setCampaign("spring_sale")
 
 		let request = try XCTUnwrap(client.patchAttributionCalls.last?.request.attribution)
@@ -488,10 +533,16 @@ final class CustomerAttributesTests: XCTestCase {
 		)
 	}
 
-	func testAttributionCanonicalFieldsValidateBeforeSending() async throws {
-		await XCTAssertThrowsErrorAsync(
-			try await appactor.updateAttribution(AppActorAttribution(
-				provider: "custom",
+		func testAttributionCanonicalFieldsValidateBeforeSending() async throws {
+            await XCTAssertThrowsErrorAsync(
+                try await appactor.updateAttribution(AppActorAttribution())
+            ) { error in
+                XCTAssertTrue(String(describing: error).contains("provider"))
+            }
+
+			await XCTAssertThrowsErrorAsync(
+				try await appactor.updateAttribution(AppActorAttribution(
+					provider: "custom",
 				providerName: " facebook"
 			))
 		) { error in

@@ -121,7 +121,8 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
 
     func mergeCustomAttribution(
         appUserId: String,
-        patch: AppActorAttribution
+        patch: AppActorAttribution,
+        clearing fieldsToClear: Set<AppActorCustomAttributionField> = []
     ) -> AppActorAttribution {
         lock.withLock {
             var state = loadState(from: storage)
@@ -130,24 +131,24 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             var merged = customAttributionSnapshots[appUserId] ?? persistedSnapshot ?? queuedAttribution ?? AppActorAttribution()
             merged.provider = patch.provider ?? merged.provider ?? "custom"
             merged.status = patch.status ?? merged.status
-            merged.providerName = patch.providerName ?? merged.providerName
+            merged.providerName = fieldsToClear.contains(.mediaSource) ? nil : patch.providerName ?? merged.providerName
             merged.campaignId = patch.campaignId ?? merged.campaignId
-            merged.campaignName = patch.campaignName ?? merged.campaignName
+            merged.campaignName = fieldsToClear.contains(.campaign) ? nil : patch.campaignName ?? merged.campaignName
             merged.adGroupId = patch.adGroupId ?? merged.adGroupId
-            merged.adGroupName = patch.adGroupName ?? merged.adGroupName
+            merged.adGroupName = fieldsToClear.contains(.adGroup) ? nil : patch.adGroupName ?? merged.adGroupName
             merged.adId = patch.adId ?? merged.adId
-            merged.adName = patch.adName ?? merged.adName
+            merged.adName = fieldsToClear.contains(.ad) ? nil : patch.adName ?? merged.adName
             merged.creativeId = patch.creativeId ?? merged.creativeId
-            merged.creativeName = patch.creativeName ?? merged.creativeName
+            merged.creativeName = fieldsToClear.contains(.creative) ? nil : patch.creativeName ?? merged.creativeName
             merged.keywordId = patch.keywordId ?? merged.keywordId
-            merged.keyword = patch.keyword ?? merged.keyword
-            merged.network = patch.network ?? merged.network
-            merged.source = patch.source ?? merged.source
+            merged.keyword = fieldsToClear.contains(.keyword) ? nil : patch.keyword ?? merged.keyword
+            merged.network = fieldsToClear.contains(.mediaSource) ? nil : patch.network ?? merged.network
+            merged.source = fieldsToClear.contains(.mediaSource) ? nil : patch.source ?? merged.source
             merged.medium = patch.medium ?? merged.medium
-            merged.campaign = patch.campaign ?? merged.campaign
-            merged.adGroup = patch.adGroup ?? merged.adGroup
-            merged.ad = patch.ad ?? merged.ad
-            merged.creative = patch.creative ?? merged.creative
+            merged.campaign = fieldsToClear.contains(.campaign) ? nil : patch.campaign ?? merged.campaign
+            merged.adGroup = fieldsToClear.contains(.adGroup) ? nil : patch.adGroup ?? merged.adGroup
+            merged.ad = fieldsToClear.contains(.ad) ? nil : patch.ad ?? merged.ad
+            merged.creative = fieldsToClear.contains(.creative) ? nil : patch.creative ?? merged.creative
             merged.clickId = patch.clickId ?? merged.clickId
             merged.attributedAt = patch.attributedAt ?? merged.attributedAt
             merged.metadata.merge(patch.metadata) { _, new in new }
@@ -353,6 +354,15 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
         decoder.dateDecodingStrategy = .secondsSince1970
         return decoder
     }
+}
+
+enum AppActorCustomAttributionField: Hashable {
+    case mediaSource
+    case campaign
+    case adGroup
+    case ad
+    case keyword
+    case creative
 }
 
 private func enforceCaps(_ bucket: AppActorCustomerAttributesManager.PendingBucket) throws {
