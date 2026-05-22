@@ -11,7 +11,8 @@ struct PurchasePackageRequest: AppActorPluginRequest {
 
     var normalizedPlacement: String? {
         let normalized = placement?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
+        guard let normalized, !normalized.isEmpty, normalized.count <= 255 else { return nil }
+        return normalized
     }
 
     @MainActor

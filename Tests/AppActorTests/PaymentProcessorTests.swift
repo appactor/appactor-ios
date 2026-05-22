@@ -146,6 +146,27 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(request.placement, "paywall.hero")
     }
 
+    func testReceiptRequestIncludesMaxLengthPlacement() {
+        let placement = String(repeating: "x", count: 255)
+        let item = makeItem(clientPurchaseContext: AppActorClientPurchaseContext.purchaseAttempt(
+            placement: placement
+        ))
+
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertEqual(request.placement, placement)
+    }
+
+    func testReceiptRequestOmitsOverlongPlacement() {
+        let item = makeItem(clientPurchaseContext: AppActorClientPurchaseContext.purchaseAttempt(
+            placement: String(repeating: "x", count: 256)
+        ))
+
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertNil(request.placement)
+    }
+
     func testReceiptRequestOmitsBlankPlacement() {
         let item = makeItem(clientPurchaseContext: AppActorClientPurchaseContext.purchaseAttempt(
             placement: "   \n"

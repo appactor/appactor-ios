@@ -99,6 +99,26 @@ final class PluginConfigureTests: XCTestCase {
         XCTAssertEqual(request.normalizedPlacement, "paywall.hero")
     }
 
+    func testPurchasePackageRequestKeepsMaxLengthPlacement() throws {
+        let placement = String(repeating: "x", count: 255)
+        let request = try AppActorPluginCoder.decoder.decode(
+            PurchasePackageRequest.self,
+            from: Data(#"{"package_id":"pkg_monthly","placement":"\#(placement)"}"#.utf8)
+        )
+
+        XCTAssertEqual(request.normalizedPlacement, placement)
+    }
+
+    func testPurchasePackageRequestNormalizesOverlongPlacementToNil() throws {
+        let placement = String(repeating: "x", count: 256)
+        let request = try AppActorPluginCoder.decoder.decode(
+            PurchasePackageRequest.self,
+            from: Data(#"{"package_id":"pkg_monthly","placement":"\#(placement)"}"#.utf8)
+        )
+
+        XCTAssertNil(request.normalizedPlacement)
+    }
+
     func testPurchasePackageRequestNormalizesBlankPlacementToNil() throws {
         let request = try AppActorPluginCoder.decoder.decode(
             PurchasePackageRequest.self,
