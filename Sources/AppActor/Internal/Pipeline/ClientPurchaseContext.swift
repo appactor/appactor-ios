@@ -15,6 +15,7 @@ struct AppActorClientPurchaseContext: Codable, Sendable, Equatable {
     var clientObservedAt: Date
     var clientDeliverySource: AppActorClientDeliverySource
     var clientPurchaseAttemptId: String?
+    var placement: String?
     var sdkOriginated: Bool
     var sdkVersion: String
 
@@ -23,6 +24,7 @@ struct AppActorClientPurchaseContext: Codable, Sendable, Equatable {
         clientObservedAt: Date = Date(),
         clientDeliverySource: AppActorClientDeliverySource,
         clientPurchaseAttemptId: String? = nil,
+        placement: String? = nil,
         sdkOriginated: Bool = true,
         sdkVersion: String = AppActorSDK.version
     ) {
@@ -30,6 +32,7 @@ struct AppActorClientPurchaseContext: Codable, Sendable, Equatable {
         self.clientObservedAt = clientObservedAt
         self.clientDeliverySource = clientDeliverySource
         self.clientPurchaseAttemptId = clientPurchaseAttemptId
+        self.placement = Self.normalizePlacement(placement)
         self.sdkOriginated = sdkOriginated
         self.sdkVersion = sdkVersion
     }
@@ -52,17 +55,23 @@ struct AppActorClientPurchaseContext: Codable, Sendable, Equatable {
             clientObservedAt: observedAt ?? clientObservedAt,
             clientDeliverySource: source,
             clientPurchaseAttemptId: clientPurchaseAttemptId,
+            placement: placement,
             sdkOriginated: sdkOriginated,
             sdkVersion: sdkVersion
         )
     }
 
-    static func purchaseAttempt(startedAt: Date = Date(), attemptId: UUID = UUID()) -> AppActorClientPurchaseContext {
+    static func purchaseAttempt(
+        startedAt: Date = Date(),
+        attemptId: UUID = UUID(),
+        placement: String? = nil
+    ) -> AppActorClientPurchaseContext {
         AppActorClientPurchaseContext(
             clientPurchaseAttemptStartedAt: startedAt,
             clientObservedAt: startedAt,
             clientDeliverySource: .purchaseFlow,
-            clientPurchaseAttemptId: attemptId.uuidString.lowercased()
+            clientPurchaseAttemptId: attemptId.uuidString.lowercased(),
+            placement: placement
         )
     }
 
@@ -88,6 +97,11 @@ struct AppActorClientPurchaseContext: Codable, Sendable, Equatable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    static func normalizePlacement(_ placement: String?) -> String? {
+        let normalized = placement?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized?.isEmpty == false ? normalized : nil
     }
 }
 

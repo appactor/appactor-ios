@@ -101,8 +101,19 @@ public final class AppActor: ObservableObject {
     /// Posts the transaction to the backend for validation.
     /// Entitlements are resolved server-authoritatively.
     ///
+    /// - Parameter placement: Optional host-app placement where the purchase was initiated.
     /// - Returns: A `PurchaseResult` with the updated `CustomerInfo` on success.
     public func purchase(package: AppActorPackage, quantity: Int = 1) async throws -> AppActorPurchaseResult {
+        try await purchase(package: package, quantity: quantity, placement: nil)
+    }
+
+    /// Purchases the product in the given package and records the host-app placement.
+    public func purchase(package: AppActorPackage, placement: String?) async throws -> AppActorPurchaseResult {
+        try await purchase(package: package, quantity: 1, placement: placement)
+    }
+
+    /// Purchases the product in the given package and records the host-app placement.
+    public func purchase(package: AppActorPackage, quantity: Int, placement: String?) async throws -> AppActorPurchaseResult {
         guard package.store == .appStore else {
             throw AppActorError.validationError("Package '\(package.id)' is not purchasable via StoreKit on iOS")
         }
@@ -117,13 +128,25 @@ public final class AppActor: ObservableObject {
         let lookupId = package.storeProductId ?? package.productId
         if let manager = offeringsManager,
            let product = try await manager.storeKitProduct(for: lookupId) {
-            return try await executePaymentPurchase(product: product, options: options, offeringId: package.offeringId, packageId: package.id)
+            return try await executePaymentPurchase(
+                product: product,
+                options: options,
+                offeringId: package.offeringId,
+                packageId: package.id,
+                placement: placement
+            )
         }
         let products = try await Product.products(for: [lookupId])
         guard let product = products.first(where: { $0.id == lookupId }) else {
             throw AppActorError.validationError("StoreKit product '\(lookupId)' not found for package '\(package.id)'")
         }
-        return try await executePaymentPurchase(product: product, options: options, offeringId: package.offeringId, packageId: package.id)
+        return try await executePaymentPurchase(
+            product: product,
+            options: options,
+            offeringId: package.offeringId,
+            packageId: package.id,
+            placement: placement
+        )
     }
 
     // MARK: - Restore & Sync Purchases
@@ -423,6 +446,7 @@ public final class AppActor: ObservableObject {
             originalTransactionId: transaction.originalTransactionId,
             offeringId: nil,
             packageId: nil,
+            placement: nil,
             clientPurchaseAttemptStartedAt: context.clientPurchaseAttemptStartedAtString,
             clientObservedAt: context.clientObservedAtString,
             clientDeliverySource: context.clientDeliverySource.rawValue,
@@ -452,6 +476,7 @@ public final class AppActor: ObservableObject {
             originalTransactionId: nil,
             offeringId: nil,
             packageId: nil,
+            placement: nil,
             clientPurchaseAttemptStartedAt: context.clientPurchaseAttemptStartedAtString,
             clientObservedAt: context.clientObservedAtString,
             clientDeliverySource: context.clientDeliverySource.rawValue,

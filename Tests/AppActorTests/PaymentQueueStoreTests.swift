@@ -199,6 +199,7 @@ final class PaymentQueueStoreTests: XCTestCase {
                 clientObservedAt: observedAt,
                 clientDeliverySource: .purchaseFlow,
                 clientPurchaseAttemptId: "attempt-ios-disk",
+                placement: "paywall.disk",
                 sdkOriginated: true,
                 sdkVersion: "9.9.9"
             ),
@@ -222,6 +223,7 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertEqual(context?.clientObservedAt, observedAt)
         XCTAssertEqual(context?.clientDeliverySource, .purchaseFlow)
         XCTAssertEqual(context?.clientPurchaseAttemptId, "attempt-ios-disk")
+        XCTAssertEqual(context?.placement, "paywall.disk")
         XCTAssertEqual(context?.sdkVersion, "9.9.9")
     }
 

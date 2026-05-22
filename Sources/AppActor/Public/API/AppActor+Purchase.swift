@@ -18,10 +18,16 @@ extension AppActor {
     /// Purchases a StoreKit `Product` directly.
     ///
     /// - Parameter product: A StoreKit 2 `Product`.
+    /// - Parameter placement: Optional host-app placement where the purchase was initiated.
     /// - Returns: The purchase result.
     /// - Throws: `AppActorError` if payment is not configured.
     public func purchase(product: Product) async throws -> AppActorPurchaseResult {
-        try await executePaymentPurchase(product: product)
+        try await purchase(product: product, placement: nil)
+    }
+
+    /// Purchases a StoreKit `Product` directly and records the host-app placement.
+    public func purchase(product: Product, placement: String?) async throws -> AppActorPurchaseResult {
+        try await executePaymentPurchase(product: product, placement: placement)
     }
 
     /// Purchases a product from a `PurchaseIntent` (promoted IAP or win-back offer).
@@ -31,10 +37,17 @@ extension AppActor {
     ///
     /// - Parameter intent: The `PurchaseIntent` received from `PurchaseIntent.intents`
     ///   or the `onPurchaseIntent` callback.
+    /// - Parameter placement: Optional host-app placement where the purchase was initiated.
     /// - Returns: The purchase result.
     /// - Throws: `AppActorError` if payment is not configured.
     @available(iOS 16.4, macOS 14.4, tvOS 16.4, watchOS 9.4, *)
     public func purchase(intent: PurchaseIntent) async throws -> AppActorPurchaseResult {
+        try await purchase(intent: intent, placement: nil)
+    }
+
+    /// Purchases a product from a `PurchaseIntent` and records the host-app placement.
+    @available(iOS 16.4, macOS 14.4, tvOS 16.4, watchOS 9.4, *)
+    public func purchase(intent: PurchaseIntent, placement: String?) async throws -> AppActorPurchaseResult {
         var options: Set<Product.PurchaseOption> = []
 
         if #available(iOS 18.0, macOS 15.0, tvOS 18.0, watchOS 11.0, *) {
@@ -43,7 +56,7 @@ extension AppActor {
             }
         }
 
-        return try await executePaymentPurchase(product: intent.product, options: options)
+        return try await executePaymentPurchase(product: intent.product, options: options, placement: placement)
     }
 
     /// Callback invoked when the receipt pipeline processes an event.
@@ -81,7 +94,8 @@ extension AppActor {
         product: Product,
         options: Set<Product.PurchaseOption> = [],
         offeringId: String? = nil,
-        packageId: String? = nil
+        packageId: String? = nil,
+        placement: String? = nil
     ) async throws -> AppActorPurchaseResult {
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
@@ -103,7 +117,7 @@ extension AppActor {
         let purchaseIdentity = attachAppAccountToken(to: options, storage: storage)
         let options = purchaseIdentity.options
         let purchaseAppUserId = storage.ensureAppUserId()
-        let clientPurchaseContext = AppActorClientPurchaseContext.purchaseAttempt()
+        let clientPurchaseContext = AppActorClientPurchaseContext.purchaseAttempt(placement: placement)
         var handledForegroundTransactionId: String?
         var preserveForegroundContextForPending = false
         Log.receipts.debug("Purchase with appAccountToken: \(String(purchaseIdentity.token.uuidString.lowercased().prefix(8)))…")

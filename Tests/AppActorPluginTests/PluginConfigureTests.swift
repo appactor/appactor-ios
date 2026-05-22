@@ -88,6 +88,26 @@ final class PluginConfigureTests: XCTestCase {
         XCTAssertEqual(request.fetchPolicy, "cacheOnly")
     }
 
+    func testPurchasePackageRequestDecodesAndNormalizesPlacement() throws {
+        let request = try AppActorPluginCoder.decoder.decode(
+            PurchasePackageRequest.self,
+            from: Data(#"{"package_id":"pkg_monthly","quantity":1,"placement":"  paywall.hero  "}"#.utf8)
+        )
+
+        XCTAssertEqual(request.packageId, "pkg_monthly")
+        XCTAssertEqual(request.quantity, 1)
+        XCTAssertEqual(request.normalizedPlacement, "paywall.hero")
+    }
+
+    func testPurchasePackageRequestNormalizesBlankPlacementToNil() throws {
+        let request = try AppActorPluginCoder.decoder.decode(
+            PurchasePackageRequest.self,
+            from: Data(#"{"package_id":"pkg_monthly","placement":"   "}"#.utf8)
+        )
+
+        XCTAssertNil(request.normalizedPlacement)
+    }
+
     private func parseEnvelope(_ json: String) throws -> [String: Any] {
         let data = Data(json.utf8)
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])

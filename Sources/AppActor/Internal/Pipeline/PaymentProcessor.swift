@@ -881,6 +881,7 @@ actor AppActorPaymentProcessor {
             originalTransactionId: item.originalTransactionId,
             offeringId: item.offeringId,
             packageId: item.packageId,
+            placement: context?.hasPurchaseAttempt == true ? context?.placement : nil,
             clientPurchaseAttemptStartedAt: context?.clientPurchaseAttemptStartedAtString,
             clientObservedAt: context?.clientObservedAtString,
             clientDeliverySource: context?.clientDeliverySource.rawValue,

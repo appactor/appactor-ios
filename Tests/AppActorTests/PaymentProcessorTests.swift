@@ -134,6 +134,28 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(request.sdkVersion, "9.9.9")
     }
 
+    func testReceiptRequestIncludesNormalizedPlacementFromPurchaseAttemptContext() {
+        let item = makeItem(clientPurchaseContext: AppActorClientPurchaseContext.purchaseAttempt(
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            attemptId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            placement: "  paywall.hero  "
+        ))
+
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertEqual(request.placement, "paywall.hero")
+    }
+
+    func testReceiptRequestOmitsBlankPlacement() {
+        let item = makeItem(clientPurchaseContext: AppActorClientPurchaseContext.purchaseAttempt(
+            placement: "   \n"
+        ))
+
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertNil(request.placement)
+    }
+
     func testReceiptRetryRequestKeepsAttemptButMarksQueueRetryDeliverySource() {
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let item = makeItem(
@@ -143,6 +165,7 @@ final class PaymentProcessorTests: XCTestCase {
                 clientObservedAt: startedAt,
                 clientDeliverySource: .purchaseFlow,
                 clientPurchaseAttemptId: "attempt-ios-retry",
+                placement: "paywall.retry",
                 sdkOriginated: true,
                 sdkVersion: "9.9.9"
             )
@@ -154,6 +177,19 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(request.clientObservedAt, "2023-11-14T22:13:20.000Z")
         XCTAssertEqual(request.clientDeliverySource, "queue_retry")
         XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-retry")
+        XCTAssertEqual(request.placement, "paywall.retry")
+    }
+
+    func testReceiptRequestDoesNotSendPlacementFromNonAttemptContext() {
+        let item = makeItem(clientPurchaseContext: AppActorClientPurchaseContext(
+            clientObservedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            clientDeliverySource: .foregroundSync,
+            placement: "should-not-send"
+        ))
+
+        let request = AppActorPaymentProcessor.makeRequest(from: item)
+
+        XCTAssertNil(request.placement)
     }
 
     func testQueueMergeAdoptsPurchaseAttemptContextOverBackgroundContext() {
@@ -190,7 +226,8 @@ final class PaymentProcessorTests: XCTestCase {
                 clientPurchaseAttemptStartedAt: Date(timeIntervalSince1970: 1_700_000_000),
                 clientObservedAt: Date(timeIntervalSince1970: 1_700_000_001),
                 clientDeliverySource: .purchaseFlow,
-                clientPurchaseAttemptId: "attempt-ios-user-binding"
+                clientPurchaseAttemptId: "attempt-ios-user-binding",
+                placement: "paywall.user-binding"
             )
         )
         store.upsert(purchase)
@@ -214,6 +251,7 @@ final class PaymentProcessorTests: XCTestCase {
         let request = AppActorPaymentProcessor.makeRequest(from: merged)
         XCTAssertEqual(request.appUserId, "purchase_user")
         XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-user-binding")
+        XCTAssertEqual(request.placement, "paywall.user-binding")
     }
 
     func testQueueMergeRefreshesStaleBackgroundAppUserIdWhenNoPurchaseBindingExists() {
@@ -820,6 +858,7 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(request.idempotencyKey, "apple:12345")
         XCTAssertEqual(request.originalTransactionId, "12345")
         XCTAssertEqual(request.sourceIntent, "purchase")
+        XCTAssertNil(request.placement)
     }
 
     func testMakeRequestPreservesQueuedRestoreIntent() {
@@ -827,6 +866,7 @@ final class PaymentProcessorTests: XCTestCase {
         let request = AppActorPaymentProcessor.makeRequest(from: item)
 
         XCTAssertEqual(request.sourceIntent, "restore")
+        XCTAssertNil(request.placement)
 	}
 
     func testMakeRequestMarksBootSweepAsSyncIntent() {
@@ -834,6 +874,7 @@ final class PaymentProcessorTests: XCTestCase {
         let request = AppActorPaymentProcessor.makeRequest(from: item)
 
         XCTAssertEqual(request.sourceIntent, "sync")
+        XCTAssertNil(request.placement)
     }
 
     func testMakeRequestMarksTransactionUpdatesAsQueueIntent() {
@@ -841,6 +882,7 @@ final class PaymentProcessorTests: XCTestCase {
         let request = AppActorPaymentProcessor.makeRequest(from: item)
 
         XCTAssertEqual(request.sourceIntent, "queue")
+        XCTAssertNil(request.placement)
     }
 
     func testMakeRequestNormalizesLegacyTransactionUpdatesPurchaseIntentToQueue() {
