@@ -56,7 +56,13 @@ extension AppActor {
 
         self.isBootstrapComplete = true
 
-        try? await collectAutomaticProfileContext()
+        do {
+            try await collectAutomaticProfileContext()
+        } catch {
+            Log.customer.warn(
+                "Automatic profile context sync failed during bootstrap; continuing with queued retry: \(error.localizedDescription)"
+            )
+        }
         try? await flushPendingCustomerAttributeWritesForAllUsers()
 
         // Drain any PurchaseIntents that arrived before bootstrap completed

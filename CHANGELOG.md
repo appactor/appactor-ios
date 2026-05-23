@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Automatically sync privacy-safe profile context during `configure()`/bootstrap.
+- Breaking: removed the public `collectProfileContext()` and plugin `collect_profile_context` surfaces; use `collectDeviceIdentifiers()` only for explicit identifier opt-in.
+- Log automatic profile context sync failures during bootstrap while keeping startup best-effort.
+
 ## 0.1.6
 
 - Coalesced passive StoreKit unfinished renewal backlogs by original transaction chain during app-open sweep.
