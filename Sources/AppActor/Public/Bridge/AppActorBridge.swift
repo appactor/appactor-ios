@@ -282,15 +282,6 @@ public final class AppActorBridge {
         }
     }
 
-    public func collectProfileContext(
-        onSuccess: (() -> Void)? = nil,
-        onError: ((AppActorBridgeError) -> Void)? = nil
-    ) {
-        launchAsync(onSuccess: { (_: Void) in onSuccess?() }, onError: onError) {
-            try await AppActor.shared.collectProfileContext()
-        }
-    }
-
     public func setIntegrationIdentifier(
         _ key: String,
         value: String?,

@@ -182,16 +182,6 @@ struct CollectDeviceIdentifiersRequest: AppActorPluginRequest {
     }
 }
 
-struct CollectProfileContextRequest: AppActorPluginRequest {
-    static let method = "collect_profile_context"
-
-    @MainActor
-    func execute() async throws -> AppActorPluginResult {
-        try await AppActor.shared.collectProfileContext()
-        return .successVoid
-    }
-}
-
 struct SetIntegrationIdentifierRequest: AppActorPluginRequest {
     static let method = "set_integration_identifier"
 

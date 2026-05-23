@@ -23,7 +23,6 @@ enum AppActorPluginRequestRouter {
             SetPhoneNumberRequest.self,
             SetPushTokenRequest.self,
             CollectDeviceIdentifiersRequest.self,
-            CollectProfileContextRequest.self,
             SetIntegrationIdentifierRequest.self,
             UpdateAttributionRequest.self,
             SetMediaSourceRequest.self,

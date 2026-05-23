@@ -52,20 +52,18 @@ let isPremium = AppActor.shared.customerInfo.hasActiveEntitlement("premium")
 ## Customer Attributes & Profile Context
 
 `setAttributes(_:)` is for developer-defined custom attributes only. Custom keys
-must not start with `$`; AppActor system profile keys are collected through
-dedicated helpers so the API can route them into the server profile-current store
-instead of the custom attributes table.
+must not start with `$`; AppActor automatically collects privacy-safe system
+profile keys during configure so the API can route them into the server
+profile-current store instead of the custom attributes table.
 
 ```swift
 try await AppActor.shared.setAttributes([
     "plan": "pro",
     "favorite_category": "watch_faces"
 ])
-
-try await AppActor.shared.collectProfileContext()
 ```
 
-`collectProfileContext()` sends supported system context such as `$appVersion`,
+`configure()` sends supported system context such as `$appVersion`,
 `$appBuild`, `$sdkVersion`, `$platform`, `$osVersion`, `$deviceModel`,
 `$bundleId`, `$locale`, `$timezone`, `$localeCountry`, `$storefrontCountry`, and
 `$attConsentStatus` when available. `$ipCountry` is server/proxy-derived; the iOS

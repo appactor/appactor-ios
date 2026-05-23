@@ -84,27 +84,6 @@ extension AppActor {
         try await setPushToken(Self.hexString(from: pushToken))
     }
 
-    /// Collects supported system profile context into the server-routed
-    /// profile-current store.
-    ///
-    /// The collected values use AppActor system keys (for example
-    /// `$appVersion`, `$sdkVersion`, `$platform`, `$locale`, and `$timezone`).
-    /// Custom ``setAttributes(_:)`` calls remain developer-owned and reject
-    /// `$` system keys.
-    public static func collectProfileContext() async throws {
-        try await shared.collectProfileContext()
-    }
-
-    /// Collects supported system profile context into the server-routed
-    /// profile-current store.
-    ///
-    /// This method does not collect optional device identifiers such as IDFV.
-    /// Use ``collectDeviceIdentifiers()`` only when the host app intentionally
-    /// opts in to identifier collection and matching App Store privacy disclosure.
-    public func collectProfileContext() async throws {
-        try await collectSystemProfileContext(includeDeviceIdentifiers: false)
-    }
-
     /// Collects system profile context plus optional device/customer identifiers
     /// that are not sent by default.
     ///
@@ -123,6 +102,10 @@ extension AppActor {
     /// its App Store privacy disclosure when it opts in to identifier collection.
     public func collectDeviceIdentifiers() async throws {
         try await collectSystemProfileContext(includeDeviceIdentifiers: true)
+    }
+
+    func collectAutomaticProfileContext() async throws {
+        try await collectSystemProfileContext(includeDeviceIdentifiers: false)
     }
 
     private func collectSystemProfileContext(includeDeviceIdentifiers: Bool) async throws {

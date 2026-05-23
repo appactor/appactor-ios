@@ -413,7 +413,7 @@ enum AppActorAttributeKey {
             throw AppActorError.validationError("Custom attribute key '\(key)' must not start with 'integration.'. Use setIntegrationIdentifier() instead.")
         }
         guard !legacyProfileCurrentAliases.contains(key) else {
-            throw AppActorError.validationError("Custom attribute key '\(key)' is reserved for profile context. Use collectProfileContext() or the reserved '$' helper key instead.")
+            throw AppActorError.validationError("Custom attribute key '\(key)' is reserved for AppActor's automatic profile context. Use the reserved '$' helper key instead.")
         }
     }
 

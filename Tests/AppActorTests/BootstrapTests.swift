@@ -97,6 +97,12 @@ final class BootstrapTests: XCTestCase {
                        "Offerings API should be warmed during configure")
         XCTAssertNotNil(appactor.appUserId,
                         "Local appUserId should be ready after configure completes")
+        let profileContext = mockClient.patchAttributesCalls.last?.request.attributes
+        XCTAssertEqual(profileContext?[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))
+        XCTAssertNotNil(profileContext?[AppActorAttributeKey.platform])
+        XCTAssertNotNil(profileContext?[AppActorAttributeKey.locale])
+        XCTAssertNotNil(profileContext?[AppActorAttributeKey.deviceModel])
+        XCTAssertNil(profileContext?[AppActorAttributeKey.idfv])
     }
 
     func testConfigureTreatsWhitespaceAppUserIdAsOmittedAndReusesCachedIdentity() async {

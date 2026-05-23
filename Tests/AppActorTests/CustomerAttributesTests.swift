@@ -146,8 +146,8 @@ final class CustomerAttributesTests: XCTestCase {
         }
     }
 
-    func testCollectProfileContextSendsServerRoutedSystemAttributesWithoutIdfv() async throws {
-        try await appactor.collectProfileContext()
+    func testAutomaticProfileContextSendsServerRoutedSystemAttributesWithoutIdfv() async throws {
+        try await appactor.collectAutomaticProfileContext()
 
         let attributes = try XCTUnwrap(client.patchAttributesCalls.last?.request.attributes)
         XCTAssertEqual(attributes[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))

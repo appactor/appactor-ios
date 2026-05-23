@@ -56,6 +56,7 @@ extension AppActor {
 
         self.isBootstrapComplete = true
 
+        try? await collectAutomaticProfileContext()
         try? await flushPendingCustomerAttributeWritesForAllUsers()
 
         // Drain any PurchaseIntents that arrived before bootstrap completed
