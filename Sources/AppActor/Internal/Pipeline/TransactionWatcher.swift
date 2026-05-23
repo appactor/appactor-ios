@@ -69,7 +69,13 @@ actor AppActorTransactionWatcher {
     private var foregroundPurchaseContexts: [UUID: AppActorClientPurchaseContext] = [:]
     private var foregroundPurchaseAppUserIds: [UUID: String] = [:]
     private var foregroundPurchaseBuffer: [UUID: [BufferedTransaction]] = [:]
+    private var coalescedUnfinishedByOriginalId: [String: [CoalescedUnfinishedEntry]] = [:]
     private var pendingPurchaseContexts: AppActorPendingPurchaseContextBuffer
+
+    private struct CoalescedUnfinishedEntry {
+        let transactionId: String
+        let finish: () async -> Void
+    }
 
     init(
         processor: AppActorPaymentProcessor,
@@ -222,15 +228,84 @@ actor AppActorTransactionWatcher {
     /// expirations that occurred while the app was not running, matching the
     /// Adapty/RevenueCat "report everything, then finish" pattern.
     func sweepUnfinished() async {
-        var count = 0
+        var entries: [(transaction: Transaction, jws: String, reason: AppActorTransactionReason)] = []
         for await result in Transaction.unfinished {
             if case .verified(let transaction) = result {
                 let jws = result.jwsRepresentation
-                await handleVerifiedTransaction(transaction, jws: jws, source: .sweep)
-                count += 1
+                let reason = AppActorASATransactionSupport.resolveReason(
+                    for: transaction,
+                    jwsPayload: AppActorASATransactionSupport.decodeJWSPayload(jws)
+                )
+                entries.append((transaction: transaction, jws: jws, reason: reason))
             }
         }
-        Log.storeKit.info("sweepUnfinished completed: \(count) transaction(s) enqueued")
+
+        let selectedTransactionIds = AppActorUnfinishedTransactionCoalescer.selectRepresentativeIds(
+            from: entries.map { entry in
+                AppActorUnfinishedTransactionCandidate(
+                    transactionId: String(entry.transaction.id),
+                    originalTransactionId: String(entry.transaction.originalID),
+                    productId: entry.transaction.productID,
+                    purchaseDate: entry.transaction.purchaseDate,
+                    revocationDate: entry.transaction.revocationDate,
+                    reason: entry.reason
+                )
+            }
+        )
+
+        var enqueuedCount = 0
+        for entry in entries {
+            let transactionId = String(entry.transaction.id)
+            if selectedTransactionIds.contains(transactionId) {
+                await handleVerifiedTransaction(entry.transaction, jws: entry.jws, source: .sweep)
+                enqueuedCount += 1
+            } else {
+                let originalTransactionId = String(entry.transaction.originalID)
+                recordCoalescedUnfinished(
+                    originalTransactionId: originalTransactionId,
+                    transactionId: transactionId,
+                    finish: { await entry.transaction.finish() }
+                )
+            }
+        }
+
+        let coalescedCount = entries.count - enqueuedCount
+        Log.storeKit.info(
+            "sweepUnfinished completed: \(enqueuedCount) transaction(s) enqueued, \(coalescedCount) coalesced"
+        )
+    }
+
+    func recordCoalescedUnfinished(
+        originalTransactionId: String,
+        transactionId: String,
+        finish: @escaping () async -> Void
+    ) {
+        guard !originalTransactionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        var existing = coalescedUnfinishedByOriginalId[originalTransactionId] ?? []
+        guard !existing.contains(where: { $0.transactionId == transactionId }) else {
+            return
+        }
+        existing.append(CoalescedUnfinishedEntry(transactionId: transactionId, finish: finish))
+        coalescedUnfinishedByOriginalId[originalTransactionId] = existing
+    }
+
+    func finishCoalescedUnfinished(originalTransactionId: String) async {
+        guard !originalTransactionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let entries = coalescedUnfinishedByOriginalId.removeValue(forKey: originalTransactionId),
+              !entries.isEmpty else {
+            return
+        }
+
+        let keys = entries.map { AppActorPaymentQueueItem.makeKey(transactionId: $0.transactionId) }
+        await processor.markPostedAndReconcile(keys: keys)
+        for entry in entries {
+            await entry.finish()
+        }
+        Log.storeKit.info(
+            "Finished \(entries.count) coalesced unfinished transaction(s) after successful chain sync"
+        )
     }
 
     /// Collects all verified transactions from `Transaction.currentEntitlements`

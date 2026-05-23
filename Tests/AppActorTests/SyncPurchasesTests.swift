@@ -372,7 +372,53 @@ final class SyncPurchasesTests: XCTestCase {
         }
     }
 
-    func testBridgeSyncPurchasesPreservesOldQueueDrainBehavior() async throws {
+    func testBridgeSyncPurchasesUsesQuietStoreSyncPath() async throws {
+        let fetcher = MockStoreKitSilentSyncFetcher(
+            firstVerifiedTransactionHandler: {
+                AppActorSilentSyncTransaction(
+                    transactionId: "tx_bridge_sync",
+                    originalTransactionId: nil,
+                    productId: "premium_yearly",
+                    bundleId: "com.appactor.test",
+                    environment: "production",
+                    storefront: nil,
+                    jwsRepresentation: "signed-jws"
+                )
+            },
+            appTransactionHandler: { nil }
+        )
+
+        mockClient.postReceiptHandler = { _ in
+            AppActorReceiptPostResponse(
+                status: "ok",
+                customer: AppActorCustomerDTO(entitlements: [:]),
+                requestId: "req_bridge_sync"
+            )
+        }
+
+        appactor.configureForTesting(
+            config: AppActorPaymentConfiguration(
+                apiKey: "pk_test_bridge_sync",
+                baseURL: URL(string: "https://api.test.appactor.com")!
+            ),
+            client: mockClient,
+            storage: storage,
+            silentSyncFetcher: fetcher
+        )
+
+        let expectation = expectation(description: "bridge sync succeeds")
+        AppActorBridge.shared.syncPurchases(onSuccess: { _ in
+            expectation.fulfill()
+        }, onError: { error in
+            XCTFail("Unexpected bridge error: \(error.message)")
+        })
+
+        await fulfillment(of: [expectation], timeout: 2.0)
+        XCTAssertEqual(mockClient.postReceiptCalls.count, 1)
+        XCTAssertEqual(mockClient.getCustomerCalls.count, 0)
+    }
+
+    func testBridgeDrainReceiptQueueAndRefreshCustomerPreservesQueueDrainBehavior() async throws {
         let expectedUserId = storage.ensureAppUserId()
         mockClient.getCustomerHandler = { appUserId, _ in
             XCTAssertEqual(appUserId, expectedUserId)
@@ -393,8 +439,8 @@ final class SyncPurchasesTests: XCTestCase {
             storage: storage
         )
 
-        let expectation = expectation(description: "bridge sync succeeds")
-        AppActorBridge.shared.syncPurchases(onSuccess: { info in
+        let expectation = expectation(description: "bridge drain succeeds")
+        AppActorBridge.shared.drainReceiptQueueAndRefreshCustomer(onSuccess: { info in
             XCTAssertEqual(info.appUserId, expectedUserId)
             expectation.fulfill()
         }, onError: { error in

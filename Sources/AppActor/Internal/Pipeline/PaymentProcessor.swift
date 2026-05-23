@@ -5,21 +5,27 @@ struct AppActorReceiptCustomerUpdateContext: Sendable, Equatable {
     let appUserId: String
     let productId: String
     let sourceIntent: AppActorPaymentQueueItem.SourceIntent
+    let originalTransactionId: String?
+    let syncedOriginalTransactionId: String?
     let clientPurchaseContext: AppActorClientPurchaseContext?
 
     init(
         appUserId: String,
         productId: String,
         sourceIntent: AppActorPaymentQueueItem.SourceIntent,
+        originalTransactionId: String?,
+        syncedOriginalTransactionId: String?,
         clientPurchaseContext: AppActorClientPurchaseContext?
     ) {
         self.appUserId = appUserId
         self.productId = productId
         self.sourceIntent = sourceIntent
+        self.originalTransactionId = originalTransactionId
+        self.syncedOriginalTransactionId = syncedOriginalTransactionId
         self.clientPurchaseContext = clientPurchaseContext
     }
 
-    init(item: AppActorPaymentQueueItem) {
+    init(item: AppActorPaymentQueueItem, syncedOriginalTransactionId: String? = nil) {
         self.init(
             appUserId: item.appUserId,
             productId: item.productId,
@@ -27,6 +33,8 @@ struct AppActorReceiptCustomerUpdateContext: Sendable, Equatable {
                 stored: item.sourceIntent,
                 sources: item.sources
             ),
+            originalTransactionId: item.originalTransactionId,
+            syncedOriginalTransactionId: syncedOriginalTransactionId,
             clientPurchaseContext: item.clientPurchaseContext
         )
     }
@@ -664,7 +672,13 @@ actor AppActorPaymentProcessor {
             }
             rememberCompletedResult(key: item.key, result: .success(customerInfo))
             if let customerInfo {
-                onCustomerInfoUpdated?(customerInfo, AppActorReceiptCustomerUpdateContext(item: item))
+                onCustomerInfoUpdated?(
+                    customerInfo,
+                    AppActorReceiptCustomerUpdateContext(
+                        item: item,
+                        syncedOriginalTransactionId: response.syncedOriginalTransactionId
+                    )
+                )
             }
             resumeContinuation(key: item.key, result: .success(customerInfo))
 

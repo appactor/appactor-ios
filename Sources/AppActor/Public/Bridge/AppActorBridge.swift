@@ -412,7 +412,7 @@ public final class AppActorBridge {
         }
     }
 
-    /// Drains the local receipt queue and refreshes customer info.
+    /// Quietly syncs StoreKit purchases to the backend.
     ///
     /// - Parameters:
     ///   - onSuccess: Called with the updated customer info on success.
@@ -422,7 +422,7 @@ public final class AppActorBridge {
         onError: ((AppActorBridgeError) -> Void)? = nil
     ) {
         launchAsync(onSuccess: onSuccess, onError: onError) {
-            try await AppActor.shared.drainReceiptQueueAndRefreshCustomer()
+            try await AppActor.shared.syncPurchases()
         }
     }
 
