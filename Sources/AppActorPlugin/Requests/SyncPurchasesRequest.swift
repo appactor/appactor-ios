@@ -6,7 +6,7 @@ struct SyncPurchasesRequest: AppActorPluginRequest {
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
-        let info = try await AppActor.shared.drainReceiptQueueAndRefreshCustomer()
+        let info = try await AppActor.shared.syncPurchases()
         return .encoding(PluginCustomerInfo(from: info))
     }
 }

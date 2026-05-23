@@ -372,15 +372,27 @@ final class SyncPurchasesTests: XCTestCase {
         }
     }
 
-    func testBridgeSyncPurchasesPreservesQueueDrainBehavior() async throws {
-        let expectedUserId = storage.ensureAppUserId()
-        mockClient.getCustomerHandler = { appUserId, _ in
-            XCTAssertEqual(appUserId, expectedUserId)
-            return .fresh(
-                AppActorCustomerInfo(appUserId: appUserId),
-                eTag: nil,
-                requestId: "req_bridge_sync",
-                signatureVerified: false
+    func testBridgeSyncPurchasesUsesQuietStoreSyncPath() async throws {
+        let fetcher = MockStoreKitSilentSyncFetcher(
+            firstVerifiedTransactionHandler: {
+                AppActorSilentSyncTransaction(
+                    transactionId: "tx_bridge_sync",
+                    originalTransactionId: nil,
+                    productId: "premium_yearly",
+                    bundleId: "com.appactor.test",
+                    environment: "production",
+                    storefront: nil,
+                    jwsRepresentation: "signed-jws"
+                )
+            },
+            appTransactionHandler: { nil }
+        )
+
+        mockClient.postReceiptHandler = { _ in
+            AppActorReceiptPostResponse(
+                status: "ok",
+                customer: AppActorCustomerDTO(entitlements: [:]),
+                requestId: "req_bridge_sync"
             )
         }
 
@@ -390,20 +402,20 @@ final class SyncPurchasesTests: XCTestCase {
                 baseURL: URL(string: "https://api.test.appactor.com")!
             ),
             client: mockClient,
-            storage: storage
+            storage: storage,
+            silentSyncFetcher: fetcher
         )
 
         let expectation = expectation(description: "bridge sync succeeds")
-        AppActorBridge.shared.syncPurchases(onSuccess: { info in
-            XCTAssertEqual(info.appUserId, expectedUserId)
+        AppActorBridge.shared.syncPurchases(onSuccess: { _ in
             expectation.fulfill()
         }, onError: { error in
             XCTFail("Unexpected bridge error: \(error.message)")
         })
 
         await fulfillment(of: [expectation], timeout: 2.0)
-        XCTAssertEqual(mockClient.postReceiptCalls.count, 0)
-        XCTAssertEqual(mockClient.getCustomerCalls.count, 1)
+        XCTAssertEqual(mockClient.postReceiptCalls.count, 1)
+        XCTAssertEqual(mockClient.getCustomerCalls.count, 0)
     }
 
     func testBridgeDrainReceiptQueueAndRefreshCustomerPreservesQueueDrainBehavior() async throws {
