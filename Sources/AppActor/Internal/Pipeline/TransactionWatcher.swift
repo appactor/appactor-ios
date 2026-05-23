@@ -74,7 +74,7 @@ actor AppActorTransactionWatcher {
 
     private struct CoalescedUnfinishedEntry {
         let transactionId: String
-        let transaction: Transaction
+        let finish: () async -> Void
     }
 
     init(
@@ -254,7 +254,6 @@ actor AppActorTransactionWatcher {
         )
 
         var enqueuedCount = 0
-        var coalescedEntries: [String: [CoalescedUnfinishedEntry]] = [:]
         for entry in entries {
             let transactionId = String(entry.transaction.id)
             if selectedTransactionIds.contains(transactionId) {
@@ -262,23 +261,34 @@ actor AppActorTransactionWatcher {
                 enqueuedCount += 1
             } else {
                 let originalTransactionId = String(entry.transaction.originalID)
-                coalescedEntries[originalTransactionId, default: []].append(
-                    CoalescedUnfinishedEntry(transactionId: transactionId, transaction: entry.transaction)
+                recordCoalescedUnfinished(
+                    originalTransactionId: originalTransactionId,
+                    transactionId: transactionId,
+                    finish: { await entry.transaction.finish() }
                 )
             }
-        }
-
-        for (originalTransactionId, newEntries) in coalescedEntries {
-            var existing = coalescedUnfinishedByOriginalId[originalTransactionId] ?? []
-            let existingIds = Set(existing.map(\.transactionId))
-            existing.append(contentsOf: newEntries.filter { !existingIds.contains($0.transactionId) })
-            coalescedUnfinishedByOriginalId[originalTransactionId] = existing
         }
 
         let coalescedCount = entries.count - enqueuedCount
         Log.storeKit.info(
             "sweepUnfinished completed: \(enqueuedCount) transaction(s) enqueued, \(coalescedCount) coalesced"
         )
+    }
+
+    func recordCoalescedUnfinished(
+        originalTransactionId: String,
+        transactionId: String,
+        finish: @escaping () async -> Void
+    ) {
+        guard !originalTransactionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        var existing = coalescedUnfinishedByOriginalId[originalTransactionId] ?? []
+        guard !existing.contains(where: { $0.transactionId == transactionId }) else {
+            return
+        }
+        existing.append(CoalescedUnfinishedEntry(transactionId: transactionId, finish: finish))
+        coalescedUnfinishedByOriginalId[originalTransactionId] = existing
     }
 
     func finishCoalescedUnfinished(originalTransactionId: String) async {
@@ -291,7 +301,7 @@ actor AppActorTransactionWatcher {
         let keys = entries.map { AppActorPaymentQueueItem.makeKey(transactionId: $0.transactionId) }
         await processor.markPostedAndReconcile(keys: keys)
         for entry in entries {
-            await entry.transaction.finish()
+            await entry.finish()
         }
         Log.storeKit.info(
             "Finished \(entries.count) coalesced unfinished transaction(s) after successful chain sync"
