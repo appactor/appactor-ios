@@ -372,7 +372,41 @@ final class SyncPurchasesTests: XCTestCase {
         }
     }
 
-    func testBridgeSyncPurchasesPreservesOldQueueDrainBehavior() async throws {
+    func testBridgeSyncPurchasesPreservesQueueDrainBehavior() async throws {
+        let expectedUserId = storage.ensureAppUserId()
+        mockClient.getCustomerHandler = { appUserId, _ in
+            XCTAssertEqual(appUserId, expectedUserId)
+            return .fresh(
+                AppActorCustomerInfo(appUserId: appUserId),
+                eTag: nil,
+                requestId: "req_bridge_sync",
+                signatureVerified: false
+            )
+        }
+
+        appactor.configureForTesting(
+            config: AppActorPaymentConfiguration(
+                apiKey: "pk_test_bridge_sync",
+                baseURL: URL(string: "https://api.test.appactor.com")!
+            ),
+            client: mockClient,
+            storage: storage
+        )
+
+        let expectation = expectation(description: "bridge sync succeeds")
+        AppActorBridge.shared.syncPurchases(onSuccess: { info in
+            XCTAssertEqual(info.appUserId, expectedUserId)
+            expectation.fulfill()
+        }, onError: { error in
+            XCTFail("Unexpected bridge error: \(error.message)")
+        })
+
+        await fulfillment(of: [expectation], timeout: 2.0)
+        XCTAssertEqual(mockClient.postReceiptCalls.count, 0)
+        XCTAssertEqual(mockClient.getCustomerCalls.count, 1)
+    }
+
+    func testBridgeDrainReceiptQueueAndRefreshCustomerPreservesQueueDrainBehavior() async throws {
         let expectedUserId = storage.ensureAppUserId()
         mockClient.getCustomerHandler = { appUserId, _ in
             XCTAssertEqual(appUserId, expectedUserId)
@@ -393,8 +427,8 @@ final class SyncPurchasesTests: XCTestCase {
             storage: storage
         )
 
-        let expectation = expectation(description: "bridge sync succeeds")
-        AppActorBridge.shared.syncPurchases(onSuccess: { info in
+        let expectation = expectation(description: "bridge drain succeeds")
+        AppActorBridge.shared.drainReceiptQueueAndRefreshCustomer(onSuccess: { info in
             XCTAssertEqual(info.appUserId, expectedUserId)
             expectation.fulfill()
         }, onError: { error in

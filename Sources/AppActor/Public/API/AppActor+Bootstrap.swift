@@ -99,6 +99,12 @@ extension AppActor {
             Log.receipts.info("Deferred purchase resolved: \(receiptContext.productId)")
             paymentContext.deferredPurchaseHandler?(receiptContext.productId, info)
         }
+
+        if receiptContext.sourceIntent == .sync,
+           let originalTransactionId = receiptContext.syncedOriginalTransactionId,
+           !originalTransactionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            await transactionWatcher?.finishCoalescedUnfinished(originalTransactionId: originalTransactionId)
+        }
     }
 
     func wireReceiptCustomerInfoUpdateHandler() async {
