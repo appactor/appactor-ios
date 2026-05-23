@@ -97,6 +97,7 @@ final class SyncPurchasesTests: XCTestCase {
             XCTAssertEqual(request.signedTransactionInfo, "signed-jws")
             XCTAssertEqual(request.signedAppTransactionInfo, "app-transaction-jws")
             XCTAssertEqual(request.idempotencyKey, "apple:tx_123")
+            XCTAssertNil(request.placement)
             return AppActorReceiptPostResponse(
                 status: "ok",
                 customer: AppActorCustomerDTO(
@@ -153,6 +154,7 @@ final class SyncPurchasesTests: XCTestCase {
             XCTAssertNil(request.signedTransactionInfo)
             XCTAssertEqual(request.signedAppTransactionInfo, "app-transaction-jws")
             XCTAssertNil(request.transactionId)
+            XCTAssertNil(request.placement)
             return AppActorReceiptPostResponse(
                 status: "ok",
                 customer: AppActorCustomerDTO(

@@ -213,6 +213,7 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         guard let existing = clientPurchaseContext else { return true }
         if incoming.hasPurchaseAttempt && !existing.hasPurchaseAttempt { return true }
         if incoming.clientDeliverySource == .purchaseFlow && existing.clientDeliverySource != .purchaseFlow { return true }
+        if incoming.hasPurchaseAttempt && incoming.placement != nil && existing.placement == nil { return true }
         return false
     }
 

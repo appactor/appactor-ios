@@ -359,6 +359,7 @@ public final class AppActorBridge {
     ///
     /// - Parameters:
     ///   - package: The ``AppActorPackage`` to purchase.
+    ///   - placement: Optional host-app placement where the purchase was initiated.
     ///   - onSuccess: Called with the purchase result on success.
     ///   - onError: Called with an ``AppActorBridgeError`` on failure.
     public func purchasePackage(
@@ -367,8 +368,29 @@ public final class AppActorBridge {
         onSuccess: ((AppActorPurchaseResult) -> Void)? = nil,
         onError: ((AppActorBridgeError) -> Void)? = nil
     ) {
+        purchasePackage(package: package, quantity: quantity, placement: nil, onSuccess: onSuccess, onError: onError)
+    }
+
+    /// Purchases a product from a package and records the host-app placement.
+    public func purchasePackage(
+        package: AppActorPackage,
+        placement: String?,
+        onSuccess: ((AppActorPurchaseResult) -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
+        purchasePackage(package: package, quantity: 1, placement: placement, onSuccess: onSuccess, onError: onError)
+    }
+
+    /// Purchases a product from a package and records the host-app placement.
+    public func purchasePackage(
+        package: AppActorPackage,
+        quantity: Int,
+        placement: String?,
+        onSuccess: ((AppActorPurchaseResult) -> Void)? = nil,
+        onError: ((AppActorBridgeError) -> Void)? = nil
+    ) {
         launchAsync(onSuccess: onSuccess, onError: onError) {
-            try await AppActor.shared.purchase(package: package, quantity: quantity)
+            try await AppActor.shared.purchase(package: package, quantity: quantity, placement: placement)
         }
     }
 

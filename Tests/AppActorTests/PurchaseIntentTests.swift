@@ -159,6 +159,8 @@ final class PurchaseIntentAPITests: XCTestCase {
             // Compile-time verification: if this line compiles, the method signature is correct.
             let _: (PurchaseIntent) async throws -> AppActorPurchaseResult =
                 AppActor.shared.purchase(intent:)
+            let _: (PurchaseIntent, String?) async throws -> AppActorPurchaseResult =
+                AppActor.shared.purchase(intent:placement:)
         }
         // If this test compiles successfully, FEAT-01 method signature is verified.
     }

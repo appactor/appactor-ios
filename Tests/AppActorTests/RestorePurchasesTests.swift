@@ -383,6 +383,7 @@ final class RestorePurchasesTests: XCTestCase {
         XCTAssertEqual(json["clientDeliverySource"] as? String, "restore_flow")
         XCTAssertEqual(json["sdkOriginated"] as? Bool, true)
         XCTAssertEqual(json["sdkVersion"] as? String, "9.9.9")
+        XCTAssertNil(json["placement"])
         let txns = json["transactions"] as? [[String: Any]]
         XCTAssertEqual(txns?.count, 2)
         XCTAssertEqual(txns?[0]["transactionId"] as? String, "100")

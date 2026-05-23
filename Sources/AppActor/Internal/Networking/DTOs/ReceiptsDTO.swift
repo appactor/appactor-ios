@@ -19,6 +19,8 @@ struct AppActorReceiptPostRequest: Encodable, Sendable {
     let offeringId: String?
     /// The canonical backend package identifier for analytics attribution.
     let packageId: String?
+    /// User-initiated purchase placement. `nil` for restore/sync/background updates.
+    let placement: String?
     let clientPurchaseAttemptStartedAt: String?
     let clientObservedAt: String?
     let clientDeliverySource: String?
@@ -41,6 +43,7 @@ struct AppActorReceiptPostRequest: Encodable, Sendable {
         originalTransactionId: String?,
         offeringId: String?,
         packageId: String?,
+        placement: String? = nil,
         clientPurchaseAttemptStartedAt: String? = nil,
         clientObservedAt: String? = nil,
         clientDeliverySource: String? = nil,
@@ -62,6 +65,7 @@ struct AppActorReceiptPostRequest: Encodable, Sendable {
         self.originalTransactionId = originalTransactionId
         self.offeringId = offeringId
         self.packageId = packageId
+        self.placement = AppActorClientPurchaseContext.normalizePlacement(placement)
         self.clientPurchaseAttemptStartedAt = clientPurchaseAttemptStartedAt
         self.clientObservedAt = clientObservedAt
         self.clientDeliverySource = clientDeliverySource

@@ -7,6 +7,13 @@ struct PurchasePackageRequest: AppActorPluginRequest {
     let packageId: String
     let offeringId: String?
     let quantity: Int?
+    let placement: String?
+
+    var normalizedPlacement: String? {
+        let normalized = placement?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let normalized, !normalized.isEmpty, normalized.count <= 255 else { return nil }
+        return normalized
+    }
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
@@ -29,7 +36,11 @@ struct PurchasePackageRequest: AppActorPluginRequest {
                 message: "Package '\(packageId)' not found in cached offerings")
         }
 
-        let result = try await AppActor.shared.purchase(package: package, quantity: quantity ?? 1)
+        let result = try await AppActor.shared.purchase(
+            package: package,
+            quantity: quantity ?? 1,
+            placement: normalizedPlacement
+        )
         return .encoding(PluginPurchaseResult(from: result))
     }
 }

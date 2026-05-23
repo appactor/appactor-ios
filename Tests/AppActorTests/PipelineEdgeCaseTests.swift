@@ -83,7 +83,8 @@ final class PipelineEdgeCaseTests: XCTestCase {
             clientPurchaseAttemptStartedAt: startedAt,
             clientObservedAt: startedAt,
             clientDeliverySource: .purchaseFlow,
-            clientPurchaseAttemptId: "attempt-ios-pending"
+            clientPurchaseAttemptId: "attempt-ios-pending",
+            placement: "paywall.pending"
         )
         var buffer = AppActorPendingPurchaseContextBuffer()
 
@@ -94,6 +95,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
         XCTAssertEqual(resolved?.context.clientObservedAt, completedAt)
         XCTAssertEqual(resolved?.context.clientDeliverySource, .transactionUpdates)
         XCTAssertEqual(resolved?.context.clientPurchaseAttemptId, "attempt-ios-pending")
+        XCTAssertEqual(resolved?.context.placement, "paywall.pending")
         XCTAssertNil(buffer.consume(productId: "com.test.monthly", observedAt: completedAt))
     }
 
@@ -106,7 +108,8 @@ final class PipelineEdgeCaseTests: XCTestCase {
             clientPurchaseAttemptStartedAt: startedAt,
             clientObservedAt: startedAt,
             clientDeliverySource: .purchaseFlow,
-            clientPurchaseAttemptId: "attempt-ios-persisted"
+            clientPurchaseAttemptId: "attempt-ios-persisted",
+            placement: "paywall.persisted"
         )
         var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
 
@@ -120,6 +123,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
         XCTAssertEqual(resolved?.context.clientObservedAt, completedAt)
         XCTAssertEqual(resolved?.context.clientDeliverySource, .transactionUpdates)
         XCTAssertEqual(resolved?.context.clientPurchaseAttemptId, "attempt-ios-persisted")
+        XCTAssertEqual(resolved?.context.placement, "paywall.persisted")
         XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts))
     }
 
@@ -162,7 +166,8 @@ final class PipelineEdgeCaseTests: XCTestCase {
             clientPurchaseAttemptStartedAt: startedAt,
             clientObservedAt: startedAt,
             clientDeliverySource: .purchaseFlow,
-            clientPurchaseAttemptId: "attempt-ios-unfinished-intent"
+            clientPurchaseAttemptId: "attempt-ios-unfinished-intent",
+            placement: "paywall.unfinished"
         )
         var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
 
@@ -192,6 +197,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
         XCTAssertEqual(request.sourceIntent, "purchase")
         XCTAssertEqual(request.clientDeliverySource, "unfinished")
         XCTAssertEqual(request.clientPurchaseAttemptId, "attempt-ios-unfinished-intent")
+        XCTAssertEqual(request.placement, "paywall.unfinished")
     }
 
     func testPassiveUnfinishedSweepWithoutPendingContextStaysSyncIntent() {
@@ -212,6 +218,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
         XCTAssertEqual(request.sourceIntent, "sync")
         XCTAssertEqual(request.clientDeliverySource, "unfinished")
         XCTAssertNil(request.clientPurchaseAttemptId)
+        XCTAssertNil(request.placement)
     }
 
     @MainActor
