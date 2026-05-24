@@ -399,7 +399,7 @@ extension AppActor {
             await watcher.endIdentityTransition()
         }
 
-        await syncAutomaticProfileContextBestEffortAfterIdentityTransition(appUserId: loginResult.appUserId)
+        scheduleAutomaticProfileContextSyncAfterIdentityTransition(appUserId: loginResult.appUserId)
 
         Log.identity.debug("Logged in as \(String(loginResult.appUserId.prefix(8)))…")
         Log.identity.info("👤 Login complete")
@@ -487,7 +487,7 @@ extension AppActor {
         }
 
         if let newAppUserId = storage.currentAppUserId {
-            await syncAutomaticProfileContextBestEffortAfterIdentityTransition(appUserId: newAppUserId)
+            scheduleAutomaticProfileContextSyncAfterIdentityTransition(appUserId: newAppUserId)
         }
 
         return true
@@ -531,14 +531,17 @@ extension AppActor {
         foregroundTask?.cancel()
         stalenessTimerTask?.cancel()
         offeringsPrefetchTask?.cancel()
+        profileContextSyncTask?.cancel()
         await asaTask?.value
         await foregroundTask?.value
         await stalenessTimerTask?.value
         await offeringsPrefetchTask?.value
+        await profileContextSyncTask?.value
         asaTask = nil
         foregroundTask = nil
         stalenessTimerTask = nil
         offeringsPrefetchTask = nil
+        profileContextSyncTask = nil
 
         // Stop transaction watcher and payment processor explicitly.
         // The supervisor started them but stop() requires deterministic await.
@@ -636,10 +639,20 @@ private extension AppActor {
         }
     }
 
+    func scheduleAutomaticProfileContextSyncAfterIdentityTransition(appUserId: String) {
+        profileContextSyncTask?.cancel()
+        profileContextSyncTask = Task { [weak self] in
+            guard let self else { return }
+            await self.syncAutomaticProfileContextBestEffortAfterIdentityTransition(appUserId: appUserId)
+        }
+    }
+
     func syncAutomaticProfileContextBestEffortAfterIdentityTransition(appUserId: String) async {
-        guard paymentStorage?.currentAppUserId == appUserId else { return }
+        guard !Task.isCancelled, paymentStorage?.currentAppUserId == appUserId else { return }
         do {
             try await collectAutomaticProfileContextIfCurrent(appUserId: appUserId)
+        } catch is CancellationError {
+            return
         } catch {
             Log.customer.warn(
                 "Automatic profile context sync failed after identity transition; continuing with queued retry: \(error.localizedDescription)"

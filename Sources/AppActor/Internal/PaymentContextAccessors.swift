@@ -82,6 +82,11 @@ extension AppActor {
         set { paymentContext.offeringsPrefetchTask = newValue }
     }
 
+    var profileContextSyncTask: Task<Void, Never>? {
+        get { paymentContext.profileContextSyncTask }
+        set { paymentContext.profileContextSyncTask = newValue }
+    }
+
     var asaManager: AppActorASAManager? {
         get { paymentContext.asaManager }
         set { paymentContext.asaManager = newValue }
