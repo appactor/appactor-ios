@@ -332,7 +332,7 @@ extension AppActor {
 
         // Buffer incoming transactions during identity transition to prevent wrong-user attribution.
         if let watcher = transactionWatcher {
-            await watcher.beginIdentityTransition()
+            await watcher.beginIdentityTransition(appUserId: currentId)
         }
 
         // Guarantee endIdentityTransition is called on ALL exit paths (success, error, cancellation).
@@ -399,6 +399,8 @@ extension AppActor {
             await watcher.endIdentityTransition()
         }
 
+        await syncAutomaticProfileContextBestEffortAfterIdentityTransition(appUserId: loginResult.appUserId)
+
         Log.identity.debug("Logged in as \(String(loginResult.appUserId.prefix(8)))…")
         Log.identity.info("👤 Login complete")
         return verifiedLoginInfo
@@ -413,8 +415,9 @@ extension AppActor {
     /// 3. Rotates the appAccountToken for the new local identity.
     ///
     /// No server logout request is sent and the SDK does not auto-identify the new
-    /// anonymous user. `customerInfo` is cleared immediately and will repopulate on
-    /// the next explicit customer refresh or receipt-driven update.
+    /// anonymous user. The SDK best-effort syncs automatic profile context for the
+    /// new local identity, while `customerInfo` is cleared immediately and will
+    /// repopulate on the next explicit customer refresh or receipt-driven update.
     ///
     /// - Returns: `true` on success.
     @discardableResult
@@ -434,7 +437,7 @@ extension AppActor {
 
         // Buffer incoming transactions during identity transition
         if let watcher = transactionWatcher {
-            await watcher.beginIdentityTransition()
+            await watcher.beginIdentityTransition(appUserId: storage.ensureAppUserId())
         }
 
         do {
@@ -481,6 +484,10 @@ extension AppActor {
         // End identity transition — flush buffered transactions with their captured appUserId
         if let watcher = transactionWatcher {
             await watcher.endIdentityTransition()
+        }
+
+        if let newAppUserId = storage.currentAppUserId {
+            await syncAutomaticProfileContextBestEffortAfterIdentityTransition(appUserId: newAppUserId)
         }
 
         return true
@@ -626,6 +633,17 @@ private extension AppActor {
             throw CancellationError()
         } catch {
             Log.customer.warn("Customer attribute flush failed during identity transition; continuing with queued mutations")
+        }
+    }
+
+    func syncAutomaticProfileContextBestEffortAfterIdentityTransition(appUserId: String) async {
+        guard paymentStorage?.currentAppUserId == appUserId else { return }
+        do {
+            try await collectAutomaticProfileContextIfCurrent(appUserId: appUserId)
+        } catch {
+            Log.customer.warn(
+                "Automatic profile context sync failed after identity transition; continuing with queued retry: \(error.localizedDescription)"
+            )
         }
     }
 }

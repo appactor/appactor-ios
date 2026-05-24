@@ -395,7 +395,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
         )
 
         // Begin transition — watcher should buffer incoming transactions
-        await watcher.beginIdentityTransition()
+        await watcher.beginIdentityTransition(appUserId: "user_A")
 
         // Simulate a transaction arriving during transition
         // (We can't create real Transaction objects, but we can verify the buffer mechanism
