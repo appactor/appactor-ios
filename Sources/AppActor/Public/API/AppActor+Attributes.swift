@@ -108,11 +108,33 @@ extension AppActor {
         try await collectSystemProfileContext(includeDeviceIdentifiers: false)
     }
 
-    private func collectSystemProfileContext(includeDeviceIdentifiers: Bool) async throws {
+    func collectAutomaticProfileContextIfCurrent(appUserId: String) async throws {
+        try await collectSystemProfileContext(
+            includeDeviceIdentifiers: false,
+            targetAppUserId: appUserId,
+            requireCurrentIdentity: true
+        )
+    }
+
+    private func collectSystemProfileContext(
+        includeDeviceIdentifiers: Bool,
+        targetAppUserId: String? = nil,
+        requireCurrentIdentity: Bool = false
+    ) async throws {
         var attributes: [String: AppActorAttributeValue] = [:]
 
         attributes[AppActorAttributeKey.sdkVersion] = .string(AppActorSDK.version)
         attributes[AppActorAttributeKey.platform] = .string(Self.platformName)
+        if let platformInfo = paymentConfig?.options.platformInfo {
+            let platformFlavor = platformInfo.flavor.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !platformFlavor.isEmpty {
+                attributes[AppActorAttributeKey.platformFlavor] = .string(platformFlavor)
+            }
+            if let platformVersion = platformInfo.version?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !platformVersion.isEmpty {
+                attributes[AppActorAttributeKey.platformVersion] = .string(platformVersion)
+            }
+        }
         attributes[AppActorAttributeKey.locale] = .string(Locale.current.identifier)
         attributes[AppActorAttributeKey.timezone] = .string(TimeZone.current.identifier)
         attributes[AppActorAttributeKey.osVersion] = .string(Self.osVersion)
@@ -152,7 +174,18 @@ extension AppActor {
             return
         }
         try validateAttributes(attributes, allowReserved: true)
-        try await enqueueAttributes(attributes)
+        if let targetAppUserId {
+            if requireCurrentIdentity, paymentStorage?.currentAppUserId != targetAppUserId {
+                return
+            }
+            try customerAttributesManager.enqueueAttributes(
+                appUserId: targetAppUserId,
+                attributes: attributes
+            )
+            try await flushIfConfigured(appUserId: targetAppUserId)
+        } else {
+            try await enqueueAttributes(attributes)
+        }
     }
 
     public static func setIntegrationIdentifier(_ key: String, value: String?) async throws {

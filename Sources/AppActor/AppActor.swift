@@ -588,6 +588,7 @@ final class AppActorPaymentContext {
     var foregroundTask: Task<Void, Never>?
     var stalenessTimerTask: Task<Void, Never>?
     var offeringsPrefetchTask: Task<Void, Never>?
+    var profileContextSyncTask: Task<Void, Never>?
     var paymentProcessor: AppActorPaymentProcessor?
     var paymentQueueStore: (any AppActorPaymentQueueStoreProtocol)?
     var transactionWatcher: AppActorTransactionWatcher?

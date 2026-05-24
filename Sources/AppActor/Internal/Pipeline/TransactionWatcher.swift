@@ -55,6 +55,7 @@ actor AppActorTransactionWatcher {
     /// When true, incoming transactions are buffered instead of enqueued.
     /// Set during logIn/logOut to prevent items from being tagged with the wrong appUserId.
     private var isIdentityTransitioning = false
+    private var identityTransitionAppUserId: String?
 
     private struct BufferedTransaction {
         let transaction: Transaction
@@ -141,7 +142,11 @@ actor AppActorTransactionWatcher {
 
     /// Begins an identity transition. Transactions arriving during transition are buffered
     /// with their current (pre-switch) appUserId to prevent wrong-user attribution.
-    func beginIdentityTransition() {
+    func beginIdentityTransition(appUserId: String? = nil) {
+        let transitionAppUserId = appUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        identityTransitionAppUserId = transitionAppUserId?.isEmpty == false
+            ? transitionAppUserId
+            : storage.ensureAppUserId()
         isIdentityTransitioning = true
     }
 
@@ -153,6 +158,7 @@ actor AppActorTransactionWatcher {
             return
         }
         isIdentityTransitioning = false
+        identityTransitionAppUserId = nil
         let buffered = pendingBuffer
         pendingBuffer.removeAll()
         for item in buffered {
@@ -379,10 +385,20 @@ actor AppActorTransactionWatcher {
 
         // During identity transition, buffer with the ownership user captured before the transition.
         if isIdentityTransitioning {
+            let capturedUserId = capturedAppUserId?.isEmpty == false
+                ? capturedAppUserId!
+                : identityTransitionAppUserId ?? storage.ensureAppUserId()
             if pendingBuffer.count >= 50 {
                 Log.storeKit.warn("Identity transition buffer full (\(pendingBuffer.count)) — enqueuing directly")
+                await enqueueWithUserId(
+                    transaction,
+                    jws: jws,
+                    source: enqueueSource,
+                    appUserId: capturedUserId,
+                    clientPurchaseContext: effectiveContext
+                )
+                return
             } else {
-                let capturedUserId = capturedAppUserId?.isEmpty == false ? capturedAppUserId! : storage.ensureAppUserId()
                 pendingBuffer.append(BufferedTransaction(
                     transaction: transaction, jws: jws, source: enqueueSource,
                     capturedAppUserId: capturedUserId,

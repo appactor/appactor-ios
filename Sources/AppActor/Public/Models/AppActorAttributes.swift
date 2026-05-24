@@ -361,6 +361,8 @@ enum AppActorAttributeKey {
     static let locale = "$locale"
     static let timezone = "$timezone"
     static let platform = "$platform"
+    static let platformFlavor = "$platformFlavor"
+    static let platformVersion = "$platformVersion"
     static let deviceModel = "$deviceModel"
     static let osVersion = "$osVersion"
     static let sdkVersion = "$sdkVersion"
@@ -428,7 +430,8 @@ enum AppActorAttributeKey {
     static func validateReserved(_ key: String) throws {
         switch key {
         case email, displayName, phoneNumber, apnsToken, idfv,
-            bundleId, locale, timezone, platform, deviceModel, osVersion, sdkVersion, appVersion, appBuild,
+            bundleId, locale, timezone, platform, platformFlavor, platformVersion,
+            deviceModel, osVersion, sdkVersion, appVersion, appBuild,
             storefrontCountry, ipCountry, localeCountry, attConsentStatus:
             return
         default:

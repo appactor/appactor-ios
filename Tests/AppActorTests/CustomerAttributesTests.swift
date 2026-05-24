@@ -29,6 +29,24 @@ final class CustomerAttributesTests: XCTestCase {
         try await super.tearDown()
     }
 
+    private func waitForPatchAttributesCall(
+        appUserId: String,
+        matching predicate: @escaping ([String: AppActorAttributeValue]) -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> (appUserId: String, request: AppActorSetAttributesRequest) {
+        for _ in 0..<100 {
+            if let call = client.patchAttributesCalls.last(where: { call in
+                call.appUserId == appUserId && predicate(call.request.attributes)
+            }) {
+                return call
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for patch attributes call for \(appUserId)", file: file, line: line)
+        throw AppActorError.validationError("Timed out waiting for patch attributes call for \(appUserId)")
+    }
+
     func testAttributeDTOEncodesJSONCompatibleValues() throws {
         let date = Date(timeIntervalSince1970: 0)
         let request = AppActorSetAttributesRequest(attributes: [
@@ -160,6 +178,21 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertTrue(attributes.keys.allSatisfy { $0.hasPrefix("$") })
     }
 
+    func testAutomaticProfileContextIncludesWrapperPlatformInfo() async throws {
+        let config = AppActorPaymentConfiguration(
+            apiKey: "pk_test_attributes",
+            baseURL: URL(string: "https://api.test.appactor.com")!,
+            options: .init(platformInfo: AppActorPlatformInfo(flavor: "flutter", version: "0.0.9"))
+        )
+        appactor.configureForTesting(config: config, client: client, storage: storage)
+
+        try await appactor.collectAutomaticProfileContext()
+
+        let attributes = try XCTUnwrap(client.patchAttributesCalls.last?.request.attributes)
+        XCTAssertEqual(attributes[AppActorAttributeKey.platformFlavor], .string("flutter"))
+        XCTAssertEqual(attributes[AppActorAttributeKey.platformVersion], .string("0.0.9"))
+    }
+
     func testCollectDeviceIdentifiersUsesProfileCurrentSystemRoute() async throws {
         try await appactor.collectDeviceIdentifiers()
 
@@ -271,11 +304,44 @@ final class CustomerAttributesTests: XCTestCase {
 
         _ = try await appactor.logIn(newAppUserId: "identified_user")
 
+        _ = try await waitForPatchAttributesCall(appUserId: "identified_user") { attributes in
+            attributes[AppActorAttributeKey.sdkVersion] == .string(AppActorSDK.version)
+        }
         XCTAssertEqual(storage.currentAppUserId, "identified_user")
-        XCTAssertEqual(client.patchAttributesCalls.map(\.appUserId), ["anon_user", "anon_user"])
+        XCTAssertEqual(client.patchAttributesCalls.map(\.appUserId), ["anon_user", "anon_user", "identified_user"])
         XCTAssertFalse(client.patchAttributesCalls.contains { call in
             call.appUserId == "identified_user" && call.request.attributes[AppActorAttributeKey.email] != nil
         })
+    }
+
+    func testLogInRefreshesAutomaticProfileContextForNewIdentity() async throws {
+        storage.setAppUserId("anon_user")
+
+        _ = try await appactor.logIn(newAppUserId: "identified_user")
+
+        let call = try await waitForPatchAttributesCall(appUserId: "identified_user") { attributes in
+            attributes[AppActorAttributeKey.sdkVersion] == .string(AppActorSDK.version)
+        }
+        XCTAssertEqual(call.appUserId, "identified_user")
+        XCTAssertEqual(call.request.attributes[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))
+        XCTAssertNotNil(call.request.attributes[AppActorAttributeKey.platform])
+        XCTAssertNotNil(call.request.attributes[AppActorAttributeKey.locale])
+    }
+
+    func testLogOutRefreshesAutomaticProfileContextForNewAnonymousIdentity() async throws {
+        storage.setAppUserId("identified_user")
+
+        _ = try await appactor.logOut()
+
+        let newAppUserId = try XCTUnwrap(storage.currentAppUserId)
+        XCTAssertTrue(newAppUserId.hasPrefix("appactor-anon-"))
+        let call = try await waitForPatchAttributesCall(appUserId: newAppUserId) { attributes in
+            attributes[AppActorAttributeKey.sdkVersion] == .string(AppActorSDK.version)
+        }
+        XCTAssertEqual(call.appUserId, newAppUserId)
+        XCTAssertEqual(call.request.attributes[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))
+        XCTAssertNotNil(call.request.attributes[AppActorAttributeKey.platform])
+        XCTAssertNotNil(call.request.attributes[AppActorAttributeKey.locale])
     }
 
     func testIntegrationIdentifierAndAttributionUseSeparateQueues() async throws {
