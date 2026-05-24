@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8
+
+- Harden automatic profile context sync during identity transitions and keep post-transition refreshes off the `logIn`/`logOut` return path.
+
 ## 0.1.7
 
 - Automatically sync privacy-safe profile context during `configure()`/bootstrap.
