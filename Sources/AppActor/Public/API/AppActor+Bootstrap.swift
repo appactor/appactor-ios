@@ -82,11 +82,20 @@ extension AppActor {
         _ info: AppActorCustomerInfo,
         receiptContext: AppActorReceiptCustomerUpdateContext
     ) async {
+        let syncedOriginalTransactionId = receiptContext.syncedOriginalTransactionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let manager = customerManager,
               let currentAppUserId = paymentStorage?.currentAppUserId else { return }
         // F3 fix: only seed cache if the receipt belongs to the current user.
         // A login/logout between enqueue and response could cause stale data.
         guard receiptContext.appUserId == currentAppUserId else {
+            if receiptContext.sourceIntent == .sync,
+               let syncedOriginalTransactionId,
+               !syncedOriginalTransactionId.isEmpty {
+                await transactionWatcher?.finishCoalescedUnfinished(
+                    originalTransactionId: syncedOriginalTransactionId
+                )
+            }
             Log.customer.debug("Skipping customer cache seed — receipt userId (\(receiptContext.appUserId)) != current userId (\(currentAppUserId))")
             _ = try? await getCustomerInfo()
             return
@@ -108,9 +117,11 @@ extension AppActor {
         }
 
         if receiptContext.sourceIntent == .sync,
-           let originalTransactionId = receiptContext.syncedOriginalTransactionId,
-           !originalTransactionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            await transactionWatcher?.finishCoalescedUnfinished(originalTransactionId: originalTransactionId)
+           let syncedOriginalTransactionId,
+           !syncedOriginalTransactionId.isEmpty {
+            await transactionWatcher?.finishCoalescedUnfinished(
+                originalTransactionId: syncedOriginalTransactionId
+            )
         }
     }
 

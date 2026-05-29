@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.9
+
+- Finished coalesced unfinished renewal cleanups even when a quiet sync response arrives after an app-user identity change.
+- Kept quiet `syncPurchases()` renewal coalescing from replaying skipped StoreKit renewals after account switches.
+
 ## 0.1.8
 
 - Harden automatic profile context sync during identity transitions and keep post-transition refreshes off the `logIn`/`logOut` return path.
