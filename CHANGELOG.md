@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.10
+
+- Fixed: `postReceipt` now forwards `syncedOriginalTransactionId`, so the 0.1.9 coalesced-renewal finishing actually fires (the value was previously dropped on the success-rebuild, leaving that cleanup a dead path). (audit ios-3)
+- Fixed: payment-mode entitlement helpers `isInGracePeriod` / `isInPaymentRetry` / `isRevoked` now reflect the real server status instead of always returning `false`. (audit ios-2)
+- Fixed: customer DTO decode no longer swallows shape-drift errors and silently drops paid entitlements; it fails loudly and preserves the prior snapshot. (audit ios-16)
+- Fixed: the plugin event bridge re-arms all four event types after `reset()`. (audit ios-17)
+- Fixed: a monotonic ordering guard prevents concurrent receipt POSTs from publishing a stale customer snapshot over a newer one. (audit ios-19)
+- Cleanup: deduplicated server error-envelope mapping; `AppActorOffering` Codable now round-trips `packages`; removed dead write-only payment state. (audit ios-10/ios-24/ios-25)
+
 ## 0.1.9
 
 - Finished coalesced unfinished renewal cleanups even when a quiet sync response arrives after an app-user identity change.
