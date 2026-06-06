@@ -63,10 +63,17 @@ public struct AppActorOffering: Sendable, Identifiable, Hashable, Codable {
         hasher.combine(id)
     }
 
-    // MARK: - Codable (excludes packages — contains non-Codable StoreKit types)
+    // MARK: - Codable
+    //
+    // `AppActorPackage` is fully Codable, so the public Codable conformance round-trips
+    // the complete offering — including `packages` — for third-party persistence/serialization.
+    // The SDK's own offerings disk cache does NOT use this conformance: it serializes the
+    // network DTO (see `AppActorOfferingsManager.CachedPayload`) and re-enriches packages from
+    // StoreKit on load. `packages` decodes with a `[]` default so JSON persisted by older
+    // versions (which omitted the key) still decodes successfully.
 
     private enum CodingKeys: String, CodingKey {
-        case id, displayName, isCurrent, lookupKey, metadata
+        case id, displayName, isCurrent, lookupKey, metadata, packages
     }
 
     public init(from decoder: Decoder) throws {
@@ -76,7 +83,7 @@ public struct AppActorOffering: Sendable, Identifiable, Hashable, Codable {
         isCurrent = (try? c.decodeIfPresent(Bool.self, forKey: .isCurrent)) ?? false
         lookupKey = try? c.decodeIfPresent(String.self, forKey: .lookupKey)
         metadata = try? c.decodeIfPresent([String: String].self, forKey: .metadata)
-        packages = []  // excluded — re-enriched from StoreKit at runtime
+        packages = (try? c.decodeIfPresent([AppActorPackage].self, forKey: .packages)) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -86,6 +93,7 @@ public struct AppActorOffering: Sendable, Identifiable, Hashable, Codable {
         try c.encode(isCurrent, forKey: .isCurrent)
         try c.encodeIfPresent(lookupKey, forKey: .lookupKey)
         try c.encodeIfPresent(metadata, forKey: .metadata)
+        try c.encode(packages, forKey: .packages)
     }
 
     // MARK: - Internal Memberwise Init

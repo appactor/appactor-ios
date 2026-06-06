@@ -47,11 +47,6 @@ extension AppActor {
         set { paymentContext.client = newValue }
     }
 
-    var paymentCurrentUser: AppActorCustomerInfo? {
-        get { paymentContext.currentUser }
-        set { paymentContext.currentUser = newValue }
-    }
-
     var paymentETagManager: AppActorETagManager? {
         get { paymentContext.etagManager }
         set { paymentContext.etagManager = newValue }

@@ -49,7 +49,6 @@ final class BootstrapLifecycleTests: XCTestCase {
         appactor.paymentConfig = nil
         appactor.paymentStorage = nil
         appactor.paymentClient = nil
-        appactor.paymentCurrentUser = nil
         appactor.paymentETagManager = nil
         appactor.offeringsManager = nil
         appactor.customerManager = nil

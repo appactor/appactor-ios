@@ -29,6 +29,33 @@ public enum AppActorSubscriptionStatus: String, Sendable, Codable, Equatable {
         self = AppActorSubscriptionStatus(rawValue: raw) ?? .unknown
     }
 
+    /// Maps a server-provided status string (payment mode) onto a typed status.
+    ///
+    /// The backend reports status as a string (e.g. `"grace"`, `"billing_retry"`,
+    /// `"revoked"`, `"active"`). This bridges those strings onto the enum so the
+    /// payment-mode entitlement helpers (`isInGracePeriod` / `isInPaymentRetry` /
+    /// `isRevoked`) reflect the real billing state. Returns `nil` when the server
+    /// supplies no status, and `.unknown` for an unrecognized non-empty value.
+    init?(serverStatus: String?) {
+        guard let serverStatus, !serverStatus.isEmpty else { return nil }
+        switch serverStatus {
+        case "active":
+            self = .active
+        case "grace", "grace_period":
+            self = .gracePeriod
+        case "billing_retry", "billing-retry", "billingRetry":
+            self = .billingRetry
+        case "expired":
+            self = .expired
+        case "revoked", "refunded":
+            self = .revoked
+        case "upgraded":
+            self = .upgraded
+        default:
+            self = AppActorSubscriptionStatus(rawValue: serverStatus) ?? .unknown
+        }
+    }
+
     /// Whether the user is entitled to access under this status.
     ///
     /// - `true` for `.active` and `.gracePeriod`
