@@ -172,7 +172,6 @@ final class PaymentLiveOfferingsTests: XCTestCase {
             appactor.paymentConfig = nil
             appactor.paymentStorage = nil
             appactor.paymentClient = nil
-            appactor.paymentCurrentUser = nil
             appactor.offeringsManager = nil
             appactor.paymentOfferings = nil
         }

@@ -386,42 +386,17 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 }
 
             case 429:
-                let errorInfo = parseErrorEnvelope(from: data)
-                let retryAfter = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
-                    ?? errorInfo?.retryAfterSeconds
-                Log.network.warn("Rate limited on \(path), retryAfter=\(retryAfter.map { "\($0)s" } ?? "–")")
-                throw AppActorError.serverError(
-                    httpStatus: 429,
-                    code: errorInfo?.code ?? "RATE_LIMIT_EXCEEDED",
-                    message: errorInfo?.message ?? "Rate limited",
-                    details: errorInfo?.details,
-                    requestId: requestId,
-                    scope: errorInfo?.scope,
-                    retryAfterSeconds: retryAfter
-                )
+                let serverError = makeServerError(statusCode: 429, data: data, http: http, requestId: requestId)
+                Log.network.warn("Rate limited on \(path), retryAfter=\(serverError.retryAfterSeconds.map { "\($0)s" } ?? "–")")
+                throw serverError
 
             case 400..<500:
-                let errorInfo = parseErrorEnvelope(from: data)
-                Log.network.error("\(http.statusCode) \(path): code=\(errorInfo?.code ?? "nil") message=\(errorInfo?.message ?? "nil")")
-                throw AppActorError.serverError(
-                    httpStatus: http.statusCode,
-                    code: errorInfo?.code,
-                    message: errorInfo?.message,
-                    details: errorInfo?.details,
-                    requestId: requestId,
-                    scope: errorInfo?.scope,
-                    retryAfterSeconds: errorInfo?.retryAfterSeconds
-                )
+                let serverError = makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
+                Log.network.error("\(http.statusCode) \(path): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
+                throw serverError
 
             default:
-                let errorInfo = parseErrorEnvelope(from: data)
-                throw AppActorError.serverError(
-                    httpStatus: http.statusCode,
-                    code: errorInfo?.code ?? "INTERNAL_ERROR",
-                    message: errorInfo?.message,
-                    details: errorInfo?.details,
-                    requestId: requestId
-                )
+                throw makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
             }
         } catch let error as AppActorError {
             throw error
@@ -582,42 +557,17 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 }
 
             case 429:
-                let errorInfo = parseErrorEnvelope(from: data)
-                let retryAfter = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
-                    ?? errorInfo?.retryAfterSeconds
-                Log.network.warn("Rate limited on \(path), retryAfter=\(retryAfter.map { "\($0)s" } ?? "–")")
-                throw AppActorError.serverError(
-                    httpStatus: 429,
-                    code: errorInfo?.code ?? "RATE_LIMIT_EXCEEDED",
-                    message: errorInfo?.message ?? "Rate limited",
-                    details: errorInfo?.details,
-                    requestId: requestId,
-                    scope: errorInfo?.scope,
-                    retryAfterSeconds: retryAfter
-                )
+                let serverError = makeServerError(statusCode: 429, data: data, http: http, requestId: requestId)
+                Log.network.warn("Rate limited on \(path), retryAfter=\(serverError.retryAfterSeconds.map { "\($0)s" } ?? "–")")
+                throw serverError
 
             case 400..<500:
-                let errorInfo = parseErrorEnvelope(from: data)
-                Log.network.error("\(http.statusCode) \(path): code=\(errorInfo?.code ?? "nil") message=\(errorInfo?.message ?? "nil")")
-                throw AppActorError.serverError(
-                    httpStatus: http.statusCode,
-                    code: errorInfo?.code,
-                    message: errorInfo?.message,
-                    details: errorInfo?.details,
-                    requestId: requestId,
-                    scope: errorInfo?.scope,
-                    retryAfterSeconds: errorInfo?.retryAfterSeconds
-                )
+                let serverError = makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
+                Log.network.error("\(http.statusCode) \(path): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
+                throw serverError
 
             default:
-                let errorInfo = parseErrorEnvelope(from: data)
-                throw AppActorError.serverError(
-                    httpStatus: http.statusCode,
-                    code: errorInfo?.code ?? "INTERNAL_ERROR",
-                    message: errorInfo?.message,
-                    details: errorInfo?.details,
-                    requestId: requestId
-                )
+                throw makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
             }
         } catch let error as AppActorError {
             throw error
@@ -657,40 +607,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 return AppActorMutationResult(requestId: requestId)
 
             case 429:
-                let errorInfo = parseErrorEnvelope(from: data)
-                let retryAfter = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
-                    ?? errorInfo?.retryAfterSeconds
-                throw AppActorError.serverError(
-                    httpStatus: 429,
-                    code: errorInfo?.code ?? "RATE_LIMIT_EXCEEDED",
-                    message: errorInfo?.message ?? "Rate limited",
-                    details: errorInfo?.details,
-                    requestId: requestId,
-                    scope: errorInfo?.scope,
-                    retryAfterSeconds: retryAfter
-                )
+                throw makeServerError(statusCode: 429, data: data, http: http, requestId: requestId)
 
             case 400..<500:
-                let errorInfo = parseErrorEnvelope(from: data)
-                throw AppActorError.serverError(
-                    httpStatus: http.statusCode,
-                    code: errorInfo?.code,
-                    message: errorInfo?.message,
-                    details: errorInfo?.details,
-                    requestId: requestId,
-                    scope: errorInfo?.scope,
-                    retryAfterSeconds: errorInfo?.retryAfterSeconds
-                )
+                throw makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
 
             default:
-                let errorInfo = parseErrorEnvelope(from: data)
-                throw AppActorError.serverError(
-                    httpStatus: http.statusCode,
-                    code: errorInfo?.code ?? "INTERNAL_ERROR",
-                    message: errorInfo?.message,
-                    details: errorInfo?.details,
-                    requestId: requestId
-                )
+                throw makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
             }
         } catch let error as AppActorError {
             throw error
@@ -936,18 +859,9 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     return try onSuccess(data, http, signatureVerified, requestId)
 
                 case 429:
-                    let errorInfo = parseErrorEnvelope(from: data)
-                    retryAfterOverride = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
-                        ?? errorInfo?.retryAfterSeconds
-                    lastError = AppActorError.serverError(
-                        httpStatus: 429,
-                        code: errorInfo?.code ?? "RATE_LIMIT_EXCEEDED",
-                        message: errorInfo?.message ?? "Rate limited",
-                        details: errorInfo?.details,
-                        requestId: requestId,
-                        scope: errorInfo?.scope,
-                        retryAfterSeconds: retryAfterOverride
-                    )
+                    let serverError = makeServerError(statusCode: 429, data: data, http: http, requestId: requestId)
+                    retryAfterOverride = serverError.retryAfterSeconds
+                    lastError = serverError
                     Log.network.warn("Rate limited on \(path), retrying…")
                     continue
 
@@ -957,26 +871,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                        let result = try handler(http.statusCode, data, requestId) {
                         return result
                     }
-                    let errorInfo = parseErrorEnvelope(from: data)
-                    Log.network.error("\(http.statusCode) \(path): code=\(errorInfo?.code ?? "nil") message=\(errorInfo?.message ?? "nil")")
-                    throw AppActorError.serverError(
-                        httpStatus: http.statusCode,
-                        code: errorInfo?.code,
-                        message: errorInfo?.message,
-                        details: errorInfo?.details,
-                        requestId: requestId
-                    )
+                    let serverError = makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
+                    Log.network.error("\(http.statusCode) \(path): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
+                    throw serverError
 
                 default:
                     // 5xx — retry
-                    let errorInfo = parseErrorEnvelope(from: data)
-                    lastError = AppActorError.serverError(
-                        httpStatus: http.statusCode,
-                        code: errorInfo?.code ?? "INTERNAL_ERROR",
-                        message: errorInfo?.message,
-                        details: errorInfo?.details,
-                        requestId: requestId
-                    )
+                    lastError = makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
                     Log.network.warn("\(http.statusCode) \(path), retrying…")
                     continue
                 }
@@ -1011,6 +912,64 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             return nil
         }
         return json["requestId"] as? String
+    }
+
+    /// Builds the `AppActorError.serverError` for a non-2xx/3xx HTTP status by parsing the
+    /// server error envelope and applying the shared 429 / 4xx / 5xx field mapping.
+    ///
+    /// This is the single source of truth for status→error mapping across all endpoints
+    /// (postReceipt, postASA, performMutation, and the retryable loop). It is intentionally
+    /// PURE: it performs no logging, no `continue`/`throw` control flow, and no retry-state
+    /// mutation. Callers own logging and decide whether to throw or store as `lastError`,
+    /// and read `retryAfterSeconds` off the returned error for backoff purposes.
+    ///
+    /// - 429 → defaults `code` to `RATE_LIMIT_EXCEEDED`, `message` to `Rate limited`, and
+    ///   resolves the retry delay from the `Retry-After` header, falling back to the envelope.
+    /// - 400..<500 → uses envelope `code`/`message` verbatim (no defaults), carrying `scope`
+    ///   and `retryAfterSeconds` from the envelope.
+    /// - default (incl. 5xx) → defaults `code` to `INTERNAL_ERROR`; no `scope`/`retryAfter`.
+    private func makeServerError(
+        statusCode: Int,
+        data: Data,
+        http: HTTPURLResponse,
+        requestId: String?
+    ) -> AppActorError {
+        let errorInfo = parseErrorEnvelope(from: data)
+
+        switch statusCode {
+        case 429:
+            let retryAfter = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
+                ?? errorInfo?.retryAfterSeconds
+            return AppActorError.serverError(
+                httpStatus: 429,
+                code: errorInfo?.code ?? "RATE_LIMIT_EXCEEDED",
+                message: errorInfo?.message ?? "Rate limited",
+                details: errorInfo?.details,
+                requestId: requestId,
+                scope: errorInfo?.scope,
+                retryAfterSeconds: retryAfter
+            )
+
+        case 400..<500:
+            return AppActorError.serverError(
+                httpStatus: statusCode,
+                code: errorInfo?.code,
+                message: errorInfo?.message,
+                details: errorInfo?.details,
+                requestId: requestId,
+                scope: errorInfo?.scope,
+                retryAfterSeconds: errorInfo?.retryAfterSeconds
+            )
+
+        default:
+            return AppActorError.serverError(
+                httpStatus: statusCode,
+                code: errorInfo?.code ?? "INTERNAL_ERROR",
+                message: errorInfo?.message,
+                details: errorInfo?.details,
+                requestId: requestId
+            )
+        }
     }
 
     private func parseErrorEnvelope(from data: Data) -> AppActorErrorResponse.ErrorPayload? {

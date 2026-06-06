@@ -229,4 +229,115 @@ final class CustomerInfoTests: XCTestCase {
         XCTAssertFalse(info.hasActiveEntitlement("pro"))
         XCTAssertFalse(info.hasActiveEntitlement("nonexistent"))
     }
+
+    // MARK: - Payment-mode status mapping (ios-2)
+
+    func testServerStatusMapsOntoEntitlementHelpers() {
+        let grace = AppActorEntitlementInfo(
+            id: "premium",
+            dto: AppActorEntitlementDTO(isActive: true, productId: "com.app.monthly", status: "grace")
+        )
+        XCTAssertEqual(grace.subscriptionStatus, .gracePeriod)
+        XCTAssertTrue(grace.isInGracePeriod)
+        XCTAssertFalse(grace.isInPaymentRetry)
+        XCTAssertFalse(grace.isRevoked)
+
+        let billingRetry = AppActorEntitlementInfo(
+            id: "premium",
+            dto: AppActorEntitlementDTO(isActive: false, productId: "com.app.monthly", status: "billing_retry")
+        )
+        XCTAssertEqual(billingRetry.subscriptionStatus, .billingRetry)
+        XCTAssertTrue(billingRetry.isInPaymentRetry)
+        XCTAssertFalse(billingRetry.isInGracePeriod)
+
+        let revoked = AppActorEntitlementInfo(
+            id: "premium",
+            dto: AppActorEntitlementDTO(isActive: false, productId: "com.app.monthly", status: "revoked")
+        )
+        XCTAssertEqual(revoked.subscriptionStatus, .revoked)
+        XCTAssertTrue(revoked.isRevoked)
+
+        let active = AppActorEntitlementInfo(
+            id: "premium",
+            dto: AppActorEntitlementDTO(isActive: true, productId: "com.app.monthly", status: "active")
+        )
+        XCTAssertEqual(active.subscriptionStatus, .active)
+        XCTAssertFalse(active.isInGracePeriod)
+        XCTAssertFalse(active.isInPaymentRetry)
+        XCTAssertFalse(active.isRevoked)
+
+        // No server status → nil enum, helpers stay false (unchanged behavior).
+        let none = AppActorEntitlementInfo(
+            id: "premium",
+            dto: AppActorEntitlementDTO(isActive: true, productId: "com.app.monthly", status: nil)
+        )
+        XCTAssertNil(none.subscriptionStatus)
+        XCTAssertFalse(none.isInGracePeriod)
+
+        // Unrecognized non-empty status → .unknown defensive fallback.
+        let weird = AppActorEntitlementInfo(
+            id: "premium",
+            dto: AppActorEntitlementDTO(isActive: true, productId: "com.app.monthly", status: "something_new")
+        )
+        XCTAssertEqual(weird.subscriptionStatus, .unknown)
+    }
+
+    // MARK: - Strict collection decode (ios-16)
+
+    func testEntitlementsShapeDriftThrowsInsteadOfSilentlyDropping() {
+        // A value-type drift (isActive sent as a string) must fail loudly so
+        // callers keep cached entitlements rather than treating the user as
+        // having none.
+        let json = """
+        {
+            "entitlements": { "premium": { "isActive": "yes", "productId": "com.app.monthly" } },
+            "subscriptions": {},
+            "nonSubscriptions": {}
+        }
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(AppActorCustomerDTO.self, from: json)) { error in
+            XCTAssertTrue(error is DecodingError, "Shape drift should surface as a DecodingError")
+        }
+    }
+
+    func testEntitlementsShapeDriftThrowsThroughResponseEnvelope() {
+        // Real production path: PaymentClient decodes the envelope, not the bare
+        // customer DTO. The envelope wraps the customer decode in `try?`, so on
+        // drift it falls through to a thrown `keyNotFound` — still a DecodingError,
+        // so PaymentClient.getCustomer fails loudly and the caller keeps cache.
+        let json = """
+        {
+            "requestDate": "2026-02-14T22:42:17.027Z",
+            "customer": {
+                "entitlements": { "premium": { "isActive": "yes" } },
+                "subscriptions": {},
+                "nonSubscriptions": {}
+            }
+        }
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(AppActorCustomerResponseDTO.self, from: json)) { error in
+            XCTAssertTrue(error is DecodingError, "Shape drift must propagate as a DecodingError through the envelope")
+        }
+    }
+
+    func testWellFormedEmptyCollectionsStillDecode() throws {
+        let json = """
+        { "entitlements": {}, "subscriptions": {}, "nonSubscriptions": {} }
+        """.data(using: .utf8)!
+
+        let dto = try JSONDecoder().decode(AppActorCustomerDTO.self, from: json)
+        XCTAssertEqual(dto.entitlements?.count, 0)
+        XCTAssertEqual(dto.subscriptions?.count, 0)
+        XCTAssertEqual(dto.nonSubscriptions?.count, 0)
+    }
+
+    func testMissingCollectionsDecodeAsNil() throws {
+        let json = "{}".data(using: .utf8)!
+        let dto = try JSONDecoder().decode(AppActorCustomerDTO.self, from: json)
+        XCTAssertNil(dto.entitlements)
+        XCTAssertNil(dto.subscriptions)
+        XCTAssertNil(dto.nonSubscriptions)
+    }
 }

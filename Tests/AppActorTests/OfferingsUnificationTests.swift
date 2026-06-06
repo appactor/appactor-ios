@@ -8,7 +8,7 @@ import StoreKit
 // types introduced in Phase 10 Plan 01. Covers:
 // - Codable roundtrip for payment-mode shape (all fields populated)
 // - Codable roundtrip for minimal shape (lookupKey nil, metadata nil)
-// - Packages exclusion verification (not in CodingKeys — always [] after decode)
+// - Packages inclusion verification (in CodingKeys — round-trip preserves packages)
 // - AppActorOfferings container Codable roundtrip with productEntitlements
 // - AppActorOfferings init sets current directly (not looked up by id)
 // - offering(id:) and offering(lookupKey:) lookup correctness
@@ -45,8 +45,8 @@ final class OfferingsUnificationTests: XCTestCase {
         XCTAssertEqual(decoded.lookupKey, "premium", "lookupKey must survive Codable roundtrip")
         XCTAssertEqual(decoded.metadata, ["tier": "1"], "metadata must survive Codable roundtrip")
 
-        // Packages excluded from CodingKeys — always empty after decode
-        XCTAssertTrue(decoded.packages.isEmpty, "packages must be empty after decode (excluded from CodingKeys)")
+        // No packages were provided, so packages stays empty after decode
+        XCTAssertTrue(decoded.packages.isEmpty, "packages must be empty after decode when none were encoded")
     }
 
     // MARK: - Test 2: Minimal Shape Codable Roundtrip
@@ -69,41 +69,76 @@ final class OfferingsUnificationTests: XCTestCase {
         XCTAssertFalse(decoded.isCurrent, "isCurrent false must survive roundtrip")
         XCTAssertNil(decoded.lookupKey, "lookupKey nil must survive roundtrip")
         XCTAssertNil(decoded.metadata, "metadata nil must survive roundtrip")
-        XCTAssertTrue(decoded.packages.isEmpty, "packages must be empty after decode")
+        XCTAssertTrue(decoded.packages.isEmpty, "packages must be empty after decode when none were encoded")
     }
 
-    // MARK: - Test 3: Packages Excluded from Encoded JSON
+    // MARK: - Test 3: Packages Included in Encoded JSON and Round-Trip
 
-    func testOfferingCodablePackagesExcluded() throws {
-        // Construct an offering with packages via a helper that builds packages inline.
-        // We can't construct non-empty packages without StoreKit products,
-        // but we can verify the encoded JSON has no "packages" key.
+    func testOfferingCodablePackagesRoundtrip() throws {
+        // AppActorPackage is fully Codable, so packages are part of the offering's
+        // public Codable conformance and must survive a round-trip.
+        let package = AppActorPackage(
+            id: "pkg_monthly",
+            packageType: .monthly,
+            customTypeIdentifier: nil,
+            store: .appStore,
+            productId: "com.app.monthly",
+            storeProductId: "com.app.monthly",
+            localizedPriceString: "$9.99",
+            offeringId: "offering_with_packages_check",
+            displayName: "Monthly",
+            metadata: ["tier": "1"],
+            position: 0,
+            price: Decimal(9.99),
+            currencyCode: "USD",
+            productType: "subscription",
+            productName: "Monthly Plan",
+            productDescription: "Billed monthly"
+        )
+
         let original = AppActorOffering(
             id: "offering_with_packages_check",
             displayName: "With Packages",
             isCurrent: false,
             lookupKey: nil,
             metadata: nil,
-            packages: []
+            packages: [package]
         )
 
         let data = try encoder.encode(original)
 
-        // Parse raw JSON and verify "packages" key does NOT exist
+        // Parse raw JSON and verify the "packages" key IS present
         let raw = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: data) as? [String: Any],
             "Encoded JSON should be a dictionary"
         )
-        XCTAssertNil(raw["packages"], "packages key must NOT appear in encoded JSON (excluded from CodingKeys)")
+        XCTAssertNotNil(raw["packages"], "packages key must appear in encoded JSON (included in CodingKeys)")
 
         // Verify the keys that ARE encoded
         XCTAssertNotNil(raw["id"])
         XCTAssertNotNil(raw["displayName"])
         XCTAssertNotNil(raw["isCurrent"])
 
-        // Decode and verify packages is empty
+        // Decode and verify packages round-trip with full fidelity
         let decoded = try decoder.decode(AppActorOffering.self, from: data)
-        XCTAssertTrue(decoded.packages.isEmpty, "packages must be [] after decode (excluded from CodingKeys)")
+        XCTAssertEqual(decoded.packages.count, 1, "packages must survive the Codable round-trip")
+        XCTAssertEqual(decoded.packages.first?.id, "pkg_monthly", "package id must survive round-trip")
+        XCTAssertEqual(decoded.packages.first?.packageType, .monthly, "package type must survive round-trip")
+        XCTAssertEqual(decoded.packages.first?.localizedPriceString, "$9.99", "package price string must survive round-trip")
+    }
+
+    // MARK: - Test 3b: Backward Compatibility — JSON Without packages Key
+
+    func testOfferingDecodeWithoutPackagesKeyDefaultsToEmpty() throws {
+        // JSON persisted by older SDK versions omitted the "packages" key entirely.
+        // Decoding must still succeed and default packages to [].
+        let legacyJSON = """
+        {"id":"legacy","displayName":"Legacy Offering","isCurrent":true}
+        """.data(using: .utf8)!
+
+        let decoded = try decoder.decode(AppActorOffering.self, from: legacyJSON)
+        XCTAssertEqual(decoded.id, "legacy")
+        XCTAssertTrue(decoded.packages.isEmpty, "packages must default to [] when the key is absent")
     }
 
     // MARK: - Test 4: AppActorOfferings Container Codable Roundtrip
@@ -145,8 +180,8 @@ final class OfferingsUnificationTests: XCTestCase {
         XCTAssertNotNil(decoded.all["default"])
         XCTAssertNotNil(decoded.all["annual"])
 
-        // Offerings in all have empty packages after decode (expected behavior)
-        XCTAssertTrue(decoded.all["default"]?.packages.isEmpty == true, "packages in all offerings empty after decode")
+        // No packages were provided, so offerings in all stay empty after decode
+        XCTAssertTrue(decoded.all["default"]?.packages.isEmpty == true, "packages empty after decode when none were encoded")
 
         // productEntitlements preserved
         XCTAssertEqual(

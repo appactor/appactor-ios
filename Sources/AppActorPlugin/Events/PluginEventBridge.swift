@@ -164,6 +164,20 @@ final class AppActorPluginEventBridge {
         }
     }
 
+    /// Re-installs all SDK listeners after a full SDK reset.
+    ///
+    /// `AppActor.reset()` nils most of the handlers the bridge installs
+    /// (`onReceiptPipelineEvent`, `onPurchaseIntent`, `onDeferredPurchaseResolved`)
+    /// while leaving `onCustomerInfoChanged` in place. Because `listening` stays
+    /// `true`, a plain `startListening()` would be a no-op, leaving three of the
+    /// four event types silently disconnected. Tearing down and re-arming restores
+    /// every listener so events keep flowing after a reset→reconfigure cycle.
+    func reapplyListenersAfterReset() {
+        guard listening else { return }
+        stopListening()
+        startListening()
+    }
+
     private func emit<T: AppActorPluginEvent>(_ event: T) {
         emitEncodable(event.id, event)
     }

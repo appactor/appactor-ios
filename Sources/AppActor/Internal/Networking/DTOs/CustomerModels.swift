@@ -69,10 +69,15 @@ struct AppActorCustomerDTO: Codable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.entitlements = try? container.decodeIfPresent([String: AppActorEntitlementDTO].self, forKey: .entitlements)
-        self.subscriptions = try? container.decodeIfPresent([String: AppActorSubscriptionDTO].self, forKey: .subscriptions)
-        // Defensive: if nonSubscriptions shape drifts, fall back to nil rather than failing the entire response
-        self.nonSubscriptions = try? container.decodeIfPresent([String: [AppActorNonSubscriptionDTO]].self, forKey: .nonSubscriptions)
+        // Decode the purchase collections strictly (no `try?`): a genuine shape
+        // drift in the entitlements/subscriptions/nonSubscriptions payload must
+        // propagate as a decodingError so callers can keep the prior cached state,
+        // rather than silently collapsing to nil and revoking a paying user's
+        // access. A missing key or explicit null still decodes as nil, and an
+        // empty `{}` collection still decodes as an empty map.
+        self.entitlements = try container.decodeIfPresent([String: AppActorEntitlementDTO].self, forKey: .entitlements)
+        self.subscriptions = try container.decodeIfPresent([String: AppActorSubscriptionDTO].self, forKey: .subscriptions)
+        self.nonSubscriptions = try container.decodeIfPresent([String: [AppActorNonSubscriptionDTO]].self, forKey: .nonSubscriptions)
         self.managementUrl = try? container.decodeIfPresent(String.self, forKey: .managementUrl)
         self.tokenBalance = try? container.decodeIfPresent(AppActorTokenBalanceDTO.self, forKey: .tokenBalance)
         self.firstSeen = try? container.decodeIfPresent(String.self, forKey: .firstSeen)
@@ -344,7 +349,7 @@ extension AppActorEntitlementInfo {
             ownershipType: dto.ownershipType.flatMap { AppActorOwnershipType(rawValue: $0) } ?? .unknown,
             periodType: dto.periodType.flatMap { AppActorPeriodType(rawValue: $0) } ?? .unknown,
             willRenew: dto.unsubscribeDetectedAt == nil && (dto.isActive ?? false),
-            subscriptionStatus: nil, // server uses status string, not enum
+            subscriptionStatus: AppActorSubscriptionStatus(serverStatus: dto.status),
             store: dto.store.flatMap { AppActorStore(rawValue: $0) },
             basePlanId: dto.basePlanId,
             offerId: dto.offerId,

@@ -76,7 +76,6 @@ extension AppActor {
         self.paymentConfig = config
         self.paymentStorage = storage
         self.paymentClient = client
-        self.paymentCurrentUser = nil
         self.customerAttributesManager.updateDependencies(storage: storage, client: client)
 
         // Centralized ETag + response cache manager (shared by all managers).
@@ -296,7 +295,6 @@ extension AppActor {
             await manager.seedCache(info: verifiedInfo, eTag: result.customerETag, appUserId: result.appUserId, verified: result.signatureVerified)
         }
 
-        self.paymentCurrentUser = verifiedInfo
         self.customerInfo = verifiedInfo
         Log.identity.debug("Identified as \(String(result.appUserId.prefix(8)))…")
         Log.identity.info("👤 Identity established")
@@ -391,7 +389,6 @@ extension AppActor {
         }
         self.paymentRemoteConfigs = nil
 
-        self.paymentCurrentUser = verifiedLoginInfo
         await setCustomerInfoIfIdentityMatches(verifiedLoginInfo, expectedAppUserId: loginResult.appUserId)
 
         // End identity transition — flush buffered transactions with their captured appUserId
@@ -475,7 +472,6 @@ extension AppActor {
 
         storage.ensureAppAccountToken()
         storage.clearLegacyIdentityState()
-        self.paymentCurrentUser = nil
         self.customerInfo = .empty
 
         Log.identity.debug("Logged out. New anonymous ID: \(String((storage.currentAppUserId ?? "nil").prefix(8)))…")
@@ -581,7 +577,6 @@ extension AppActor {
         await paymentETagManager?.clearAll()
         await offeringsManager?.clearCache()
 
-        paymentCurrentUser = nil
         customerInfo = .empty
         paymentConfig = nil
         paymentClient = nil

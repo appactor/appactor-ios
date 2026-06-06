@@ -581,7 +581,6 @@ final class AppActorPaymentContext {
     var config: AppActorPaymentConfiguration?
     var storage: (any AppActorPaymentStorage)?
     var client: (any AppActorPaymentClientProtocol)?
-    var currentUser: AppActorCustomerInfo?
     var etagManager: AppActorETagManager?
     var lifecycleObservers: [NSObjectProtocol] = []
     var asaTask: Task<Void, Never>?

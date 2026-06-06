@@ -424,7 +424,6 @@ final class CacheIdentityChangeTests: XCTestCase {
         appactor.paymentConfig = nil
         appactor.paymentStorage = nil
         appactor.paymentClient = nil
-        appactor.paymentCurrentUser = nil
         appactor.paymentETagManager = nil
         appactor.offeringsManager = nil
         appactor.customerManager = nil
@@ -728,5 +727,63 @@ final class CacheIdentityChangeTests: XCTestCase {
 
         // VERIFY: Payment lifecycle is idle after reset
         XCTAssertEqual(appactor.paymentLifecycle, .idle, "CACH-03: paymentLifecycle must be .idle after reset()")
+    }
+
+    // MARK: - ios-19: Out-of-order customer info guard
+
+    /// ios-19: Concurrent receipt POSTs can land in `setCustomerInfoIfIdentityMatches`
+    /// out of order. An older snapshot for the same identity must NOT overwrite a newer
+    /// one already published (which would cause entitlement flicker).
+    func testIOS19_olderSnapshotDoesNotOverwriteNewerForSameUser() async throws {
+        let appUserId = "monotonic-user"
+        storage.setAppUserId(appUserId)
+        appactor.customerInfo = .empty
+
+        let newer = AppActorCustomerInfo(
+            entitlements: ["premium": AppActorEntitlementInfo(id: "premium", isActive: true)],
+            snapshotDate: Date(),
+            appUserId: appUserId
+        )
+        await appactor.setCustomerInfoIfIdentityMatches(newer, expectedAppUserId: appUserId)
+        XCTAssertTrue(appactor.customerInfo.hasActiveEntitlement("premium"))
+
+        // An older snapshot (no premium) arrives late — must be discarded.
+        let older = AppActorCustomerInfo(
+            entitlements: [:],
+            snapshotDate: newer.snapshotDate.addingTimeInterval(-5),
+            appUserId: appUserId
+        )
+        await appactor.setCustomerInfoIfIdentityMatches(older, expectedAppUserId: appUserId)
+        XCTAssertTrue(
+            appactor.customerInfo.hasActiveEntitlement("premium"),
+            "ios-19: older out-of-order snapshot must not overwrite the newer published snapshot"
+        )
+    }
+
+    /// ios-19: A strictly newer snapshot for the same identity must still apply, and the
+    /// guard must never block the first real snapshot replacing `.empty`'s `.distantPast`.
+    func testIOS19_newerSnapshotStillApplies() async throws {
+        let appUserId = "monotonic-user-2"
+        storage.setAppUserId(appUserId)
+        appactor.customerInfo = .empty
+
+        let older = AppActorCustomerInfo(
+            entitlements: [:],
+            snapshotDate: Date(),
+            appUserId: appUserId
+        )
+        await appactor.setCustomerInfoIfIdentityMatches(older, expectedAppUserId: appUserId)
+        XCTAssertFalse(appactor.customerInfo.hasActiveEntitlement("premium"))
+
+        let newer = AppActorCustomerInfo(
+            entitlements: ["premium": AppActorEntitlementInfo(id: "premium", isActive: true)],
+            snapshotDate: older.snapshotDate.addingTimeInterval(5),
+            appUserId: appUserId
+        )
+        await appactor.setCustomerInfoIfIdentityMatches(newer, expectedAppUserId: appUserId)
+        XCTAssertTrue(
+            appactor.customerInfo.hasActiveEntitlement("premium"),
+            "ios-19: a strictly newer snapshot for the same identity must apply"
+        )
     }
 }

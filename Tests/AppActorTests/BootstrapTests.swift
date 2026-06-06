@@ -66,7 +66,6 @@ final class BootstrapTests: XCTestCase {
         appactor.paymentConfig = nil
         appactor.paymentStorage = nil
         appactor.paymentClient = nil
-        appactor.paymentCurrentUser = nil
         appactor.paymentETagManager = nil
         appactor.offeringsManager = nil
         appactor.customerManager = nil
@@ -178,8 +177,8 @@ final class BootstrapTests: XCTestCase {
         XCTAssertEqual(mockClient.identifyCalls.count, 0, "Bootstrap should not attempt identify")
         XCTAssertTrue(offeringsCalled,
                       "Offerings API warm-up should still run even when customer refresh fails")
-        XCTAssertNil(appactor.paymentCurrentUser,
-                     "No server customer snapshot should be set when refresh failed")
+        XCTAssertTrue(appactor.customerInfo.activeEntitlementKeys.isEmpty,
+                      "No server customer snapshot should be set when refresh failed")
     }
 
     func testSuccessfulCustomerFetchDrainsQueuedReceiptsInSameSession() async throws {
@@ -547,8 +546,8 @@ final class BootstrapTests: XCTestCase {
                        "SDK must remain in .configured state even when all bootstrap steps fail")
 
         // No server snapshot set because customer refresh failed
-        XCTAssertNil(appactor.paymentCurrentUser,
-                     "No user should be set when customer refresh failed")
+        XCTAssertTrue(appactor.customerInfo.activeEntitlementKeys.isEmpty,
+                      "No user should be set when customer refresh failed")
 
         XCTAssertNotNil(appactor.appUserId, "Local appUserId should still exist after partial bootstrap failure")
         XCTAssertEqual(mockClient.getOfferingsCallCount, 1,
