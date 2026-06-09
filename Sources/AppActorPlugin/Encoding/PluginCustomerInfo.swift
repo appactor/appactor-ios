@@ -189,6 +189,9 @@ struct PluginNonSubscription: Encodable, Sendable {
     let store: String?
     let purchaseDate: String?
     let storeTransactionIdentifier: String?
+    // Emits the `original_transaction_identifier` wire key (via convertToSnakeCase)
+    // to match the Android surrogate and the Dart model (flutter-6).
+    let originalTransactionIdentifier: String?
     let isSandbox: Bool?
     let isConsumable: Bool?
     let isRefund: Bool?
@@ -199,6 +202,7 @@ struct PluginNonSubscription: Encodable, Sendable {
         self.store = n.store?.rawValue
         self.purchaseDate = n.purchaseDate
         self.storeTransactionIdentifier = n.storeTransactionIdentifier
+        self.originalTransactionIdentifier = n.originalTransactionIdentifier
         self.isSandbox = n.isSandbox
         self.isConsumable = n.isConsumable
         self.isRefund = n.isRefund

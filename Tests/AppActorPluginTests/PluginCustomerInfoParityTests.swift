@@ -49,6 +49,29 @@ final class PluginCustomerInfoParityTests: XCTestCase {
         XCTAssertEqual(payload["latest_purchase_date"] as? String, expectedDate)
     }
 
+    func testNonSubscriptionEncodesOriginalTransactionIdentifierForParity() throws {
+        let nonSubscription = AppActorNonSubscription(
+            productIdentifier: "com.app.coins",
+            storeTransactionIdentifier: "txn_123",
+            originalTransactionIdentifier: "orig_456"
+        )
+        let payload = try encodedJSONObject(PluginNonSubscription(from: nonSubscription))
+
+        // Mirrors the Android surrogate + Dart model wire key (flutter-6).
+        XCTAssertEqual(payload["original_transaction_identifier"] as? String, "orig_456")
+        XCTAssertEqual(payload["store_transaction_identifier"] as? String, "txn_123")
+    }
+
+    func testNonSubscriptionOmitsOriginalTransactionIdentifierWhenNil() throws {
+        let nonSubscription = AppActorNonSubscription(productIdentifier: "com.app.coins")
+        let payload = try encodedJSONObject(PluginNonSubscription(from: nonSubscription))
+
+        // The additive field must stay byte-identical to the pre-flutter-6 wire when
+        // nil: the key is omitted, not emitted as null (every backend non-subscription
+        // leaves originalTransactionIdentifier nil today).
+        XCTAssertFalse(payload.keys.contains("original_transaction_identifier"))
+    }
+
     private func encodedEntitlement(from entitlement: AppActorEntitlementInfo) throws -> [String: Any] {
         let customerInfo = AppActorCustomerInfo(
             entitlements: [entitlement.id: entitlement],
