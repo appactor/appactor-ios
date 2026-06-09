@@ -14,6 +14,7 @@ public struct AppActorNonSubscription: Sendable, Codable, Equatable {
     public let isConsumable: Bool?
     public let isRefund: Bool?
     public let storeTransactionIdentifier: String?
+    public let originalTransactionIdentifier: String?
 
     // MARK: - Computed Date Helper
 
@@ -30,7 +31,8 @@ public struct AppActorNonSubscription: Sendable, Codable, Equatable {
         isSandbox: Bool? = nil,
         isConsumable: Bool? = nil,
         isRefund: Bool? = nil,
-        storeTransactionIdentifier: String? = nil
+        storeTransactionIdentifier: String? = nil,
+        originalTransactionIdentifier: String? = nil
     ) {
         self.productIdentifier = productIdentifier
         self.offerId = offerId
@@ -40,6 +42,7 @@ public struct AppActorNonSubscription: Sendable, Codable, Equatable {
         self.isConsumable = isConsumable
         self.isRefund = isRefund
         self.storeTransactionIdentifier = storeTransactionIdentifier
+        self.originalTransactionIdentifier = originalTransactionIdentifier
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -52,6 +55,7 @@ public struct AppActorNonSubscription: Sendable, Codable, Equatable {
         case isConsumable
         case isRefund
         case storeTransactionIdentifier
+        case originalTransactionIdentifier
     }
 
     public init(from decoder: Decoder) throws {
@@ -68,7 +72,8 @@ public struct AppActorNonSubscription: Sendable, Codable, Equatable {
             isSandbox: try container.decodeIfPresent(Bool.self, forKey: .isSandbox),
             isConsumable: try container.decodeIfPresent(Bool.self, forKey: .isConsumable),
             isRefund: try container.decodeIfPresent(Bool.self, forKey: .isRefund),
-            storeTransactionIdentifier: try container.decodeIfPresent(String.self, forKey: .storeTransactionIdentifier)
+            storeTransactionIdentifier: try container.decodeIfPresent(String.self, forKey: .storeTransactionIdentifier),
+            originalTransactionIdentifier: try container.decodeIfPresent(String.self, forKey: .originalTransactionIdentifier)
         )
     }
 
@@ -82,5 +87,6 @@ public struct AppActorNonSubscription: Sendable, Codable, Equatable {
         try container.encodeIfPresent(isConsumable, forKey: .isConsumable)
         try container.encodeIfPresent(isRefund, forKey: .isRefund)
         try container.encodeIfPresent(storeTransactionIdentifier, forKey: .storeTransactionIdentifier)
+        try container.encodeIfPresent(originalTransactionIdentifier, forKey: .originalTransactionIdentifier)
     }
 }
