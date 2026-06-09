@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.11
+
+- Fixed: the iOS `PluginNonSubscription` surrogate now emits `original_transaction_identifier`, matching the Android surrogate and the Dart/React Native models. (audit flutter-6)
+- Fixed: the StoreKit product cache now expires entries on a TTL (default 1h) instead of caching for the whole process lifetime; stale entries are served immediately and refreshed in the background so a refresh never blocks the purchase path. (audit ios-7)
+
 ## 0.1.10
 
 - Fixed: `postReceipt` now forwards `syncedOriginalTransactionId`, so the 0.1.9 coalesced-renewal finishing actually fires (the value was previously dropped on the success-rebuild, leaving that cleanup a dead path). (audit ios-3)
