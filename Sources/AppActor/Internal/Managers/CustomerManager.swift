@@ -45,14 +45,11 @@ actor AppActorCustomerManager {
         return await etagManager.cached(AppActorCustomerInfo.self, for: .customer(appUserId: userId))?.value
     }
 
-    /// Reads the persisted customer cache for a specific user.
-    ///
-    /// Used to seed `customerInfo` at cold start, before any network call has set
-    /// the manager's active user. Scopes the manager to `appUserId` for subsequent
-    /// cache operations.
+    /// Reads the persisted customer cache for a specific user, without rebinding the
+    /// manager's active user (a pure read). Used to seed `customerInfo` at cold start,
+    /// before any network call has set the active user.
     func cachedInfo(appUserId: String) async -> AppActorCustomerInfo? {
-        currentAppUserId = appUserId
-        return await etagManager.cached(AppActorCustomerInfo.self, for: .customer(appUserId: appUserId))?.value
+        await etagManager.cached(AppActorCustomerInfo.self, for: .customer(appUserId: appUserId))?.value
     }
 
     /// Whether the customer cache is fresh enough to skip a network fetch on foreground.

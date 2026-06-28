@@ -185,9 +185,9 @@ extension AppActor {
 
         // Change-detection: skip the redundant automatic-attribute PATCH when the device
         // context is identical to what was last confirmed delivered for this user.
-        if gateOnFingerprint,
-           paymentStorage?.automaticProfileContextFingerprint(appUserId: effectiveAppUserId)
-            == Self.profileContextFingerprint(attributes) {
+        let fingerprint = gateOnFingerprint ? Self.profileContextFingerprint(attributes) : nil
+        if let fingerprint,
+           paymentStorage?.automaticProfileContextFingerprint(appUserId: effectiveAppUserId) == fingerprint {
             Log.customer.debug("Automatic profile context unchanged since last delivery — skipping attribute write")
             return
         }
@@ -201,12 +201,9 @@ extension AppActor {
         // Persist the fingerprint only once the bucket is actually delivered (queue drained),
         // not merely "flush didn't throw" — `flush` swallows transient errors and leaves the
         // bucket queued, so a transient failure must re-send on the next launch.
-        if gateOnFingerprint,
+        if let fingerprint,
            customerAttributesManager.pendingBucket(appUserId: effectiveAppUserId)?.isEmpty ?? true {
-            paymentStorage?.setAutomaticProfileContextFingerprint(
-                Self.profileContextFingerprint(attributes),
-                appUserId: effectiveAppUserId
-            )
+            paymentStorage?.setAutomaticProfileContextFingerprint(fingerprint, appUserId: effectiveAppUserId)
         }
     }
 
@@ -219,7 +216,7 @@ extension AppActor {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(attributes) else { return "" }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return Self.hexString(from: Data(SHA256.hash(data: data)))
     }
 
     public static func setIntegrationIdentifier(_ key: String, value: String?) async throws {
