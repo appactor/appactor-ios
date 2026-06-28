@@ -1,5 +1,6 @@
 import Foundation
 import StoreKit
+import CryptoKit
 #if canImport(AppTrackingTransparency)
 import AppTrackingTransparency
 #endif
@@ -105,21 +106,23 @@ extension AppActor {
     }
 
     func collectAutomaticProfileContext() async throws {
-        try await collectSystemProfileContext(includeDeviceIdentifiers: false)
+        try await collectSystemProfileContext(includeDeviceIdentifiers: false, gateOnFingerprint: true)
     }
 
     func collectAutomaticProfileContextIfCurrent(appUserId: String) async throws {
         try await collectSystemProfileContext(
             includeDeviceIdentifiers: false,
             targetAppUserId: appUserId,
-            requireCurrentIdentity: true
+            requireCurrentIdentity: true,
+            gateOnFingerprint: true
         )
     }
 
     private func collectSystemProfileContext(
         includeDeviceIdentifiers: Bool,
         targetAppUserId: String? = nil,
-        requireCurrentIdentity: Bool = false
+        requireCurrentIdentity: Bool = false,
+        gateOnFingerprint: Bool = false
     ) async throws {
         var attributes: [String: AppActorAttributeValue] = [:]
 
@@ -174,18 +177,49 @@ extension AppActor {
             return
         }
         try validateAttributes(attributes, allowReserved: true)
-        if let targetAppUserId {
-            if requireCurrentIdentity, paymentStorage?.currentAppUserId != targetAppUserId {
-                return
-            }
-            try customerAttributesManager.enqueueAttributes(
-                appUserId: targetAppUserId,
-                attributes: attributes
-            )
-            try await flushIfConfigured(appUserId: targetAppUserId)
-        } else {
-            try await enqueueAttributes(attributes)
+
+        let effectiveAppUserId = targetAppUserId ?? customerAttributesManager.ensureAppUserId()
+        if requireCurrentIdentity, paymentStorage?.currentAppUserId != effectiveAppUserId {
+            return
         }
+
+        // Change-detection: skip the redundant automatic-attribute PATCH when the device
+        // context is identical to what was last confirmed delivered for this user.
+        if gateOnFingerprint,
+           paymentStorage?.automaticProfileContextFingerprint(appUserId: effectiveAppUserId)
+            == Self.profileContextFingerprint(attributes) {
+            Log.customer.debug("Automatic profile context unchanged since last delivery — skipping attribute write")
+            return
+        }
+
+        try customerAttributesManager.enqueueAttributes(
+            appUserId: effectiveAppUserId,
+            attributes: attributes
+        )
+        try await flushIfConfigured(appUserId: effectiveAppUserId)
+
+        // Persist the fingerprint only once the bucket is actually delivered (queue drained),
+        // not merely "flush didn't throw" — `flush` swallows transient errors and leaves the
+        // bucket queued, so a transient failure must re-send on the next launch.
+        if gateOnFingerprint,
+           customerAttributesManager.pendingBucket(appUserId: effectiveAppUserId)?.isEmpty ?? true {
+            paymentStorage?.setAutomaticProfileContextFingerprint(
+                Self.profileContextFingerprint(attributes),
+                appUserId: effectiveAppUserId
+            )
+        }
+    }
+
+    /// Stable fingerprint of an automatic device-attribute bucket.
+    ///
+    /// Deterministic across launches (sorted-key JSON + SHA-256), unlike Swift's
+    /// per-process `Hashable`. Used to skip the redundant per-launch attribute write
+    /// when the device context hasn't changed.
+    static func profileContextFingerprint(_ attributes: [String: AppActorAttributeValue]) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(attributes) else { return "" }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     public static func setIntegrationIdentifier(_ key: String, value: String?) async throws {

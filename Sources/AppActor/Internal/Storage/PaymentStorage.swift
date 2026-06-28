@@ -16,6 +16,9 @@ enum AppActorPaymentStorageKey {
     static let lastRequestId = "appactor_billing_last_request_id"
     static let customerAttributesQueue = "appactor_customer_attributes_queue_v1"
     static let pendingPurchaseContexts = "appactor_pending_purchase_contexts_v1"
+    /// Per-user fingerprint of the last successfully delivered automatic device-attribute
+    /// bucket. Lets cold start skip the redundant attribute PATCH when nothing changed.
+    static let automaticProfileContextFingerprintPrefix = "appactor_profile_context_fp_v1_"
 
     // App Account Token (for StoreKit purchase → Apple transaction binding)
     static let appAccountToken = "appactor_app_account_token"
@@ -129,11 +132,30 @@ extension AppActorPaymentStorage {
     /// Clears all payment identity data.
     /// Note: customer/offerings cache is managed by `AppActorETagManager`, not here.
     func clearAll() {
+        // Defensive: also drop the current user's device-attribute fingerprint.
+        // (reset()/logOut() clear it directly on the real identity-transition paths.)
+        if let userId = currentAppUserId {
+            remove(forKey: AppActorPaymentStorageKey.automaticProfileContextFingerprintPrefix + userId)
+        }
         remove(forKey: AppActorPaymentStorageKey.appUserId)
         remove(forKey: AppActorPaymentStorageKey.appAccountToken)
         remove(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
         clearLegacyIdentityState()
         // Note: lastRequestId is kept for debugging.
+    }
+
+    // MARK: - Automatic Device-Attribute Fingerprint
+
+    /// Returns the fingerprint of the last successfully delivered automatic device-attribute
+    /// bucket for `appUserId`, or `nil` if none has been recorded.
+    func automaticProfileContextFingerprint(appUserId: String) -> String? {
+        string(forKey: AppActorPaymentStorageKey.automaticProfileContextFingerprintPrefix + appUserId)
+    }
+
+    /// Records the fingerprint of the automatic device-attribute bucket most recently
+    /// confirmed delivered for `appUserId`.
+    func setAutomaticProfileContextFingerprint(_ fingerprint: String?, appUserId: String) {
+        set(fingerprint, forKey: AppActorPaymentStorageKey.automaticProfileContextFingerprintPrefix + appUserId)
     }
 
     /// Clears legacy readiness keys from the pre-RC-style identity model.

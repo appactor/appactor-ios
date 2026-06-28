@@ -193,6 +193,56 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(attributes[AppActorAttributeKey.platformVersion], .string("0.0.9"))
     }
 
+    func testAutomaticProfileContextSkipsRedundantWriteWhenUnchanged() async throws {
+        try await appactor.collectAutomaticProfileContext()
+        let countAfterFirst = client.patchAttributesCalls.count
+        XCTAssertGreaterThanOrEqual(countAfterFirst, 1)
+
+        // Second launch with identical device context must not issue another PATCH.
+        try await appactor.collectAutomaticProfileContext()
+        XCTAssertEqual(client.patchAttributesCalls.count, countAfterFirst)
+    }
+
+    func testAutomaticProfileContextResendsWhenDeviceContextChanges() async throws {
+        try await appactor.collectAutomaticProfileContext()
+        let countAfterFirst = client.patchAttributesCalls.count
+
+        // Reconfigure with different wrapper platform info → device context changes.
+        let config = AppActorPaymentConfiguration(
+            apiKey: "pk_test_attributes",
+            baseURL: URL(string: "https://api.test.appactor.com")!,
+            options: .init(platformInfo: AppActorPlatformInfo(flavor: "flutter", version: "9.9.9"))
+        )
+        appactor.configureForTesting(config: config, client: client, storage: storage)
+
+        try await appactor.collectAutomaticProfileContext()
+        XCTAssertGreaterThan(client.patchAttributesCalls.count, countAfterFirst)
+        XCTAssertEqual(
+            client.patchAttributesCalls.last?.request.attributes[AppActorAttributeKey.platformVersion],
+            .string("9.9.9")
+        )
+    }
+
+    func testAutomaticProfileContextResendsAfterTransientFailure() async throws {
+        let offline = AppActorError.networkError(URLError(.notConnectedToInternet))
+        client.patchAttributesHandler = { _, _ in throw offline }
+
+        // First launch fails transiently: flush swallows the error and leaves the bucket
+        // queued, so the fingerprint must NOT be persisted as delivered.
+        try await appactor.collectAutomaticProfileContext()
+        let countAfterFailedLaunch = client.patchAttributesCalls.count
+
+        // Recovery launch must NOT be skipped — it re-attempts and delivers.
+        client.patchAttributesHandler = nil
+        try await appactor.collectAutomaticProfileContext()
+        XCTAssertGreaterThan(client.patchAttributesCalls.count, countAfterFailedLaunch)
+
+        // Now that it delivered, an unchanged launch is correctly skipped.
+        let countAfterDelivery = client.patchAttributesCalls.count
+        try await appactor.collectAutomaticProfileContext()
+        XCTAssertEqual(client.patchAttributesCalls.count, countAfterDelivery)
+    }
+
     func testCollectDeviceIdentifiersUsesProfileCurrentSystemRoute() async throws {
         try await appactor.collectDeviceIdentifiers()
 
