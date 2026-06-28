@@ -463,6 +463,9 @@ extension AppActor {
         if let expManager = experimentManager {
             await expManager.clearCache(appUserId: currentId)
         }
+        if !currentId.isEmpty {
+            storage.setAutomaticProfileContextFingerprint(nil, appUserId: currentId)
+        }
         self.paymentRemoteConfigs = nil
 
         // Rotate appAccountToken for the new local identity.
@@ -562,6 +565,9 @@ extension AppActor {
 
         // ── Phase 3: Clear persisted + in-memory state ──
         if let storage = paymentStorage {
+            if let outgoingId = storage.currentAppUserId {
+                storage.setAutomaticProfileContextFingerprint(nil, appUserId: outgoingId)
+            }
             storage.remove(forKey: AppActorPaymentStorageKey.appUserId)
             storage.remove(forKey: AppActorPaymentStorageKey.lastRequestId)
             storage.clearAppAccountToken()

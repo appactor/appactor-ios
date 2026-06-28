@@ -93,6 +93,36 @@ extension AppActor {
             verification: .verifiedOnDevice
         )
     }
+
+    /// Cache-first cold-start seed.
+    ///
+    /// Surfaces persisted (or, on a cache miss, StoreKit-derived) entitlement state
+    /// into the published `customerInfo` immediately at launch, before the network
+    /// refresh in bootstrap completes — so premium UI renders instantly instead of
+    /// waiting on a round-trip. Never downgrades an already-published value: it only
+    /// seeds when `customerInfo` is still empty, and the identity/ordering guards in
+    /// `setCustomerInfoIfIdentityMatches` let the later network value win.
+    func seedCustomerInfoFromCacheOnLaunch() async {
+        guard let manager = customerManager,
+              let appUserId = paymentStorage?.currentAppUserId else { return }
+        // Only seed when nothing real is published yet (avoid racing/downgrading bootstrap).
+        guard customerInfo.appUserId == nil else { return }
+
+        // 1. Disk cache (survives relaunch) — renders premium instantly.
+        if let cached = await manager.cachedInfo(appUserId: appUserId) {
+            await setCustomerInfoIfIdentityMatches(cached, expectedAppUserId: appUserId)
+            return
+        }
+
+        // 2. Cache miss (e.g. reinstall) → derive from StoreKit so premium still shows.
+        let offlineKeys = await manager.activeEntitlementKeysOffline(appUserId: appUserId)
+        if let offlineInfo = await offlineCustomerInfoIfIdentityMatches(
+            expectedAppUserId: appUserId,
+            offlineKeys: offlineKeys
+        ) {
+            await setCustomerInfoIfIdentityMatches(offlineInfo, expectedAppUserId: appUserId)
+        }
+    }
 }
 
 // MARK: - Identity-Safe Customer Info Assignment

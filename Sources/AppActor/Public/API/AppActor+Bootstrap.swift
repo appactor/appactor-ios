@@ -17,6 +17,10 @@ extension AppActor {
         // Wire receipt callbacks before Transaction.updates can enqueue work.
         await wireReceiptCustomerInfoUpdateHandler()
 
+        // ── Cache-first: surface persisted/offline premium instantly, before the
+        // network refresh in bootstrap. The later fresh value overwrites this seed. ──
+        await seedCustomerInfoFromCacheOnLaunch()
+
         // ── Phase 1: Watcher setup (must complete before transactions arrive) ──
         if let watcher {
             let t0 = CFAbsoluteTimeGetCurrent()

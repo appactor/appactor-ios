@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.12
+
+- Added: entitlement state now renders from the persisted (or StoreKit-derived) cache at launch, before the network refresh, so customer info is available immediately instead of after a round-trip.
+- Improved: the automatic device-attribute sync is skipped when nothing changed since the last confirmed delivery, removing a redundant per-launch network write.
+
 ## 0.1.11
 
 - Fixed: the iOS `PluginNonSubscription` surrogate now emits `original_transaction_identifier`, matching the Android surrogate and the Dart/React Native models. (audit flutter-6)
