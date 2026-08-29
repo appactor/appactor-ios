@@ -4,40 +4,35 @@ import Foundation
 
 extension AppActor {
 
+    /// Resolves the user's standing in an experiment.
+    ///
+    /// Never `nil`: when the user is not in the experiment the result reports
+    /// `isEnrolled == false`, `variantKey == nil`, and every typed getter returns its default.
+    /// Same caching and errors as ``getExperimentAssignment(experimentKey:)``.
+    ///
+    /// ```swift
+    /// let paywall = try await AppActor.shared.experiment("paywall_test")
+    /// if paywall.isVariant("annual_first") { showAnnualFirst() }
+    ///
+    /// let showOnboarding = try await AppActor.shared.experiment("has_onboard").boolValue(default: true)
+    /// let title = try await AppActor.shared.experiment("onboarding_flow")["title"]?.stringValue ?? "Welcome"
+    /// ```
+    public func experiment(_ experimentKey: String) async throws -> AppActorExperiment {
+        AppActorExperiment(
+            experimentKey: experimentKey,
+            assignment: try await getExperimentAssignment(experimentKey: experimentKey)
+        )
+    }
+
     /// Fetches the experiment assignment for the given key.
+    ///
+    /// Prefer ``experiment(_:)`` — it never returns `nil` and carries typed getters with defaults.
     ///
     /// Returns the assigned variant if the user is in the experiment, or `nil` if the user
     /// is not targeted, the experiment is not running, etc.
     ///
     /// Assignments are **idempotent** — the same user + experiment always returns the same variant.
     /// Results are cached in-memory (5-minute TTL) and on disk for offline access.
-    ///
-    /// ```swift
-    /// // Boolean experiment — control: true, treatment: false
-    /// if let a = try await AppActor.shared.getExperimentAssignment(
-    ///     experimentKey: "has_onboard"
-    /// ) {
-    ///     let showOnboard = a.payload.boolValue ?? true
-    ///     if showOnboard { presentOnboarding() }
-    /// }
-    ///
-    /// // Numeric experiment — different values per variant
-    /// if let a = try await AppActor.shared.getExperimentAssignment(
-    ///     experimentKey: "discount_test"
-    /// ) {
-    ///     let discount = a.payload.intValue ?? 0
-    ///     applyDiscount(discount)
-    /// }
-    ///
-    /// // JSON experiment — multiple values per variant
-    /// if let a = try await AppActor.shared.getExperimentAssignment(
-    ///     experimentKey: "onboarding_flow"
-    /// ) {
-    ///     let title = a.payload["title"]?.stringValue ?? "Welcome"
-    ///     let steps = a.payload["steps"]?.intValue ?? 3
-    ///     let showSkip = a.payload["showSkip"]?.boolValue ?? true
-    /// }
-    /// ```
     ///
     /// - Parameter experimentKey: The developer-defined experiment key.
     /// - Returns: The assignment if the user is in the experiment, or `nil`.
