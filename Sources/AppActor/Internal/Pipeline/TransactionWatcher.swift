@@ -114,6 +114,9 @@ actor AppActorTransactionWatcher {
                     let jws = result.jwsRepresentation
                     await self.handleVerifiedTransaction(transaction, jws: jws, source: .transactionUpdates)
                 case .unverified(_, let error):
+                    // Deliberately not finished here: a live verification failure can be transient
+                    // (device identifiers mid-restore, for example). If it is still unverified at the
+                    // next launch, `sweepUnfinished` finishes it.
                     Log.storeKit.warn("Unverified transaction update ignored: \(error.localizedDescription)")
                 }
             }
@@ -231,14 +234,9 @@ actor AppActorTransactionWatcher {
     /// and is re-delivered here on every launch. Unverified transactions can never be
     /// posted, so they are finished right away instead of accumulating.
     func sweepUnfinished() async {
-        var results: [VerificationResult<Transaction>] = []
-        for await result in Transaction.unfinished {
-            results.append(result)
-        }
-
         var verifiedCount = 0
         var finishedUnverifiedCount = 0
-        for result in results {
+        for await result in Transaction.unfinished {
             switch result {
             case .verified(let transaction):
                 await handleVerifiedTransaction(transaction, jws: result.jwsRepresentation, source: .sweep)

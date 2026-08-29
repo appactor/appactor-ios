@@ -8,11 +8,7 @@ final class BootstrapTests: XCTestCase {
     private var mockClient: MockPaymentClient!
     private var storage: InMemoryPaymentStorage!
 
-    private func makeQueueItem(
-        appUserId: String,
-        transactionId: String,
-        phase: AppActorPaymentQueueItem.Phase = .needsPost
-    ) -> AppActorPaymentQueueItem {
+    private func makeQueueItem(appUserId: String, transactionId: String) -> AppActorPaymentQueueItem {
         AppActorPaymentQueueItem(
             key: AppActorPaymentQueueItem.makeKey(transactionId: transactionId),
             bundleId: "com.test",
@@ -26,7 +22,7 @@ final class BootstrapTests: XCTestCase {
             storefront: "USA",
             offeringId: nil,
             packageId: nil,
-            phase: phase,
+            phase: .needsPost,
             attemptCount: 0,
             nextRetryAt: Date(),
             firstSeenAt: Date(),

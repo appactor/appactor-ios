@@ -4,35 +4,16 @@ import StoreKit
 struct AppActorReceiptCustomerUpdateContext: Sendable, Equatable {
     let appUserId: String
     let productId: String
-    let sourceIntent: AppActorPaymentQueueItem.SourceIntent
-    let originalTransactionId: String?
     let clientPurchaseContext: AppActorClientPurchaseContext?
 
-    init(
-        appUserId: String,
-        productId: String,
-        sourceIntent: AppActorPaymentQueueItem.SourceIntent,
-        originalTransactionId: String?,
-        clientPurchaseContext: AppActorClientPurchaseContext?
-    ) {
+    init(appUserId: String, productId: String, clientPurchaseContext: AppActorClientPurchaseContext?) {
         self.appUserId = appUserId
         self.productId = productId
-        self.sourceIntent = sourceIntent
-        self.originalTransactionId = originalTransactionId
         self.clientPurchaseContext = clientPurchaseContext
     }
 
     init(item: AppActorPaymentQueueItem) {
-        self.init(
-            appUserId: item.appUserId,
-            productId: item.productId,
-            sourceIntent: AppActorPaymentQueueItem.resolvedSourceIntent(
-                stored: item.sourceIntent,
-                sources: item.sources
-            ),
-            originalTransactionId: item.originalTransactionId,
-            clientPurchaseContext: item.clientPurchaseContext
-        )
+        self.init(appUserId: item.appUserId, productId: item.productId, clientPurchaseContext: item.clientPurchaseContext)
     }
 
     var isDeferredPurchaseResolution: Bool {
