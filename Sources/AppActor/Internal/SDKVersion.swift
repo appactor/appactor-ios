@@ -3,7 +3,7 @@
 /// Keep this in sync with package releases.
 /// Prefer `scripts/sync_sdk_version.sh` over editing it manually.
 enum AppActorSDK {
-    static let version = "0.1.12"
+    static let version = "0.1.13"
 }
 
 // MARK: - Public SDK Version Access

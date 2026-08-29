@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.13
+
+- Fixed: the launch sweep now posts every unfinished StoreKit transaction and finishes each after the server accepts it. Older renewals are no longer parked waiting for a server field the API stopped returning, so `Transaction.unfinished` no longer accumulates; unverified unfinished transactions are finished immediately.
+- Added: `AppActorOffering.offeringKey` (the dashboard lookup key), `AppActorOfferings.offering(_:)` / `offerings["key"]` / `allOfferings` (current first), and `AppActor.shared.offering(_:fetchPolicy:)` to fetch and look up in one call.
+- Added: `AppActor.shared.experiment(_:)` returns an `AppActorExperiment` that is never optional — `isEnrolled`, `variantKey`, `isVariant(_:)`, `boolValue / stringValue / intValue / doubleValue(default:)`, and `["key"]` for JSON payloads. `getExperimentAssignment(experimentKey:)` is unchanged underneath.
+- Removed: `AppActorOfferings.offering(lookupKey:)` — use `offering(_:)` with the offering key (a one-line rename).
+- Changed: `AppTransaction.shared` is fetched once per process and shared by every receipt; `AppActorReceiptCustomerUpdateContext` no longer carries `sourceIntent`, `originalTransactionId`, or `syncedOriginalTransactionId`.
+
 ## 0.1.12
 
 - Added: entitlement state now renders from the persisted (or StoreKit-derived) cache at launch, before the network refresh, so customer info is available immediately instead of after a round-trip.

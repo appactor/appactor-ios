@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'AppActor'
-  s.version          = '0.1.12'
+  s.version          = '0.1.13'
   s.summary          = 'AppActor iOS SDK — server-authoritative in-app purchase management.'
   s.homepage         = 'https://github.com/appactor/appactor-ios'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
