@@ -857,9 +857,9 @@ final class OfferingsManagerTests: XCTestCase {
 
         XCTAssertEqual(offerings.current?.id, "o1")
         XCTAssertEqual(offerings.offering(id: "o2")?.displayName, "Basic")
-        XCTAssertEqual(offerings.offering(lookupKey: "premium")?.id, "o1")
+        XCTAssertEqual(offerings.offering("premium")?.id, "o1")
         XCTAssertNil(offerings.offering(id: "nonexistent"))
-        XCTAssertNil(offerings.offering(lookupKey: "nonexistent"))
+        XCTAssertNil(offerings.offering("nonexistent"))
     }
 
     // MARK: - AppActorPackage Quick Access

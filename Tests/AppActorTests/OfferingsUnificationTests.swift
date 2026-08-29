@@ -11,8 +11,7 @@ import StoreKit
 // - Packages inclusion verification (in CodingKeys — round-trip preserves packages)
 // - AppActorOfferings container Codable roundtrip with productEntitlements
 // - AppActorOfferings init sets current directly (not looked up by id)
-// - offering(id:) and offering(lookupKey:) lookup correctness
-// - offering(lookupKey:) returns nil when all lookupKeys are nil
+// - offering(id:) and offering(_:) lookup correctness
 // - AppActorPurchaseResult unified success case with labeled parameters
 
 @MainActor
@@ -228,7 +227,7 @@ final class OfferingsUnificationTests: XCTestCase {
         XCTAssertEqual(offerings.all.count, 2)
     }
 
-    // MARK: - Test 6: offering(id:) and offering(lookupKey:) Lookup
+    // MARK: - Test 6: offering(id:) and offering(_:) Lookup
 
     func testOfferingLookupByIdAndKey() {
         let offeringA = AppActorOffering(
@@ -258,45 +257,10 @@ final class OfferingsUnificationTests: XCTestCase {
         XCTAssertEqual(offerings.offering(id: "plan_b")?.id, "plan_b", "offering(id:) must return correct match")
         XCTAssertNil(offerings.offering(id: "nonexistent"), "offering(id:) must return nil for unknown id")
 
-        // offering(lookupKey:) returns the correct offering
-        XCTAssertEqual(offerings.offering(lookupKey: "plan_a_key")?.id, "plan_a", "offering(lookupKey:) must return correct match")
-        XCTAssertEqual(offerings.offering(lookupKey: "plan_b_key")?.id, "plan_b", "offering(lookupKey:) must return correct match")
-        XCTAssertNil(offerings.offering(lookupKey: "nonexistent"), "offering(lookupKey:) must return nil for unknown key")
-    }
-
-    // MARK: - Test 7: offering(lookupKey:) Returns Nil When lookupKey is Nil
-
-    func testOfferingLookupKeyNilLocalMode() {
-        // Offerings with lookupKey: nil
-        let localOffering1 = AppActorOffering(
-            id: "offering_1",
-            displayName: "Offering 1",
-            isCurrent: true,
-            lookupKey: nil,
-            metadata: nil,
-            packages: []
-        )
-        let localOffering2 = AppActorOffering(
-            id: "offering_2",
-            displayName: "Offering 2",
-            isCurrent: false,
-            lookupKey: nil,
-            metadata: nil,
-            packages: []
-        )
-
-        let offerings = AppActorOfferings(
-            current: localOffering1,
-            all: ["offering_1": localOffering1, "offering_2": localOffering2]
-        )
-
-        // offering(lookupKey:) must return nil for any key when all offerings have nil lookupKey
-        XCTAssertNil(offerings.offering(lookupKey: "anything"), "offering(lookupKey:) must return nil when all lookupKeys are nil")
-        XCTAssertNil(offerings.offering(lookupKey: "offering_1"), "offering(lookupKey:) must return nil — id is not a lookupKey")
-        XCTAssertNil(offerings.offering(lookupKey: ""), "offering(lookupKey:) must return nil for empty string")
-
-        // offering(id:) still works correctly
-        XCTAssertNotNil(offerings.offering(id: "offering_1"), "offering(id:) must still work")
+        // offering(_:) returns the correct offering by offeringKey
+        XCTAssertEqual(offerings.offering("plan_a_key")?.id, "plan_a", "offering(_:) must return correct match")
+        XCTAssertEqual(offerings.offering("plan_b_key")?.id, "plan_b", "offering(_:) must return correct match")
+        XCTAssertNil(offerings.offering("nonexistent"), "offering(_:) must return nil for unknown key")
     }
 
     // MARK: - Test 8: AppActorPurchaseResult Unified Success Case

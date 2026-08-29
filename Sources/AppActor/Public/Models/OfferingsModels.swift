@@ -18,8 +18,12 @@ public struct AppActorOffering: Sendable, Identifiable, Hashable, Codable {
     /// Whether this is the current (default) offering.
     public let isCurrent: Bool
 
-    /// Lookup key for programmatic access. `nil` in local mode.
+    /// Lookup key for programmatic access. `nil` in local mode. Prefer ``offeringKey``.
     public let lookupKey: String?
+
+    /// The developer-defined key of this offering — the "lookup key" in the dashboard,
+    /// e.g. `"onboarding"`. Falls back to ``id`` for local-mode offerings, which have no key.
+    public var offeringKey: String { lookupKey ?? id }
 
     /// Optional metadata from the server.
     public let metadata: [String: String]?
@@ -128,8 +132,17 @@ public struct AppActorOfferings: Sendable, Codable {
     /// The current (default) offering, if set.
     public let current: AppActorOffering?
 
-    /// All offerings keyed by their `id`.
+    /// All offerings keyed by their server `id`. For a lookup by key use ``offering(_:)`` or
+    /// the subscript; for a list use ``allOfferings``.
     public let all: [String: AppActorOffering]
+
+    /// Every offering as a list: the current one first, then by ``AppActorOffering/offeringKey``.
+    public var allOfferings: [AppActorOffering] {
+        all.values.sorted { lhs, rhs in
+            if lhs.isCurrent != rhs.isCurrent { return lhs.isCurrent }
+            return lhs.offeringKey < rhs.offeringKey
+        }
+    }
 
     /// Maps backend-defined product entitlement keys to entitlement identifiers.
     /// Used for offline entitlement derivation from active StoreKit transactions.
@@ -144,9 +157,18 @@ public struct AppActorOfferings: Sendable, Codable {
         all[id]
     }
 
-    /// Returns the offering with the given lookup key, or `nil`.
-    public func offering(lookupKey: String) -> AppActorOffering? {
-        all.values.first { $0.lookupKey == lookupKey }
+    /// Returns the offering with the given ``AppActorOffering/offeringKey``, or `nil`.
+    ///
+    /// ```swift
+    /// let onboarding = offerings.offering("onboarding")
+    /// ```
+    public func offering(_ offeringKey: String) -> AppActorOffering? {
+        all.values.first { $0.offeringKey == offeringKey }
+    }
+
+    /// `offerings["onboarding"]` — same as ``offering(_:)``.
+    public subscript(offeringKey: String) -> AppActorOffering? {
+        offering(offeringKey)
     }
 
     // MARK: - Internal Init

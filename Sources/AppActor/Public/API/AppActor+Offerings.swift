@@ -33,6 +33,21 @@ extension AppActor {
         return result
     }
 
+    /// Fetches offerings (see ``offerings(fetchPolicy:)``) and returns the one with the given
+    /// ``AppActorOffering/offeringKey``, or `nil` if the app has no such offering.
+    ///
+    /// ```swift
+    /// if let onboarding = try await AppActor.shared.offering("onboarding") {
+    ///     try await AppActor.shared.purchase(package: onboarding.annual!)
+    /// }
+    /// ```
+    public func offering(
+        _ offeringKey: String,
+        fetchPolicy: AppActorOfferingsFetchPolicy = .freshIfStale
+    ) async throws -> AppActorOffering? {
+        try await offerings(fetchPolicy: fetchPolicy).offering(offeringKey)
+    }
+
     /// Returns the most recently cached offerings without making a network call.
     /// Returns `nil` if offerings have not been fetched yet.
     public var cachedOfferings: AppActorOfferings? {

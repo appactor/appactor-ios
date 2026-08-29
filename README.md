@@ -49,6 +49,25 @@ let result = try await AppActor.shared.purchase(package: offerings.current?.mont
 let isPremium = AppActor.shared.customerInfo.hasActiveEntitlement("premium")
 ```
 
+## Offerings & Experiments
+
+```swift
+// All offerings, or one by its offering key (the dashboard "lookup key")
+let offerings = try await AppActor.shared.offerings()
+offerings.current                         // the current offering
+offerings.allOfferings                    // [AppActorOffering], current first
+offerings["onboarding"]                   // by offeringKey
+let onboarding = try await AppActor.shared.offering("onboarding")   // fetch + lookup in one call
+
+// Experiments — never optional, so no unwrapping
+let paywall = try await AppActor.shared.experiment("paywall_test")
+if paywall.isVariant("annual_first") { showAnnualFirst() }
+paywall.variantKey                        // "control", "annual_first", … or nil when not enrolled
+
+let showOnboarding = try await AppActor.shared.experiment("has_onboard").boolValue(default: true)
+let title = try await AppActor.shared.experiment("onboarding_flow")["title"]?.stringValue ?? "Welcome"
+```
+
 ## Customer Attributes & Profile Context
 
 `setAttributes(_:)` is for developer-defined custom attributes only. Custom keys
