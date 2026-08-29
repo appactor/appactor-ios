@@ -29,17 +29,20 @@ protocol AppActorStoreKitSilentSyncFetcherProtocol: Sendable {
 struct AppActorStoreKitSilentSyncFetcher: AppActorStoreKitSilentSyncFetcherProtocol {
 	/// `AppTransaction.shared` is one StoreKit round trip plus a JWS verification, and its
 	/// value does not change for the life of the install; every enqueued receipt asks for it,
-	/// so the first successful answer is kept. A `nil` answer is not kept: the next caller retries.
+	/// so the first successful answer is kept and concurrent callers share one in-flight fetch.
+	/// A `nil` answer is not kept: the next caller retries.
 	private actor AppTransactionMemo {
 		private var cached: AppActorSilentSyncAppTransaction?
+		private var inFlight: Task<AppActorSilentSyncAppTransaction?, Never>?
 
-		func value(
-			or fetch: @Sendable () async -> AppActorSilentSyncAppTransaction?
-		) async -> AppActorSilentSyncAppTransaction? {
+		func value() async -> AppActorSilentSyncAppTransaction? {
 			if let cached { return cached }
-			let fetched = await fetch()
-			cached = fetched
-			return fetched
+			let task = inFlight ?? Task { await AppActorStoreKitSilentSyncFetcher.fetchAppTransaction() }
+			inFlight = task
+			let value = await task.value
+			cached = value
+			if inFlight == task { inFlight = nil }
+			return value
 		}
 	}
 
@@ -78,7 +81,7 @@ struct AppActorStoreKitSilentSyncFetcher: AppActorStoreKitSilentSyncFetcherProto
 	}
 
 	func appTransaction() async -> AppActorSilentSyncAppTransaction? {
-		await appTransactionMemo.value(or: Self.fetchAppTransaction)
+		await appTransactionMemo.value()
 	}
 
 	private static func fetchAppTransaction() async -> AppActorSilentSyncAppTransaction? {

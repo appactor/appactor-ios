@@ -6,6 +6,7 @@ struct AppActorReceiptCustomerUpdateContext: Sendable, Equatable {
     let productId: String
     let clientPurchaseContext: AppActorClientPurchaseContext?
 
+    // Explicit because declaring init(item:) suppresses the synthesized memberwise init.
     init(appUserId: String, productId: String, clientPurchaseContext: AppActorClientPurchaseContext?) {
         self.appUserId = appUserId
         self.productId = productId
