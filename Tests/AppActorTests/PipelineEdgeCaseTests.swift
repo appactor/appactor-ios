@@ -251,7 +251,6 @@ final class PipelineEdgeCaseTests: XCTestCase {
             productId: "com.test.yearly",
             sourceIntent: .purchase,
             originalTransactionId: nil,
-            syncedOriginalTransactionId: nil,
             clientPurchaseContext: AppActorClientPurchaseContext(
                 clientPurchaseAttemptStartedAt: startedAt,
                 clientObservedAt: completedAt,
@@ -299,7 +298,6 @@ final class PipelineEdgeCaseTests: XCTestCase {
                 productId: "com.test.yearly",
                 sourceIntent: .sync,
                 originalTransactionId: nil,
-                syncedOriginalTransactionId: nil,
                 clientPurchaseContext: AppActorClientPurchaseContext(
                     clientObservedAt: Date(),
                     clientDeliverySource: .foregroundSync
@@ -317,7 +315,6 @@ final class PipelineEdgeCaseTests: XCTestCase {
                 productId: "com.test.yearly",
                 sourceIntent: .purchase,
                 originalTransactionId: nil,
-                syncedOriginalTransactionId: nil,
                 clientPurchaseContext: AppActorClientPurchaseContext(
                     clientPurchaseAttemptStartedAt: Date(),
                     clientObservedAt: Date(),

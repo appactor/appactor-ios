@@ -378,7 +378,6 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                         retryAfterSeconds: decoded.retryAfterSeconds,
                         requestId: decoded.requestId,
                         finishTransaction: decoded.finishTransaction,
-                        syncedOriginalTransactionId: decoded.syncedOriginalTransactionId,
                         signatureVerified: signatureVerified
                     )
                 } catch {
