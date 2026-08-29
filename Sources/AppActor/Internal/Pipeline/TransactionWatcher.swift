@@ -70,13 +70,7 @@ actor AppActorTransactionWatcher {
     private var foregroundPurchaseContexts: [UUID: AppActorClientPurchaseContext] = [:]
     private var foregroundPurchaseAppUserIds: [UUID: String] = [:]
     private var foregroundPurchaseBuffer: [UUID: [BufferedTransaction]] = [:]
-    private var coalescedUnfinishedByOriginalId: [String: [CoalescedUnfinishedEntry]] = [:]
     private var pendingPurchaseContexts: AppActorPendingPurchaseContextBuffer
-
-    private struct CoalescedUnfinishedEntry {
-        let transactionId: String
-        let finish: () async -> Void
-    }
 
     init(
         processor: AppActorPaymentProcessor,
@@ -120,6 +114,9 @@ actor AppActorTransactionWatcher {
                     let jws = result.jwsRepresentation
                     await self.handleVerifiedTransaction(transaction, jws: jws, source: .transactionUpdates)
                 case .unverified(_, let error):
+                    // Deliberately not finished here: a live verification failure can be transient
+                    // (device identifiers mid-restore, for example). If it is still unverified at the
+                    // next launch, `sweepUnfinished` finishes it.
                     Log.storeKit.warn("Unverified transaction update ignored: \(error.localizedDescription)")
                 }
             }
@@ -229,88 +226,32 @@ actor AppActorTransactionWatcher {
 
     /// Scans `Transaction.unfinished` at app launch to catch missed transactions.
     ///
-    /// All verified transactions — including revoked and expired — are enqueued
-    /// for server validation. This ensures the backend learns about refunds and
-    /// expirations that occurred while the app was not running, matching the
-    /// Adapty/RevenueCat "report everything, then finish" pattern.
+    /// Every verified transaction — including revoked and expired — is enqueued for
+    /// server validation and finished only after the server accepts it (Adapty /
+    /// RevenueCat "report everything, then finish"). Nothing is held back: the server
+    /// is idempotent per transaction, so an older renewal it already knows costs one
+    /// no-op round-trip, whereas a transaction that is never posted is never finished
+    /// and is re-delivered here on every launch. Unverified transactions can never be
+    /// posted, so they are finished right away instead of accumulating.
     func sweepUnfinished() async {
-        var entries: [(transaction: Transaction, jws: String, reason: AppActorTransactionReason)] = []
+        var verifiedCount = 0
+        var finishedUnverifiedCount = 0
         for await result in Transaction.unfinished {
-            if case .verified(let transaction) = result {
-                let jws = result.jwsRepresentation
-                let reason = AppActorASATransactionSupport.resolveReason(
-                    for: transaction,
-                    jwsPayload: AppActorASATransactionSupport.decodeJWSPayload(jws)
+            switch result {
+            case .verified(let transaction):
+                await handleVerifiedTransaction(transaction, jws: result.jwsRepresentation, source: .sweep)
+                verifiedCount += 1
+            case .unverified(let transaction, let error):
+                Log.storeKit.warn(
+                    "Finishing unverified unfinished transaction \(transaction.id) (product: \(transaction.productID)): \(error.localizedDescription)"
                 )
-                entries.append((transaction: transaction, jws: jws, reason: reason))
+                await transaction.finish()
+                finishedUnverifiedCount += 1
             }
         }
 
-        let selectedTransactionIds = AppActorUnfinishedTransactionCoalescer.selectRepresentativeIds(
-            from: entries.map { entry in
-                AppActorUnfinishedTransactionCandidate(
-                    transactionId: String(entry.transaction.id),
-                    originalTransactionId: String(entry.transaction.originalID),
-                    productId: entry.transaction.productID,
-                    purchaseDate: entry.transaction.purchaseDate,
-                    revocationDate: entry.transaction.revocationDate,
-                    reason: entry.reason
-                )
-            }
-        )
-
-        var enqueuedCount = 0
-        for entry in entries {
-            let transactionId = String(entry.transaction.id)
-            if selectedTransactionIds.contains(transactionId) {
-                await handleVerifiedTransaction(entry.transaction, jws: entry.jws, source: .sweep)
-                enqueuedCount += 1
-            } else {
-                let originalTransactionId = String(entry.transaction.originalID)
-                recordCoalescedUnfinished(
-                    originalTransactionId: originalTransactionId,
-                    transactionId: transactionId,
-                    finish: { await entry.transaction.finish() }
-                )
-            }
-        }
-
-        let coalescedCount = entries.count - enqueuedCount
         Log.storeKit.info(
-            "sweepUnfinished completed: \(enqueuedCount) transaction(s) enqueued, \(coalescedCount) coalesced"
-        )
-    }
-
-    func recordCoalescedUnfinished(
-        originalTransactionId: String,
-        transactionId: String,
-        finish: @escaping () async -> Void
-    ) {
-        guard !originalTransactionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return
-        }
-        var existing = coalescedUnfinishedByOriginalId[originalTransactionId] ?? []
-        guard !existing.contains(where: { $0.transactionId == transactionId }) else {
-            return
-        }
-        existing.append(CoalescedUnfinishedEntry(transactionId: transactionId, finish: finish))
-        coalescedUnfinishedByOriginalId[originalTransactionId] = existing
-    }
-
-    func finishCoalescedUnfinished(originalTransactionId: String) async {
-        guard !originalTransactionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let entries = coalescedUnfinishedByOriginalId.removeValue(forKey: originalTransactionId),
-              !entries.isEmpty else {
-            return
-        }
-
-        let keys = entries.map { AppActorPaymentQueueItem.makeKey(transactionId: $0.transactionId) }
-        await processor.markPostedAndReconcile(keys: keys)
-        for entry in entries {
-            await entry.finish()
-        }
-        Log.storeKit.info(
-            "Finished \(entries.count) coalesced unfinished transaction(s) after successful chain sync"
+            "sweepUnfinished completed: \(verifiedCount) verified transaction(s) handed to the receipt queue, \(finishedUnverifiedCount) unverified finished"
         )
     }
 

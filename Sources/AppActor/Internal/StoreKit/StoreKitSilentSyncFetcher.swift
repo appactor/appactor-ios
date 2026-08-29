@@ -27,6 +27,27 @@ protocol AppActorStoreKitSilentSyncFetcherProtocol: Sendable {
 
 /// Default StoreKit-backed implementation used by `syncPurchases()`.
 struct AppActorStoreKitSilentSyncFetcher: AppActorStoreKitSilentSyncFetcherProtocol {
+	/// `AppTransaction.shared` is one StoreKit round trip plus a JWS verification, and its
+	/// value does not change for the life of the install; every enqueued receipt asks for it,
+	/// so the first successful answer is kept and concurrent callers share one in-flight fetch.
+	/// A `nil` answer is not kept: the next caller retries.
+	private actor AppTransactionMemo {
+		private var cached: AppActorSilentSyncAppTransaction?
+		private var inFlight: Task<AppActorSilentSyncAppTransaction?, Never>?
+
+		func value() async -> AppActorSilentSyncAppTransaction? {
+			if let cached { return cached }
+			let task = inFlight ?? Task { await AppActorStoreKitSilentSyncFetcher.fetchAppTransaction() }
+			inFlight = task
+			let value = await task.value
+			cached = value
+			if inFlight == task { inFlight = nil }
+			return value
+		}
+	}
+
+	private let appTransactionMemo = AppTransactionMemo()
+
 	func firstVerifiedTransaction() async -> AppActorSilentSyncTransaction? {
 		let bundleId = Bundle.main.bundleIdentifier ?? "unknown"
 
@@ -60,6 +81,10 @@ struct AppActorStoreKitSilentSyncFetcher: AppActorStoreKitSilentSyncFetcherProto
 	}
 
 	func appTransaction() async -> AppActorSilentSyncAppTransaction? {
+		await appTransactionMemo.value()
+	}
+
+	private static func fetchAppTransaction() async -> AppActorSilentSyncAppTransaction? {
 		if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
 			do {
 				let result = try await AppTransaction.shared

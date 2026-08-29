@@ -4,39 +4,17 @@ import StoreKit
 struct AppActorReceiptCustomerUpdateContext: Sendable, Equatable {
     let appUserId: String
     let productId: String
-    let sourceIntent: AppActorPaymentQueueItem.SourceIntent
-    let originalTransactionId: String?
-    let syncedOriginalTransactionId: String?
     let clientPurchaseContext: AppActorClientPurchaseContext?
 
-    init(
-        appUserId: String,
-        productId: String,
-        sourceIntent: AppActorPaymentQueueItem.SourceIntent,
-        originalTransactionId: String?,
-        syncedOriginalTransactionId: String?,
-        clientPurchaseContext: AppActorClientPurchaseContext?
-    ) {
+    // Explicit because declaring init(item:) suppresses the synthesized memberwise init.
+    init(appUserId: String, productId: String, clientPurchaseContext: AppActorClientPurchaseContext?) {
         self.appUserId = appUserId
         self.productId = productId
-        self.sourceIntent = sourceIntent
-        self.originalTransactionId = originalTransactionId
-        self.syncedOriginalTransactionId = syncedOriginalTransactionId
         self.clientPurchaseContext = clientPurchaseContext
     }
 
-    init(item: AppActorPaymentQueueItem, syncedOriginalTransactionId: String? = nil) {
-        self.init(
-            appUserId: item.appUserId,
-            productId: item.productId,
-            sourceIntent: AppActorPaymentQueueItem.resolvedSourceIntent(
-                stored: item.sourceIntent,
-                sources: item.sources
-            ),
-            originalTransactionId: item.originalTransactionId,
-            syncedOriginalTransactionId: syncedOriginalTransactionId,
-            clientPurchaseContext: item.clientPurchaseContext
-        )
+    init(item: AppActorPaymentQueueItem) {
+        self.init(appUserId: item.appUserId, productId: item.productId, clientPurchaseContext: item.clientPurchaseContext)
     }
 
     var isDeferredPurchaseResolution: Bool {
@@ -672,13 +650,7 @@ actor AppActorPaymentProcessor {
             }
             rememberCompletedResult(key: item.key, result: .success(customerInfo))
             if let customerInfo {
-                onCustomerInfoUpdated?(
-                    customerInfo,
-                    AppActorReceiptCustomerUpdateContext(
-                        item: item,
-                        syncedOriginalTransactionId: response.syncedOriginalTransactionId
-                    )
-                )
+                onCustomerInfoUpdated?(customerInfo, AppActorReceiptCustomerUpdateContext(item: item))
             }
             resumeContinuation(key: item.key, result: .success(customerInfo))
 

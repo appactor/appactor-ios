@@ -110,8 +110,6 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
     /// Server-driven finish decision. `nil` when field is absent (older API or retryable status).
     /// When `nil`, SDK falls back to previous behavior (finish on ok/permanent_error).
     let finishTransaction: Bool?
-    /// Present only when a sync receipt successfully replayed the Apple original transaction chain.
-    let syncedOriginalTransactionId: String?
     /// Whether this response passed SDK response-signature verification.
     let signatureVerified: Bool
 
@@ -122,7 +120,6 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
         retryAfterSeconds: Double? = nil,
         requestId: String? = nil,
         finishTransaction: Bool? = nil,
-        syncedOriginalTransactionId: String? = nil,
         signatureVerified: Bool = false
     ) {
         self.status = status
@@ -131,7 +128,6 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
         self.retryAfterSeconds = retryAfterSeconds
         self.requestId = requestId
         self.finishTransaction = finishTransaction
-        self.syncedOriginalTransactionId = syncedOriginalTransactionId
         self.signatureVerified = signatureVerified
     }
 
@@ -142,7 +138,6 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
         case retryAfterSeconds
         case requestId
         case finishTransaction
-        case syncedOriginalTransactionId
     }
 
     init(from decoder: Decoder) throws {
@@ -153,7 +148,6 @@ struct AppActorReceiptPostResponse: Decodable, Sendable {
         retryAfterSeconds = try container.decodeIfPresent(Double.self, forKey: .retryAfterSeconds)
         requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
         finishTransaction = try container.decodeIfPresent(Bool.self, forKey: .finishTransaction)
-        syncedOriginalTransactionId = try container.decodeIfPresent(String.self, forKey: .syncedOriginalTransactionId)
         signatureVerified = false
     }
 }
