@@ -68,6 +68,39 @@ let showOnboarding = try await AppActor.shared.experiment("has_onboard").boolVal
 let title = try await AppActor.shared.experiment("onboarding_flow")["title"]?.stringValue ?? "Welcome"
 ```
 
+## Server-Driven Screens
+
+Publish a paywall from the dashboard and present it without shipping an app
+update. The layout is a JSON document rendered on device in a `WKWebView`;
+purchases, restores and dismissal come back through this SDK, and the screen has
+no network of its own.
+
+```swift
+switch try await AppActor.shared.presentScreen("paywall_main") {
+case .purchased, .restored: unlockPremium()
+case .dismissed:            break
+}
+
+// Analytics, if you want them where the rest of yours are
+AppActor.shared.onScreenEvent = { event in
+    analytics.track(event.name, properties: event.properties)   // impression, cta_tap, purchase_completed, …
+}
+```
+
+The document rides remote config, so it works offline once it has been fetched.
+What is not cached is the App Store price, so a first launch with no connection
+has nothing to price and `presentScreen` throws instead of showing blank prices.
+It also throws when the screen fails to render at all rather than presenting a
+blank sheet — which is what makes a hard-coded paywall a usable fallback:
+
+```swift
+do    { try await AppActor.shared.presentScreen("paywall_main") }
+catch { presentBundledPaywall() }
+```
+
+The runtime is embedded in the SDK, not fetched. To update it, rebuild
+`appactor-screens` and run `./scripts/sync_screen_runtime.sh`.
+
 ## Customer Attributes & Profile Context
 
 `setAttributes(_:)` is for developer-defined custom attributes only. Custom keys

@@ -30,6 +30,8 @@ enum Log {
     static let attribution = AppActorLogCategory(name: "ASA")
     /// Persistence / queue store.
     static let storage     = AppActorLogCategory(name: "Storage")
+    /// Server-driven screens: the WebView bridge, presentation and its watchdog.
+    static let screens     = AppActorLogCategory(name: "Screens")
 
     /// Random 6-char stamp for request correlation.
     static var stamp: String { AppActorLogger.stamp }

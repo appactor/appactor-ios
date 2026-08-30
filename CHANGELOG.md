@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added: `AppActor.shared.presentScreen(_:)` presents a server-driven screen — a JSON document published from the dashboard, rendered on device in a `WKWebView` behind a narrow message handler that carries only purchase, restore, close, `openUrl` and telemetry. Returns `.purchased`, `.restored` or `.dismissed`; throws rather than presenting a screen that did not render, so a bundled paywall stays a usable fallback.
+- Added: `AppActor.shared.onScreenEvent` delivers screen analytics (`impression`, `screen_view`, `cta_tap`, `purchase_started`, `purchase_completed`, `purchase_cancelled`, `dismiss`, `fallback_shown`, `slow_first_paint`).
+- The screen runtime is embedded in the SDK rather than fetched, so a published screen opens with no connection once its document has been cached. Regenerate it with `./scripts/sync_screen_runtime.sh`.
+
 ## 0.1.13
 
 - Fixed: the launch sweep now posts every unfinished StoreKit transaction and finishes each after the server accepts it. Older renewals are no longer parked waiting for a server field the API stopped returning, so `Transaction.unfinished` no longer accumulates; unverified unfinished transactions are finished immediately.
