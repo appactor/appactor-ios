@@ -41,11 +41,21 @@ for f in "$RUNTIME_JS" "$SHELL_HTML"; do
   fi
 done
 
-# The Swift literals are raw (#"""..."""#), so the only thing that could break
-# out of them is the closing delimiter itself.
+# The Swift literals are raw (#"""..."""#). Two things can break out of one:
+# the closing delimiter, and the escape introducer -- which in a single-pound
+# raw string is `\#`, not `\`. That second one is silent where it matters:
+# `\#u{41}` in the input becomes a literal `A` in the generated file, and
+# `\#n` becomes a newline, so the SDK would ship a runtime that differs from
+# the one that was built and tested. Both are checked before anything is
+# escaped, so the `\#u{..}` sequences this script inserts below are not
+# mistaken for input.
 for f in "$RUNTIME_JS" "$SHELL_HTML"; do
   if grep -q '"""#' "$f"; then
     echo "error: $f contains the raw-string terminator; the generator cannot embed it." >&2
+    exit 1
+  fi
+  if grep -q '\\#' "$f"; then
+    echo "error: $f contains \\# , the raw-string escape introducer; embedding it would silently rewrite the runtime." >&2
     exit 1
   fi
 done

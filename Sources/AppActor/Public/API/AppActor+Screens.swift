@@ -60,9 +60,17 @@ extension AppActor {
 
         // One at a time. Two screens would mean two live bridges racing for the
         // same purchase lock, and the second would sit behind the first anyway.
+        //
+        // Claimed *before* the first suspension, not after. `AppActor` is
+        // MainActor-isolated, which serialises the check but not the awaits
+        // that follow it: two calls in the same turn would both read nil, both
+        // fetch, and both present. Every path out from here has to release it,
+        // which is what the `defer` is for.
         if let existing = paymentContext.presentedScreenLookupKey {
             throw AppActorError.notAvailable("A screen (\(existing)) is already being presented.")
         }
+        paymentContext.presentedScreenLookupKey = lookupKey
+        defer { paymentContext.presentedScreenLookupKey = nil }
 
         let document = try await loadScreenDocument(lookupKey: lookupKey)
         let (packages, payloads) = try await resolveScreenPackages(for: document)
@@ -81,9 +89,6 @@ extension AppActor {
             locale: Locale.current.identifier,
             onEvent: handler
         )
-
-        paymentContext.presentedScreenLookupKey = lookupKey
-        defer { paymentContext.presentedScreenLookupKey = nil }
 
         Log.screens.info("📄 Presenting screen \(lookupKey) (runtime \(AppActorScreenRuntimeAsset.version), \(payloads.count) packages)")
 
@@ -175,8 +180,16 @@ extension AppActor {
         }
 
         guard !wanted.isEmpty else {
+            // Two different failures, and the difference is what the caller has
+            // to fix: a screen naming packages that do not exist is a publishing
+            // mistake, an empty offering is a catalog one.
+            if document.packageIds.isEmpty {
+                throw AppActorError.notAvailable(
+                    "Screen \"\(document.lookupKey)\" names no packages and no offering has any to fall back on."
+                )
+            }
             throw AppActorError.notAvailable(
-                "Screen \"\(document.lookupKey)\" names \(document.packageIds.count) package(s), none of which are in your offerings."
+                "Screen \"\(document.lookupKey)\" names \(document.packageIds.count) package(s), none of which are in your offerings: \(document.packageIds.joined(separator: ", "))."
             )
         }
 

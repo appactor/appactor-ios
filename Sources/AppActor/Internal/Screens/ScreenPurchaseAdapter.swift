@@ -111,12 +111,22 @@ final class AppActorScreenPurchaseAdapter: AppActorScreenPurchaseGateway {
     /// "failed" over a receipt that may well post a minute later is worse than
     /// letting the runtime release its own controls on its own timer.
     func awaitServerConfirmation(transactionId: String) async -> AppActorScreenConfirmation {
-        guard let store = AppActor.shared.paymentContext.paymentQueueStore else { return .unknown }
+        // Through the processor, never through its store. The store is
+        // `@unchecked Sendable` on the stated contract that only the
+        // `AppActorPaymentProcessor` actor touches it, and it holds `items` in
+        // a plain unsynchronised dictionary. Polling it from the MainActor
+        // while the drain loop claims and removes the very item being polled
+        // is an unguarded read against a concurrent write -- confirmed by
+        // ThreadSanitizer -- and it would happen during a real purchase, right
+        // after the user paid.
+        guard let processor = AppActor.shared.paymentContext.paymentProcessor else { return .unknown }
+        // Documented idempotency key format: `apple:<transactionId>`.
+        let key = "apple:\(transactionId)"
 
         // Read the product now, while the receipt is still queued. Once the
         // pipeline finishes with the item it is removed, and the whole reason
         // for asking the server below is that the item is gone.
-        let productId = store.snapshot().first { $0.transactionId == transactionId }?.productId
+        let productId = await processor.snapshot().first { $0.id == key }?.productId
 
         let deadline = Date().addingTimeInterval(Self.confirmationWindow)
         var stillQueued = true
@@ -125,11 +135,11 @@ final class AppActorScreenPurchaseAdapter: AppActorScreenPurchaseGateway {
             try? await Task.sleep(nanoseconds: UInt64(Self.pollInterval * 1_000_000_000))
             if Task.isCancelled { return .unknown }
 
-            guard let item = store.snapshot().first(where: { $0.transactionId == transactionId }) else {
+            guard let item = await processor.snapshot().first(where: { $0.id == key }) else {
                 stillQueued = false
                 break
             }
-            if item.phase == .deadLettered {
+            if item.status == AppActorPaymentQueueItem.Phase.deadLettered.rawValue {
                 Log.screens.error("Screen \(lookupKey): receipt \(transactionId) dead-lettered — \(item.lastError ?? "no detail")")
                 return .failed("We could not confirm your purchase. Contact support if you were charged.")
             }

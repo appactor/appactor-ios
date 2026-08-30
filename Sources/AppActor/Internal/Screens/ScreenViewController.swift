@@ -30,6 +30,7 @@ final class AppActorScreenViewController: UIViewController {
     /// `localStorage` throws `SecurityError` on first touch and the page's own
     /// `script-src 'self'` matches nothing.
     private static let origin = "https://screens.appactor.io"
+    private static let originHost = "screens.appactor.io"
 
     private var session: AppActorScreenSession!
     private let lookupKey: String
@@ -180,6 +181,19 @@ final class AppActorScreenViewController: UIViewController {
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // The host app can take the screen down without the runtime asking:
+        // `dismiss` from a deep-link handler, a replaced `rootViewController`.
+        // Without this the continuation in `presentScreen` is never resumed --
+        // that call stays suspended for the life of the process, and the
+        // one-screen-at-a-time flag it set on the way in is never cleared, so
+        // every later `presentScreen` refuses.
+        guard !didFinish, view.window == nil else { return }
+        Log.screens.debug("Screen \(lookupKey) was dismissed by the host app")
+        finish(.dismissed)
+    }
+
     // MARK: - Finishing
 
     private var didFinish = false
@@ -200,7 +214,9 @@ final class AppActorScreenViewController: UIViewController {
             self.onFinished = nil
         }
 
-        if presentingViewController != nil {
+        // `didFinish` is already set, so nothing else will deliver this
+        // outcome -- the completion has to run whether or not UIKit calls it.
+        if presentingViewController != nil, view.window != nil {
             dismiss(animated: true, completion: complete)
         } else {
             complete()
@@ -325,9 +341,19 @@ extension AppActorScreenViewController: WKNavigationDelegate, WKUIDelegate {
         // go through the `openUrl` action, which is policed on both sides and
         // opens outside the screen. The page's CSP already blocks most of this;
         // this is the half that does not depend on the page behaving.
+        //
+        // Compared on the parsed host, never on the string. A prefix test lets
+        // `https://screens.appactor.io@evil.example/` through -- everything
+        // before the `@` is userinfo, and the host is `evil.example` -- and
+        // `https://screens.appactor.io.evil.example/` with it. Either one puts
+        // an attacker-controlled origin inside the paywall's web view, holding
+        // a live bridge that can post `purchase` and read every reply.
+        let url = navigationAction.request.url
+        let isOwnOrigin = url?.scheme?.lowercased() == "https"
+            && url?.host?.lowercased() == Self.originHost
         let isInitialLoad = navigationAction.navigationType == .other
             && navigationAction.targetFrame?.isMainFrame == true
-            && navigationAction.request.url?.absoluteString.hasPrefix(Self.origin) == true
+            && isOwnOrigin
 
         if isInitialLoad {
             decisionHandler(.allow)

@@ -198,28 +198,60 @@ final class AppActorScreenSession {
         host?.screenBecameReady(paintConfirmed: painted)
     }
 
+    /// Schemes refused in every mode, mirroring `FORBIDDEN_DEEP_LINK_SCHEMES`
+    /// in `spec/open-url.ts`: the ones that turn a document into code or reach
+    /// the file system, plus the web schemes, which belong to the browser modes.
+    private static let forbiddenDeepLinkSchemes: Set<String> = [
+        "javascript", "data", "file", "blob", "vbscript", "about", "filesystem",
+        "http", "https", "ws", "wss",
+    ]
+
+    /// `URL_REJECT_CHARS_RE` in `spec/open-url.ts`.
+    private static let rejectedURLCharacters = CharacterSet(charactersIn: "\\")
+        .union(CharacterSet(charactersIn: Unicode.Scalar(0)...Unicode.Scalar(0x20)))
+        .union(CharacterSet(charactersIn: Unicode.Scalar(0x7f)...Unicode.Scalar(0x7f)))
+
     private func handleOpenUrl(_ message: AppActorScreenOutbound) {
-        guard let raw = message.string("url"), let url = URL(string: raw), let method = message.string("method") else {
+        guard let raw = message.string("url"), let method = message.string("method") else {
             Log.screens.warn("Screen \(document.lookupKey) sent an unusable openUrl")
             return
         }
-        // The runtime already applied the URL policy, but it runs inside the
-        // page. This is the gate that is not reachable from the page.
-        guard let scheme = url.scheme?.lowercased() else { return }
+
+        // The runtime applies this policy too, but it applies it inside the
+        // page. This copy is the one a compromised document cannot reach, so
+        // it has to be at least as strict -- not merely similar.
+        guard raw.count <= 2048, raw.rangeOfCharacter(from: Self.rejectedURLCharacters) == nil else {
+            Log.screens.warn("Screen \(document.lookupKey) sent an openUrl with an unusable URL")
+            return
+        }
+        guard let url = URL(string: raw), let scheme = url.scheme?.lowercased() else {
+            Log.screens.warn("Screen \(document.lookupKey) sent an unparseable openUrl")
+            return
+        }
+
         switch method {
-        case "in_app_browser":
-            guard scheme == "https" else {
-                Log.screens.warn("Screen \(document.lookupKey) asked to open \(scheme) in-app; https only")
+        case "in_app_browser", "external_browser":
+            let allowed = method == "in_app_browser" ? ["https"] : ["https", "http"]
+            guard allowed.contains(scheme) else {
+                Log.screens.warn("Screen \(document.lookupKey) asked to open \(scheme) via \(method)")
                 return
             }
-        case "external_browser":
-            guard scheme == "https" || scheme == "http" else {
-                Log.screens.warn("Screen \(document.lookupKey) asked to open \(scheme) in a browser")
+            // `https://apple.com@evil.example/` reads as Apple's domain and
+            // loads someone else's. The shared policy refuses credentials in a
+            // web URL for that reason; so does this.
+            guard url.user == nil, url.password == nil, url.host?.isEmpty == false else {
+                Log.screens.warn("Screen \(document.lookupKey) sent a web URL with credentials or no host")
                 return
             }
         case "deep_link":
-            guard scheme != "javascript", scheme != "data", scheme != "file" else {
+            guard !Self.forbiddenDeepLinkSchemes.contains(scheme) else {
                 Log.screens.warn("Screen \(document.lookupKey) asked to deep link to \(scheme)")
+                return
+            }
+            // `<scheme>://<rest>`, as the shared policy requires. Without it
+            // `tel:`, `sms:` and `mailto:` become reachable from a document.
+            guard raw.lowercased().hasPrefix("\(scheme)://") else {
+                Log.screens.warn("Screen \(document.lookupKey) sent a deep link that is not <scheme>://")
                 return
             }
         default:

@@ -27,6 +27,10 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
     private var events: [AppActorScreenEvent] = []
 
     override func tearDown() {
+        // Before the window goes: tearing it down takes the screen out of the
+        // view hierarchy, which is itself a dismissal and legitimately reports
+        // one. A test that is still listening would see that as its own result.
+        controller?.onFinished = nil
         window?.isHidden = true
         window = nil
         controller = nil
@@ -205,13 +209,16 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
         try await waitForReady()
 
         gateway.purchaseOutcome = .cancelled
-        controller.onFinished = { _ in XCTFail("a cancelled purchase must not close the screen") }
+        var finishedWith: AppActorScreenOutcome?
+        controller.onFinished = { finishedWith = $0 }
 
         _ = try await evaluate("document.querySelector('[data-id=\"cta\"]').click()")
         try await waitUntil("purchase_cancelled") { [weak self] in
             self?.events.contains { $0.name == "purchase_cancelled" } == true
         }
 
+        XCTAssertNil(finishedWith, "a cancelled purchase must not close the screen")
+        XCTAssertNotNil(controller.view.window, "the screen should still be on screen")
         let disabled = try await evaluate("document.querySelector('[data-id=\"cta\"]').disabled")
         XCTAssertEqual(disabled as? Bool, false, "the button should be usable again after a cancellation")
     }
@@ -363,11 +370,56 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
         present(try document())
         try await waitForReady()
 
-        _ = try? await evaluate("window.location.href = 'https://example.com'")
-        try await Task.sleep(nanoseconds: 500_000_000)
+        // Every one of these is a real origin the page can name and a string
+        // prefix test would admit. In the first, everything before the `@` is
+        // userinfo and the host is `example.org`; the second and third only
+        // *start* with the origin. Any of them landing would put an
+        // attacker-controlled page inside the paywall's web view, holding a
+        // live bridge that can post `purchase` and read the replies.
+        for target in [
+            "https://screens.appactor.io@example.org/",
+            "https://screens.appactor.io.evil.example/",
+            "https://screens.appactor.iox/",
+            "https://example.com/",
+            "http://screens.appactor.io/",
+        ] {
+            _ = try? await evaluate("window.location.href = '\(target)'")
+            try await Task.sleep(nanoseconds: 300_000_000)
 
-        let host = try await evaluate("window.location.host")
-        XCTAssertEqual(host as? String, "screens.appactor.io")
+            let host = try await evaluate("window.location.host")
+            XCTAssertEqual(host as? String, "screens.appactor.io", "the page escaped to \(target)")
+        }
+
+        // The bridge is still the screen's own, not a stranger's.
+        let channel = try await evaluate("typeof window.webkit.messageHandlers.appactorScreens.postMessage")
+        XCTAssertEqual(channel as? String, "function")
+    }
+
+    func testABlockedNavigationIsNotTreatedAsAFailureToRender() async throws {
+        // Cancelling a navigation must not make the screen look broken --
+        // `presentScreen` turns that into a thrown error and the host app
+        // falls back to its own paywall.
+        present(try document())
+        try await waitForReady()
+
+        _ = try? await evaluate("window.location.href = 'https://example.com/'")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertFalse(controller.failedToRender)
+    }
+
+    func testTheHostAppDismissingTheScreenStillReportsAnOutcome() async throws {
+        // The runtime never asks to close here: the app takes the screen down
+        // itself. Without a `viewDidDisappear` hook the caller awaiting
+        // `presentScreen` would stay suspended for the life of the process.
+        present(try document())
+        try await waitForReady()
+
+        var finishedWith: AppActorScreenOutcome?
+        controller.onFinished = { finishedWith = $0 }
+
+        window.rootViewController = UIViewController()
+        try await waitUntil("the screen to report it was dismissed") { finishedWith != nil }
+        XCTAssertEqual(finishedWith, .dismissed)
     }
 
     // MARK: - Failure modes

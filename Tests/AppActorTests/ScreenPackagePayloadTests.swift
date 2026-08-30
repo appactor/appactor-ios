@@ -75,6 +75,17 @@ final class ScreenPackagePayloadTests: XCTestCase {
         XCTAssertNotNil(AppActorScreenInbound(.packages, payload: ["packages": [payload]]).base64())
     }
 
+    func testATrialIsNotClaimedWithoutOne() async {
+        // `isEligibleForIntroOffer` answers for the whole subscription group and
+        // is true for anyone who has never subscribed -- it says nothing about
+        // whether *this* product has a free trial. Reporting it directly puts
+        // "Start your free trial" on a product with no trial. With no StoreKit
+        // product there is certainly no trial, so this is the floor case.
+        let payload = await AppActorScreenPackagePayload.make(package: package(), product: nil)
+        XCTAssertEqual(payload["isEligibleForTrial"] as? Bool, false)
+        XCTAssertEqual(payload["trialPeriodDays"] as? Int, 0)
+    }
+
     func testThePayloadAlwaysSurvivesTheEnvelope() async throws {
         let payload = await AppActorScreenPackagePayload.make(package: package(), product: nil)
         XCTAssertTrue(JSONSerialization.isValidJSONObject(["packages": [payload]]))

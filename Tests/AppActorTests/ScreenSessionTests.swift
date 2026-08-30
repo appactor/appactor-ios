@@ -419,13 +419,43 @@ final class ScreenSessionTests: XCTestCase {
         session.cancel()
     }
 
-    func testRefusesDangerousSchemes() {
-        // The runtime already applies the URL policy, but it runs inside the
-        // page. This gate is the one a compromised page cannot reach.
-        for url in ["javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "file:///etc/passwd"] {
-            openUrl(url, "deep_link")
+    func testRefusesEverySchemeTheSharedPolicyForbids() {
+        // `FORBIDDEN_DEEP_LINK_SCHEMES` in `spec/open-url.ts`. The runtime
+        // applies this list too, but it applies it inside the page; this copy
+        // is the one a compromised document cannot reach, so "at least as
+        // strict" has to mean the same list and not a shorter one.
+        for scheme in ["javascript", "data", "file", "blob", "vbscript", "about", "filesystem", "http", "https", "ws", "wss"] {
+            openUrl("\(scheme)://anything/x", "deep_link")
+            XCTAssertTrue(host.opened.isEmpty, "\(scheme) reached the host as a deep link")
         }
         openUrl("javascript:alert(1)", "external_browser")
+        XCTAssertTrue(host.opened.isEmpty)
+        session.cancel()
+    }
+
+    func testRefusesADeepLinkThatIsNotSchemeSlashSlash() {
+        // The shared policy requires `<scheme>://<rest>`. Without that check a
+        // document could dial a number or open a mail composer.
+        for url in ["tel:+15551234", "sms:+15551234", "mailto:x@example.com"] {
+            openUrl(url, "deep_link")
+        }
+        XCTAssertTrue(host.opened.isEmpty)
+        session.cancel()
+    }
+
+    func testRefusesAWebURLCarryingCredentials() {
+        // `https://apple.com@evil.example/` reads as Apple's domain in a
+        // Safari sheet and loads someone else's page.
+        openUrl("https://apple.com@evil.example/", "in_app_browser")
+        openUrl("https://user:pass@evil.example/", "external_browser")
+        XCTAssertTrue(host.opened.isEmpty)
+        session.cancel()
+    }
+
+    func testRefusesAURLWithControlCharactersOrOverTheLengthLimit() {
+        openUrl("https://example.com/\u{0}x", "external_browser")
+        openUrl("https://example.com/a\\b", "external_browser")
+        openUrl("https://example.com/" + String(repeating: "a", count: 2100), "external_browser")
         XCTAssertTrue(host.opened.isEmpty)
         session.cancel()
     }

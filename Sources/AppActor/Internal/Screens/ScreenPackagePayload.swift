@@ -154,11 +154,13 @@ enum AppActorScreenPackagePayload {
             payload["pricePerMonthString"] = money(daily * 30, product)
         }
 
-        // Eligibility is a per-Apple-ID server answer, not a property of the
-        // product, so it has to be awaited. A subscription group the user has
-        // never bought returns `true`; one they have returns `false`, and the
-        // screen must not promise a trial Apple will refuse to honour.
-        if let subscription = product?.subscription {
+        // Two conditions, because `isEligibleForIntroOffer` answers a different
+        // question than the field name asks. It is a per-Apple-ID answer about
+        // the whole *subscription group* -- true for anyone who has never
+        // subscribed -- and says nothing about whether this product offers a
+        // free trial at all. On its own it would put "Start your free trial" on
+        // a product with no trial, and on one whose intro offer is pay-up-front.
+        if let subscription = product?.subscription, offer?.paymentMode == .freeTrial {
             payload["isEligibleForTrial"] = await subscription.isEligibleForIntroOffer
         }
 
