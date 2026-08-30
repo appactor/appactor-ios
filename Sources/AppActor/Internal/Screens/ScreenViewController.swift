@@ -10,27 +10,35 @@ import SafariServices
 /// The WebKit half of a presented screen: a full-screen `WKWebView`, one narrow
 /// message handler, and nothing else.
 ///
-/// Every decision this class makes is about *not* being a browser. It ships one
-/// page it built itself, refuses every navigation after that one, exposes a
-/// single named channel, and hands anything that arrives on it straight to
-/// ``AppActorScreenSession``. There is no logic here to get wrong, which is the
-/// point: the parts worth testing live in files that compile on a Mac.
+/// Every decision here is about *not* being a browser -- one self-built page,
+/// no navigation after it, a single named channel handed straight to
+/// ``AppActorScreenSession``. The logic worth testing lives in files that
+/// compile on a Mac.
 ///
-/// It deliberately does not reuse `AppActorBridge`. That class is a
-/// callback wrapper that adapts the async API for hybrid frameworks -- by its
-/// own description -- and shares nothing with a WebView bridge but the word.
+/// Not `AppActorBridge`: that is a callback wrapper for hybrid frameworks and
+/// shares nothing with a WebView bridge but the word.
 @MainActor
 final class AppActorScreenViewController: UIViewController {
 
-    /// The origin the page is served from.
-    ///
-    /// Never fetched: `loadSimulatedRequest` hands WebKit the bytes and the
-    /// response together. What the URL buys is a real, stable, secure origin --
-    /// `loadHTMLString` with a nil base URL produces an *opaque* one, where
-    /// `localStorage` throws `SecurityError` on first touch and the page's own
+    /// Never fetched -- `loadSimulatedRequest` supplies the bytes. The URL buys
+    /// a real, stable, secure origin; `loadHTMLString` with a nil base URL
+    /// gives an *opaque* one, where `localStorage` throws and the page's own
     /// `script-src 'self'` matches nothing.
-    private static let origin = "https://screens.appactor.io"
-    private static let originHost = "screens.appactor.io"
+    private static let origin = "https://screens.appactor.com"
+    private static let originHost = "screens.appactor.com"
+
+    /// Built once for the process, not per presentation: ~33 KB to copy into a
+    /// `WKUserScript` and ~3 KB to transcode, all of it on the path to first
+    /// paint.
+    private static let runtimeUserScript = WKUserScript(
+        // A user script, not a `<script>` tag: the engine injects it before the
+        // page's CSP applies, so the shell keeps `script-src 'self'` with no
+        // external subresource to fetch.
+        source: AppActorScreenRuntimeAsset.runtimeJS,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true
+    )
+    private static let shellData = Data(AppActorScreenRuntimeAsset.shellHTML.utf8)
 
     private var session: AppActorScreenSession!
     private let lookupKey: String
@@ -39,8 +47,13 @@ final class AppActorScreenViewController: UIViewController {
     /// real page: the one thing that cannot be checked without a running
     /// WebKit is whether the runtime boots at all under the shell's CSP.
     private(set) var webView: WKWebView!
-    private var handlerProxy: MessageHandlerProxy?
     private var didSendInit = false
+
+    /// The exact request handed to `loadSimulatedRequest`, and whether WebKit
+    /// has been allowed to perform it. Together they are what makes
+    /// "exactly one navigation" true rather than merely intended.
+    private var pageURL: URL?
+    private var didAllowInitialNavigation = false
 
     /// Called once, when the screen is finished with. The presenting side turns
     /// this into the value `presentScreen` returns.
@@ -77,8 +90,7 @@ final class AppActorScreenViewController: UIViewController {
             onEvent: onEvent
         )
         session.onReadyTimeout = { [weak self] in
-            self?.failedToRender = true
-            self?.finish(.dismissed)
+            self?.failToRender("the runtime never reported ready")
         }
         self.session = session
     }
@@ -86,13 +98,10 @@ final class AppActorScreenViewController: UIViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    deinit {
-        // `WKUserContentController` retains its message handlers strongly, so
-        // the proxy exists to break that cycle -- and it still has to be
-        // removed, or the controller keeps a live channel into a dead screen.
-        webView?.configuration.userContentController
-            .removeScriptMessageHandler(forName: AppActorScreenProtocol.webChannel)
-    }
+    // No `deinit` teardown on purpose: the deinit of a `@MainActor` class is
+    // not guaranteed to run on the main thread, and `removeScriptMessageHandler`
+    // off-main is a WebKit assertion. `finish` is main-actor by construction and
+    // every path off this screen goes through it, so the teardown lives there.
 
     // MARK: - View
 
@@ -107,22 +116,11 @@ final class AppActorScreenViewController: UIViewController {
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.suppressesIncrementalRendering = false
 
-        let proxy = MessageHandlerProxy(target: self)
-        handlerProxy = proxy
-        configuration.userContentController.add(proxy, name: AppActorScreenProtocol.webChannel)
+        // Not stored: `add(_:name:)` retains the proxy strongly, which is
+        // exactly why `deinit` has to remove it again.
+        configuration.userContentController.add(MessageHandlerProxy(target: self), name: AppActorScreenProtocol.webChannel)
 
-        // The runtime goes in as a user script rather than a `<script>` tag.
-        // User scripts are injected by the engine before the page's own content
-        // security policy applies, so the shell keeps `script-src 'self'` --
-        // the rule that stops a hole in the runtime from becoming arbitrary
-        // code execution -- while still having no external subresource to fetch.
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: AppActorScreenRuntimeAsset.runtimeJS,
-                injectionTime: .atDocumentEnd,
-                forMainFrameOnly: true
-            )
-        )
+        configuration.userContentController.addUserScript(Self.runtimeUserScript)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
@@ -136,11 +134,9 @@ final class AppActorScreenViewController: UIViewController {
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.showsVerticalScrollIndicator = false
 
-        // Hidden until the runtime reports `ready`. The view controller is
-        // presented immediately anyway, because a WKWebView outside a window
-        // never gets a `requestAnimationFrame` callback -- so presenting late
-        // would mean `paintConfirmed: false` on every single screen, and the
-        // signal would stop meaning anything.
+        // Hidden until `ready`, but presented immediately: a WKWebView outside
+        // a window never gets `requestAnimationFrame`, so presenting late would
+        // mean `paintConfirmed: false` on every screen.
         webView.alpha = 0
 
         self.webView = webView
@@ -162,7 +158,6 @@ final class AppActorScreenViewController: UIViewController {
         super.viewDidLoad()
 
         guard let url = URL(string: "\(Self.origin)/\(lookupKey)"),
-              let html = AppActorScreenRuntimeAsset.shellHTML.data(using: .utf8),
               let response = HTTPURLResponse(
                   url: url,
                   statusCode: 200,
@@ -170,25 +165,21 @@ final class AppActorScreenViewController: UIViewController {
                   headerFields: ["Content-Type": "text/html; charset=utf-8"]
               )
         else {
-            Log.screens.error("Screen \(lookupKey): could not build the page shell")
-            failedToRender = true
-            finish(.dismissed)
+            failToRender("could not build the page shell")
             return
         }
 
-        webView.loadSimulatedRequest(URLRequest(url: url), response: response, responseData: html)
+        pageURL = url
+        webView.loadSimulatedRequest(URLRequest(url: url), response: response, responseData: Self.shellData)
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        // The host app can take the screen down without the runtime asking:
-        // `dismiss` from a deep-link handler, a replaced `rootViewController`.
-        // Without this the continuation in `presentScreen` is never resumed --
-        // that call stays suspended for the life of the process, and the
-        // one-screen-at-a-time flag it set on the way in is never cleared, so
-        // every later `presentScreen` refuses.
+        // The host app can take the screen down without the runtime asking.
+        // Without this the `presentScreen` continuation is never resumed and
+        // the one-screen-at-a-time flag is never cleared.
         guard !didFinish, view.window == nil else { return }
         Log.screens.debug("Screen \(lookupKey) was dismissed by the host app")
         finish(.dismissed)
@@ -198,11 +189,26 @@ final class AppActorScreenViewController: UIViewController {
 
     private var didFinish = false
 
+    /// The screen could not be shown. Four call sites reach this and they must
+    /// agree: `failedToRender` decides whether the host app gets a thrown error
+    /// it can fall back from, or a dismissal it reads as "the user said no".
+    func failToRender(_ reason: String) {
+        Log.screens.error("Screen \(lookupKey): \(reason)")
+        failedToRender = true
+        finish(.dismissed)
+    }
+
     fileprivate func finish(_ outcome: AppActorScreenOutcome) {
         guard !didFinish else { return }
         didFinish = true
 
         session.cancel()
+
+        // Close the channel here, on the main actor, rather than in `deinit`
+        // where the thread is not ours to choose.
+        webView?.configuration.userContentController
+            .removeScriptMessageHandler(forName: AppActorScreenProtocol.webChannel)
+
         // Let the runtime emit `dismiss{source:"native"}` before the page dies.
         // A no-op when the page never loaded, which is exactly the case where
         // there is no event to lose.
@@ -321,15 +327,11 @@ extension AppActorScreenViewController: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        Log.screens.error("Screen \(lookupKey) failed to load: \(error.localizedDescription)")
-        failedToRender = true
-        finish(.dismissed)
+        failToRender("failed to load: \(error.localizedDescription)")
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        Log.screens.error("Screen \(lookupKey) failed to load: \(error.localizedDescription)")
-        failedToRender = true
-        finish(.dismissed)
+        failToRender("failed to load: \(error.localizedDescription)")
     }
 
     func webView(
@@ -337,25 +339,29 @@ extension AppActorScreenViewController: WKNavigationDelegate, WKUIDelegate {
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-        // Exactly one navigation is allowed: the one this class started. Links
-        // go through the `openUrl` action, which is policed on both sides and
-        // opens outside the screen. The page's CSP already blocks most of this;
-        // this is the half that does not depend on the page behaving.
+        // Exactly one navigation is allowed, and that has to be *checked*:
+        // matching only shape and host would let every later main-frame
+        // navigation to that host through, and those are fetched from the real
+        // network. A page reaching `location.href` would swap the shell for
+        // whatever the host served while the message handler and the injected
+        // runtime stayed live -- a replacement document holding a bridge that
+        // can post `purchase`. So the URL must equal the one handed to
+        // `loadSimulatedRequest`, once.
         //
-        // Compared on the parsed host, never on the string. A prefix test lets
-        // `https://screens.appactor.io@evil.example/` through -- everything
-        // before the `@` is userinfo, and the host is `evil.example` -- and
-        // `https://screens.appactor.io.evil.example/` with it. Either one puts
-        // an attacker-controlled origin inside the paywall's web view, holding
-        // a live bridge that can post `purchase` and read every reply.
+        // The host is compared parsed, never as a string: a prefix test lets
+        // `https://host@evil.example/` through, where the real host is
+        // `evil.example`.
         let url = navigationAction.request.url
         let isOwnOrigin = url?.scheme?.lowercased() == "https"
             && url?.host?.lowercased() == Self.originHost
-        let isInitialLoad = navigationAction.navigationType == .other
+        let isInitialLoad = !didAllowInitialNavigation
+            && url == pageURL
+            && navigationAction.navigationType == .other
             && navigationAction.targetFrame?.isMainFrame == true
             && isOwnOrigin
 
         if isInitialLoad {
+            didAllowInitialNavigation = true
             decisionHandler(.allow)
         } else {
             Log.screens.warn("Screen \(lookupKey) blocked a navigation to \(navigationAction.request.url?.absoluteString ?? "?")")
@@ -377,9 +383,7 @@ extension AppActorScreenViewController: WKNavigationDelegate, WKUIDelegate {
         // Jetsam. Reloading would restart a flow the user may be midway
         // through, with a purchase possibly in flight; handing control back to
         // the host app is the honest outcome.
-        Log.screens.error("Screen \(lookupKey): web content process terminated")
-        failedToRender = true
-        finish(.dismissed)
+        failToRender("web content process terminated")
     }
 }
 

@@ -404,7 +404,7 @@ final class CacheIdentityChangeTests: XCTestCase {
         // Configure AppActor for testing with all injected managers (does NOT run startup)
         let config = AppActorPaymentConfiguration(
             apiKey: "pk_test_cach03",
-            baseURL: URL(string: "https://test.appactor.io")!,
+            baseURL: URL(string: "https://test.appactor.com")!,
             options: .init()
         )
         appactor.configureForTesting(

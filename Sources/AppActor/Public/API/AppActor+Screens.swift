@@ -58,14 +58,9 @@ extension AppActor {
             )
         }
 
-        // One at a time. Two screens would mean two live bridges racing for the
-        // same purchase lock, and the second would sit behind the first anyway.
-        //
-        // Claimed *before* the first suspension, not after. `AppActor` is
-        // MainActor-isolated, which serialises the check but not the awaits
-        // that follow it: two calls in the same turn would both read nil, both
-        // fetch, and both present. Every path out from here has to release it,
-        // which is what the `defer` is for.
+        // One at a time, claimed *before* the first suspension: MainActor
+        // isolation serialises the check but not the awaits after it, so two
+        // calls in the same turn would both read nil and both present.
         if let existing = paymentContext.presentedScreenLookupKey {
             throw AppActorError.notAvailable("A screen (\(existing)) is already being presented.")
         }
@@ -86,15 +81,35 @@ extension AppActor {
             document: document,
             packages: payloads,
             gateway: adapter,
-            locale: Locale.current.identifier,
+            locale: Self.bcp47Locale(),
             onEvent: handler
         )
+
+        if !document.assetRefs.isEmpty {
+            // No asset host exists to point `assetBase` at yet, so name the
+            // refs that will not appear rather than shipping a screen with
+            // holes in it and reporting success.
+            Log.screens.error(
+                "Screen \(lookupKey) uses \(document.assetRefs.count) uploaded image(s) that cannot be shown: this SDK has no asset base to resolve them against, so they will render as nothing. Use absolute https URLs until asset hosting ships. Refs: \(document.assetRefs.joined(separator: ", "))"
+            )
+        }
 
         Log.screens.info("📄 Presenting screen \(lookupKey) (runtime \(AppActorScreenRuntimeAsset.version), \(payloads.count) packages)")
 
         let outcome = await withCheckedContinuation { (continuation: CheckedContinuation<AppActorScreenOutcome, Never>) in
+            // Armed *before* presenting: `present` loads the view
+            // synchronously, so `viewDidLoad` can fail and finish first.
             controller.onFinished = { outcome in continuation.resume(returning: outcome) }
             presenter.present(controller, animated: false)
+
+            // UIKit silently refuses a presentation when the presenter is
+            // already presenting: `viewDidLoad` never runs, so nothing is left
+            // to resume this continuation and the caller would hang for the
+            // life of the process. `presentedViewController` is set
+            // synchronously when UIKit accepts.
+            if presenter.presentedViewController !== controller {
+                controller.failToRender("the presenting view controller refused it; it is already presenting something else")
+            }
         }
 
         if case .dismissed = outcome, controller.failedToRender {
@@ -126,6 +141,18 @@ extension AppActor {
 
     // MARK: - Document
 
+    /// The device locale as a BCP 47 tag. `Locale.current.identifier` is ICU
+    /// (`en_US`) and the frozen contract says BCP 47 (`en-US`). Nothing reads
+    /// it yet, which is why it has to be right now: the first
+    /// `new Intl.NumberFormat(state.locale)` would throw on every non-`en`
+    /// device, and Android sends the other spelling.
+    private static func bcp47Locale() -> String {
+        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
+            return Locale.current.identifier(.bcp47)
+        }
+        return Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
+    }
+
     private func loadScreenDocument(lookupKey: String) async throws -> AppActorScreenDocument {
         let key = AppActorScreenDocument.remoteConfigKey(for: lookupKey)
 
@@ -156,13 +183,10 @@ extension AppActor {
 
     // MARK: - Packages
 
-    /// Prices the packages the document renders.
-    ///
-    /// Only the ones it names: a paywall showing three of an offering's nine
-    /// packages should not wait on six StoreKit lookups it will never display.
-    /// When the document names none — a screen with a single "start trial"
-    /// button and no picker — the current offering is used, because the
-    /// button's `purchase` action still needs something selected.
+    /// Prices only the packages the document names: a screen showing three of
+    /// an offering's nine should not wait on six lookups it will not display.
+    /// When it names none, the current offering is used — a lone "start trial"
+    /// button still needs something selected.
     private func resolveScreenPackages(
         for document: AppActorScreenDocument
     ) async throws -> ([AppActorPackage], [[String: Any]]) {

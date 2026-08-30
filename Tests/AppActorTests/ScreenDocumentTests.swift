@@ -207,6 +207,40 @@ final class ScreenDocumentTests: XCTestCase {
         XCTAssertFalse(parsed.packageIds.isEmpty)
     }
 
+    /// The budget counts components, which is what the schema's `maxNodes`
+    /// counts. Counting dequeued elements instead made it stricter than publish
+    /// validation: every `fallback` and every array member burned budget too,
+    /// so a document well inside the schema ceiling could run out mid-walk and
+    /// silently drop a `package` near the end -- a plan missing from the
+    /// paywall, with nothing in the log.
+    func testFallbacksDoNotEatThePackageBudget() throws {
+        // 300 components, every one of them carrying a fallback subtree, and
+        // the package that matters last. Comfortably inside the schema's 400.
+        let filler = (0..<299)
+            .map { #"{"id":"t\#($0)","type":"text","value":"x","fallback":{"id":"f\#($0)","type":"text","value":"y"}}"# }
+            .joined(separator: ",")
+        let parsed = try document(
+            minimal(slots: #"{"body":[\#(filler),{"id":"p","type":"package","packageId":"pkg_last","children":[]}]}"#)
+        )
+        XCTAssertEqual(parsed.packageIds, ["pkg_last"])
+    }
+
+    /// `image { ref: … }` needs an `assetBase` the SDK has nowhere to get yet,
+    /// so the refs are collected on the way past and reported rather than
+    /// rendering as silent holes.
+    func testCollectsAssetRefs() throws {
+        let ref = String(repeating: "a", count: 32)
+        let parsed = try document(
+            minimal(slots: #"{"body":[{"id":"i","type":"image","src":{"ref":"\#(ref)"},"width":10,"height":10}]}"#)
+        )
+        XCTAssertEqual(parsed.assetRefs, [ref])
+
+        let byUrl = try document(
+            minimal(slots: #"{"body":[{"id":"i","type":"image","src":{"url":"https://example.com/a.png"},"width":10,"height":10}]}"#)
+        )
+        XCTAssertTrue(byUrl.assetRefs.isEmpty)
+    }
+
     // MARK: - Value conversion
 
     func testConvertsEveryConfigValueShape() throws {

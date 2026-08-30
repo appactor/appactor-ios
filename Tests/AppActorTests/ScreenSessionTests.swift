@@ -28,40 +28,19 @@ private final class FakeScreenHost: AppActorScreenHost {
     }
 }
 
-@MainActor
-private final class FakeGateway: AppActorScreenPurchaseGateway {
-    var purchaseOutcome: AppActorScreenPurchaseOutcome = .cancelled
-    var restoreOutcome: AppActorScreenRestoreOutcome = .nothingToRestore
-    var confirmation: AppActorScreenConfirmation = .unknown
-    private(set) var purchasedPackageIds: [String] = []
-    private(set) var confirmedTransactionIds: [String] = []
-
-    func purchase(packageId: String) async -> AppActorScreenPurchaseOutcome {
-        purchasedPackageIds.append(packageId)
-        return purchaseOutcome
-    }
-
-    func restore() async -> AppActorScreenRestoreOutcome { restoreOutcome }
-
-    func awaitServerConfirmation(transactionId: String) async -> AppActorScreenConfirmation {
-        confirmedTransactionIds.append(transactionId)
-        return confirmation
-    }
-}
-
 // MARK: - Tests
 
 @MainActor
 final class ScreenSessionTests: XCTestCase {
 
     private var host: FakeScreenHost!
-    private var gateway: FakeGateway!
+    private var gateway: FakeScreenPurchaseGateway!
     private var session: AppActorScreenSession!
 
     override func setUp() {
         super.setUp()
         host = FakeScreenHost()
-        gateway = FakeGateway()
+        gateway = FakeScreenPurchaseGateway()
         session = AppActorScreenSession(
             host: host,
             gateway: gateway,
@@ -84,7 +63,8 @@ final class ScreenSessionTests: XCTestCase {
             lookupKey: lookupKey,
             json: ["schemaVersion": 1, "lookupKey": lookupKey, "slots": [String: Any]()],
             comparisons: [:],
-            packageIds: ["pkg_annual"]
+            packageIds: ["pkg_annual"],
+            assetRefs: []
         )
     }
 
@@ -107,7 +87,6 @@ final class ScreenSessionTests: XCTestCase {
         host.onSend = nil
     }
 
-    private func payload(_ message: AppActorScreenInbound) -> [String: Any] { message.payload }
 
     // MARK: - init
 
@@ -115,9 +94,9 @@ final class ScreenSessionTests: XCTestCase {
         session.sendInit(locale: "tr_TR", assetBase: "https://cdn.example.com")
         let sent = try XCTUnwrap(host.replies(.initialise).first)
 
-        XCTAssertNotNil(payload(sent)["document"] as? [String: Any])
-        XCTAssertEqual((payload(sent)["packages"] as? [[String: Any]])?.count, 1)
-        let context = try XCTUnwrap(payload(sent)["context"] as? [String: Any])
+        XCTAssertNotNil(sent.payload["document"] as? [String: Any])
+        XCTAssertEqual((sent.payload["packages"] as? [[String: Any]])?.count, 1)
+        let context = try XCTUnwrap(sent.payload["context"] as? [String: Any])
         XCTAssertEqual(context["locale"] as? String, "tr_TR")
         XCTAssertEqual(context["assetBase"] as? String, "https://cdn.example.com")
         session.cancel()
@@ -131,8 +110,8 @@ final class ScreenSessionTests: XCTestCase {
         let sent = try XCTUnwrap(host.replies(.initialise).first)
         // An empty array is not the same as absent: the runtime resets its
         // package map on every `packages` key it sees.
-        XCTAssertNil(payload(sent)["packages"])
-        XCTAssertNil((payload(sent)["context"] as? [String: Any])?["assetBase"])
+        XCTAssertNil(sent.payload["packages"])
+        XCTAssertNil((sent.payload["context"] as? [String: Any])?["assetBase"])
         empty.cancel()
     }
 
@@ -194,7 +173,7 @@ final class ScreenSessionTests: XCTestCase {
         session.handle(message(.purchase, requestId: "r1", [:]))
         let reply = try XCTUnwrap(host.replies(.purchaseResult).first)
         XCTAssertEqual(reply.requestId, "r1")
-        XCTAssertEqual(payload(reply)["status"] as? String, "failed")
+        XCTAssertEqual(reply.payload["status"] as? String, "failed")
         XCTAssertTrue(gateway.purchasedPackageIds.isEmpty)
         session.cancel()
     }
@@ -207,8 +186,8 @@ final class ScreenSessionTests: XCTestCase {
         let replies = host.replies(.purchaseResult)
         XCTAssertEqual(replies.count, 1)
         XCTAssertEqual(replies[0].requestId, "r1")
-        XCTAssertEqual(payload(replies[0])["status"] as? String, "completed")
-        XCTAssertEqual(payload(replies[0])["server_confirmed"] as? Bool, true)
+        XCTAssertEqual(replies[0].payload["status"] as? String, "completed")
+        XCTAssertEqual(replies[0].payload["server_confirmed"] as? Bool, true)
         XCTAssertEqual(gateway.purchasedPackageIds, ["pkg_annual"])
         XCTAssertTrue(gateway.confirmedTransactionIds.isEmpty)
 
@@ -229,10 +208,10 @@ final class ScreenSessionTests: XCTestCase {
 
         let replies = host.replies(.purchaseResult)
         XCTAssertEqual(replies.count, 2)
-        XCTAssertEqual(payload(replies[0])["server_confirmed"] as? Bool, false)
+        XCTAssertEqual(replies[0].payload["server_confirmed"] as? Bool, false)
         XCTAssertEqual(replies[1].requestId, "r1", "the follow-up must reuse the original requestId")
-        XCTAssertEqual(payload(replies[1])["status"] as? String, "completed")
-        XCTAssertEqual(payload(replies[1])["server_confirmed"] as? Bool, true)
+        XCTAssertEqual(replies[1].payload["status"] as? String, "completed")
+        XCTAssertEqual(replies[1].payload["server_confirmed"] as? Bool, true)
         XCTAssertEqual(gateway.confirmedTransactionIds, ["2000000123"])
 
         session.handle(message(.close))
@@ -248,8 +227,8 @@ final class ScreenSessionTests: XCTestCase {
         await waitForSends(2)
 
         let replies = host.replies(.purchaseResult)
-        XCTAssertEqual(payload(replies[1])["status"] as? String, "failed")
-        XCTAssertEqual(payload(replies[1])["message"] as? String, "Could not confirm.")
+        XCTAssertEqual(replies[1].payload["status"] as? String, "failed")
+        XCTAssertEqual(replies[1].payload["message"] as? String, "Could not confirm.")
 
         session.handle(message(.close))
         XCTAssertEqual(host.closedWith, .dismissed, "a rejected receipt is not a purchase")
@@ -278,8 +257,8 @@ final class ScreenSessionTests: XCTestCase {
         await waitForSends(1)
 
         let reply = try XCTUnwrap(host.replies(.purchaseResult).first)
-        XCTAssertEqual(payload(reply)["status"] as? String, "pending")
-        XCTAssertNil(payload(reply)["server_confirmed"])
+        XCTAssertEqual(reply.payload["status"] as? String, "pending")
+        XCTAssertNil(reply.payload["server_confirmed"])
         XCTAssertTrue(gateway.confirmedTransactionIds.isEmpty)
 
         session.handle(message(.close))
@@ -291,7 +270,7 @@ final class ScreenSessionTests: XCTestCase {
         gateway.purchaseOutcome = .cancelled
         session.handle(message(.purchase, requestId: "r1", ["packageId": "pkg_annual"]))
         await waitForSends(1)
-        XCTAssertEqual(payload(host.replies(.purchaseResult)[0])["status"] as? String, "cancelled")
+        XCTAssertEqual(host.replies(.purchaseResult)[0].payload["status"] as? String, "cancelled")
         session.cancel()
     }
 
@@ -300,8 +279,8 @@ final class ScreenSessionTests: XCTestCase {
         session.handle(message(.purchase, requestId: "r1", ["packageId": "pkg_annual"]))
         await waitForSends(1)
         let reply = host.replies(.purchaseResult)[0]
-        XCTAssertEqual(payload(reply)["status"] as? String, "failed")
-        XCTAssertEqual(payload(reply)["message"] as? String, "No connection.")
+        XCTAssertEqual(reply.payload["status"] as? String, "failed")
+        XCTAssertEqual(reply.payload["message"] as? String, "No connection.")
         session.cancel()
     }
 
@@ -328,7 +307,7 @@ final class ScreenSessionTests: XCTestCase {
 
         let reply = try XCTUnwrap(host.replies(.restoreResult).first)
         XCTAssertEqual(reply.requestId, "r2")
-        XCTAssertEqual(payload(reply)["status"] as? String, "restored")
+        XCTAssertEqual(reply.payload["status"] as? String, "restored")
 
         session.handle(message(.close))
         XCTAssertEqual(host.closedWith, .restored)
@@ -339,7 +318,7 @@ final class ScreenSessionTests: XCTestCase {
         gateway.restoreOutcome = .nothingToRestore
         session.handle(message(.restore, requestId: "r2"))
         await waitForSends(1)
-        XCTAssertEqual(payload(host.replies(.restoreResult)[0])["status"] as? String, "nothing_to_restore")
+        XCTAssertEqual(host.replies(.restoreResult)[0].payload["status"] as? String, "nothing_to_restore")
 
         session.handle(message(.close))
         XCTAssertEqual(host.closedWith, .dismissed)
@@ -351,8 +330,8 @@ final class ScreenSessionTests: XCTestCase {
         session.handle(message(.restore, requestId: "r2"))
         await waitForSends(1)
         let reply = host.replies(.restoreResult)[0]
-        XCTAssertEqual(payload(reply)["status"] as? String, "failed")
-        XCTAssertEqual(payload(reply)["message"] as? String, "Could not restore purchases.")
+        XCTAssertEqual(reply.payload["status"] as? String, "failed")
+        XCTAssertEqual(reply.payload["message"] as? String, "Could not restore purchases.")
         session.cancel()
     }
 
@@ -456,6 +435,10 @@ final class ScreenSessionTests: XCTestCase {
         openUrl("https://example.com/\u{0}x", "external_browser")
         openUrl("https://example.com/a\\b", "external_browser")
         openUrl("https://example.com/" + String(repeating: "a", count: 2100), "external_browser")
+        // Measured in UTF-16 units, like the shared policy. Counting graphemes
+        // made this copy *looser* than the one it exists to backstop: 2048
+        // family emoji are ~8 KB of UTF-16 and would have sailed through.
+        openUrl("https://example.com/" + String(repeating: "👨‍👩‍👧‍👦", count: 400), "external_browser")
         XCTAssertTrue(host.opened.isEmpty)
         session.cancel()
     }

@@ -1,49 +1,30 @@
 import Foundation
 
-/// Wire format for the server-driven screen bridge.
+/// Wire format for the server-driven screen bridge. **Frozen**: the
+/// counterpart is `appactor-screens/.../spec/bridge.ts` and Android speaks the
+/// same one, so renaming a field here is a protocol bump, not a refactor.
 ///
-/// This is the Swift half of a **frozen** contract. Its counterpart lives in
-/// `appactor-screens/packages/schema/src/spec/bridge.ts`, and the Android SDK
-/// speaks the same one. Renaming anything here is a protocol bump, not a
-/// refactor: documents already published name these fields.
-///
-/// The transport is deliberately asymmetric, and both directions are load
-/// bearing:
-///
-/// - **web → native** arrives as a single JSON string through
-///   `WKScriptMessageHandler`. One message per call, so a malformed message
-///   can only lose itself.
-/// - **native → web** goes out as base64 through `__appactor.receive(...)`.
-///   Base64 because interpolating raw JSON into `evaluateJavaScript` breaks on
-///   quotes, newlines and astral-plane characters — a paywall with a `"` in a
-///   price string is not an edge case. Base64 output is `A-Za-z0-9+/=` only, so
-///   the result is safe to place inside a JS string literal with no escaping.
-///
-/// A batch is sent as a JSON **array** of base64 strings, and the runtime
-/// decodes each element inside its own `try`/`catch`. That is the entire point:
-/// one unrecognised message in a batch must not take the `purchaseResult`
-/// sitting next to it down with it.
+/// Two asymmetries are load bearing. Native→web goes out **base64** because
+/// interpolating raw JSON into `evaluateJavaScript` breaks on quotes and
+/// newlines. Batches are an **array** of those, decoded per element on both
+/// sides, so one unrecognised message cannot take the `purchaseResult` beside
+/// it down with it.
 enum AppActorScreenProtocol {
 
-    /// Carried on every envelope, in **both** directions. A mismatch is a drop,
-    /// never a best-effort interpretation — guessing what a field means in a
-    /// version you do not know is how silent corruption starts.
+    /// On every envelope, both directions. A mismatch is a drop, never a
+    /// best-effort read: guessing a field's meaning in a version you do not
+    /// know is how silent corruption starts.
     static let version = 1
 
-    /// The global the runtime installs for native to call into.
     static let nativeEntrypoint = "__appactor"
-
-    /// `WKScriptMessageHandler` name the runtime posts to.
     static let webChannel = "appactorScreens"
 
-    /// The runtime raises `slow_first_paint` on its own after this long. Native
-    /// keeps a separate watchdog for the case the runtime never runs at all —
-    /// a parse failure, a dead channel — where nothing web-side is left to fire.
+    /// Native's own watchdog, separate from the runtime's `slow_first_paint`:
+    /// it covers the case where the runtime never runs at all and nothing
+    /// web-side is left to report it.
     static let readyWatchdog: TimeInterval = 2.0
 
-    /// Upper bound on a single message from the web side. The runtime already
-    /// bounds what it sends; this bounds what a compromised or wedged page
-    /// could send.
+    /// Bounds what a compromised or wedged page can send.
     static let maxInboundMessageBytes = 256 * 1024
 }
 
@@ -63,9 +44,8 @@ enum AppActorScreenOutboundType: String, CaseIterable {
 /// A decoded message from the runtime.
 struct AppActorScreenOutbound {
     let type: AppActorScreenOutboundType
-    /// Required on `purchase` and `restore` (day-1 rule #14). Without it a
-    /// result cannot be tied to the request that asked for it, and the runtime
-    /// answers a mismatched result with `unmatched_purchase_result`.
+    /// Required on `purchase` and `restore` (day-1 rule #14): without it a
+    /// result cannot be tied back to the request that asked for it.
     let requestId: String?
     let payload: [String: Any]
 
@@ -74,9 +54,8 @@ struct AppActorScreenOutbound {
     }
 }
 
-/// Why a message was dropped. Kept specific because these are the only
-/// symptoms available when the bridge misbehaves in the field — "dropped a
-/// message" in a log is not something anyone can act on.
+/// Why a message was dropped. Specific on purpose: these are the only symptoms
+/// available when the bridge misbehaves in the field.
 enum AppActorScreenDecodeFailure: Error, Equatable {
     case notAString
     case tooLarge(bytes: Int)
@@ -103,31 +82,31 @@ enum AppActorScreenDecodeFailure: Error, Equatable {
 
 extension AppActorScreenOutbound {
 
-    /// Parses one `postMessage` body.
-    ///
-    /// Never throws and never traps: this runs on whatever the page chose to
-    /// send, and the page is the least trustworthy input the SDK has.
+    /// Parses one `postMessage` body. Never throws and never traps: the page is
+    /// the least trustworthy input the SDK has.
     static func decode(_ body: Any) -> Result<AppActorScreenOutbound, AppActorScreenDecodeFailure> {
         guard let json = body as? String else { return .failure(.notAString) }
 
-        // Count UTF-8 bytes, not characters: the limit exists to bound memory,
-        // and one emoji is four bytes.
-        let byteCount = json.utf8.count
-        guard byteCount <= AppActorScreenProtocol.maxInboundMessageBytes else {
-            return .failure(.tooLarge(bytes: byteCount))
+        // UTF-8 bytes, not characters: the limit bounds memory, and one emoji
+        // is four bytes. Transcoding once avoids walking the string twice.
+        let data = Data(json.utf8)
+        guard data.count <= AppActorScreenProtocol.maxInboundMessageBytes else {
+            return .failure(.tooLarge(bytes: data.count))
         }
 
-        guard let data = json.data(using: .utf8),
-              let parsed = try? JSONSerialization.jsonObject(with: data)
+        guard let parsed = try? JSONSerialization.jsonObject(with: data)
         else { return .failure(.malformedJSON) }
 
         guard let envelope = parsed as? [String: Any] else { return .failure(.notAnObject) }
 
-        // `as? Int` on an NSNumber holding a double would succeed for 1.0, so
-        // read it as a number first and compare exactly.
-        let received = (envelope["protocol_version"] as? NSNumber)?.intValue
-        guard received == AppActorScreenProtocol.version else {
-            return .failure(.protocolMismatch(received: received))
+        // Exact, not `as? Int`. `1` and `1.0` are the same version and must
+        // both pass; anything that merely *truncates* to a known version must
+        // not. `intValue` alone reads 1.5 as 1, and `true` bridges to an
+        // NSNumber that reads as 1.
+        let number = envelope["protocol_version"] as? NSNumber
+        let isBoolean = number.map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
+        guard let number, !isBoolean, number.doubleValue == Double(AppActorScreenProtocol.version) else {
+            return .failure(.protocolMismatch(received: isBoolean ? nil : number?.intValue))
         }
 
         guard let rawType = envelope["type"] as? String else { return .failure(.unknownType("")) }
@@ -168,10 +147,8 @@ struct AppActorScreenInbound {
         self.payload = payload
     }
 
-    /// `nil` when the payload is not JSON-encodable — a `Date`, a `NaN`
-    /// slipped in somewhere. Returning `nil` rather than trapping keeps a
-    /// mapping bug from being a crash in the host app. (`Decimal` is fine: it
-    /// bridges to `NSNumber`.)
+    /// `nil` when the payload is not JSON-encodable (a `Date`, a `NaN`), so a
+    /// mapping bug is not a crash in the host app.
     func base64() -> String? {
         var envelope: [String: Any] = [
             "protocol_version": AppActorScreenProtocol.version,
@@ -180,8 +157,10 @@ struct AppActorScreenInbound {
         ]
         if let requestId { envelope["requestId"] = requestId }
 
+        // No `.sortedKeys`: nothing reads key order, and the `init` envelope
+        // wraps the whole document -- sorting it costs first paint.
         guard JSONSerialization.isValidJSONObject(envelope),
-              let data = try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+              let data = try? JSONSerialization.data(withJSONObject: envelope)
         else { return nil }
 
         return data.base64EncodedString()
@@ -190,21 +169,15 @@ struct AppActorScreenInbound {
 
 enum AppActorScreenInboundBatch {
 
-    /// Builds the `evaluateJavaScript` source for a batch.
-    ///
-    /// Always an array, even for one message, so the runtime takes its
-    /// per-element decode path every time — the guarantee that a bad message
-    /// cannot take a good one with it should not depend on how many happened to
-    /// be in flight.
-    ///
-    /// Messages that fail to encode are skipped rather than aborting the batch;
-    /// `nil` comes back only when nothing survived, so the caller can log that
-    /// it sent nothing instead of silently evaluating `receive([])`.
+    /// Builds the `evaluateJavaScript` source for a batch. Always an array,
+    /// even for one message, so the per-element decode guarantee does not
+    /// depend on how many happened to be in flight. Unencodable messages are
+    /// skipped; `nil` means nothing survived.
     static func javaScript(for messages: [AppActorScreenInbound]) -> String? {
         let encoded = messages.compactMap { $0.base64() }
         guard !encoded.isEmpty else { return nil }
-        // Safe to interpolate unquoted-escaped: base64 alphabet is A-Za-z0-9+/=
-        // and contains neither a quote, a backslash, nor a line terminator.
+        // Safe unescaped: base64 is A-Za-z0-9+/= -- no quote, backslash or
+        // line terminator.
         let list = encoded.map { "\"\($0)\"" }.joined(separator: ",")
         return "\(AppActorScreenProtocol.nativeEntrypoint).receive([\(list)])"
     }
