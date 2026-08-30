@@ -600,6 +600,10 @@ final class AppActorPaymentContext {
     /// processing and foreground observer from firing before bootstrap finishes.
     var isBootstrapComplete: Bool = false
     var pipelineEventHandler: (@Sendable (AppActorReceiptPipelineEventDetail) -> Void)?
+    /// Analytics from presented screens. See `AppActor.onScreenEvent`.
+    var screenEventHandler: ((AppActorScreenEvent) -> Void)?
+    /// The screen currently on screen, if any. One at a time.
+    var presentedScreenLookupKey: String?
     /// Product IDs for purchases that returned `.pending` (Ask to Buy / SCA).
     /// Keyed by product ID, value is the count of pending purchases for that SKU.
     var pendingProductCounts: [String: Int] = [:]

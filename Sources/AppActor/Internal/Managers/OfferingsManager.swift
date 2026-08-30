@@ -205,6 +205,17 @@ actor AppActorOfferingsManager {
         return products[identifier]
     }
 
+    /// Resolves several StoreKit products in one round trip.
+    ///
+    /// A screen renders every package at once, so asking for them one at a time
+    /// would put N StoreKit round trips on the path to first paint. Goes through
+    /// the same injected fetcher as ``storeKitProduct(for:)`` so tests can still
+    /// stand in for the store.
+    func storeKitProducts(for identifiers: Set<String>) async throws -> [String: Product] {
+        guard !identifiers.isEmpty else { return [:] }
+        return try await productFetcher.fetchProducts(for: identifiers)
+    }
+
     /// Toggle background mode (longer TTL).
     func setBackground(_ bg: Bool) {
         isBackground = bg
