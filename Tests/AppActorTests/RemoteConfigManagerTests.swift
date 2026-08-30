@@ -482,6 +482,37 @@ final class RemoteConfigManagerTests: XCTestCase {
         XCTAssertEqual(client.getRemoteConfigsCalls[1].appUserId, defaultUserId)
     }
 
+    func testColdStartOfflineServesTheDiskCopyInsteadOfThrowing() async throws {
+        // The debt this closes: a process that has just started has no memory
+        // of whether the project needs the user context, so it probes. Offline
+        // the probe falls back to a perfectly good document on disk -- and the
+        // refetch that follows cannot reach the network either. Dropping the
+        // public copy before that refetch threw the good document away, so a
+        // screen that was sitting on disk did not open.
+        await etagManager.storeFresh(
+            makeDTOs([("layout", .string("cached"), "string")]),
+            for: .remoteConfigsContext(appUserId: nil, appVersion: "2.1.0", country: "TR"),
+            eTag: "etag_public"
+        )
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            throw AppActorError.networkError(URLError(.notConnectedToInternet))
+        }
+
+        let configs = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+
+        XCTAssertEqual(configs["layout"]?.stringValue, "cached")
+        // Both attempts were made -- the probe and the refetch -- and the
+        // answer still came back rather than the error the refetch produced.
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 2)
+        XCTAssertNil(client.getRemoteConfigsCalls[0].appUserId)
+        XCTAssertEqual(client.getRemoteConfigsCalls[1].appUserId, defaultUserId)
+
+        // And the copy is still there for the next call: it was never a probe
+        // the server told us to distrust.
+        let again = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+        XCTAssertEqual(again["layout"]?.stringValue, "cached")
+    }
+
     func testUserRequiredPublicProbeIsNotReusedAfterUserFetchFailure() async throws {
         client.getRemoteConfigsHandler = { appUserId, _, _, _ in
             if appUserId == nil {

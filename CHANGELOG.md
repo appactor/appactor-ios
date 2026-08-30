@@ -14,6 +14,7 @@
 - Fixed: the screen's message handler is removed on the main actor in `finish()` rather than in `deinit`, which is not guaranteed to run there.
 - Changed: `AppActorScreenEvent` is `Sendable`, so an analytics layer behind an actor can capture it.
 - Added: `image { ref: … }` sources are reported at presentation time. The SDK has no asset base to resolve them against yet, and they would otherwise render as nothing with no diagnostic.
+- Fixed: a screen (and every other remote-config value) no longer fails to load offline after the app is relaunched. The SDK probed without the user context, fell back to a good document on disk, then discarded it before a user-context refetch that could not reach the network — so the copy it already had was thrown away. It is now kept until an answer exists to replace it. A failed refetch also no longer records "this project needs the user context", which had pinned every later call to a context it could not fetch.
 - Added: `scripts/test_ios.sh` runs the suite on a simulator. `swift test` targets macOS, where 721 lines of screen tests are compiled out.
 
 ## 0.1.13
