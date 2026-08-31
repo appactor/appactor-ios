@@ -23,7 +23,7 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
 
     private var window: UIWindow!
     private var controller: AppActorScreenViewController!
-    private var gateway: RecordingGateway!
+    private var gateway: FakeScreenPurchaseGateway!
     private var events: [AppActorScreenEvent] = []
 
     override func tearDown() {
@@ -86,7 +86,7 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
     /// Puts the screen in a real window. A `WKWebView` outside one never gets a
     /// `requestAnimationFrame` callback, and `ready` is defined in terms of one.
     private func present(_ document: AppActorScreenDocument) {
-        gateway = RecordingGateway()
+        gateway = FakeScreenPurchaseGateway()
         controller = AppActorScreenViewController(
             document: document,
             packages: [Self.package],
@@ -377,17 +377,17 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
         // attacker-controlled page inside the paywall's web view, holding a
         // live bridge that can post `purchase` and read the replies.
         for target in [
-            "https://screens.appactor.io@example.org/",
-            "https://screens.appactor.io.evil.example/",
-            "https://screens.appactor.iox/",
+            "https://screens.appactor.com@example.org/",
+            "https://screens.appactor.com.evil.example/",
+            "https://screens.appactor.comx/",
             "https://example.com/",
-            "http://screens.appactor.io/",
+            "http://screens.appactor.com/",
         ] {
             _ = try? await evaluate("window.location.href = '\(target)'")
             try await Task.sleep(nanoseconds: 300_000_000)
 
             let host = try await evaluate("window.location.host")
-            XCTAssertEqual(host as? String, "screens.appactor.io", "the page escaped to \(target)")
+            XCTAssertEqual(host as? String, "screens.appactor.com", "the page escaped to \(target)")
         }
 
         // The bridge is still the screen's own, not a stranger's.
@@ -445,29 +445,5 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
 }
 
 // MARK: - Doubles
-
-@MainActor
-private final class RecordingGateway: AppActorScreenPurchaseGateway {
-    var purchaseOutcome: AppActorScreenPurchaseOutcome = .cancelled
-    var restoreOutcome: AppActorScreenRestoreOutcome = .nothingToRestore
-    var confirmation: AppActorScreenConfirmation = .unknown
-    /// Holds the purchase open so a test can inject messages while the runtime
-    /// still has a request in flight.
-    var stall = false
-
-    private(set) var purchasedPackageIds: [String] = []
-
-    func purchase(packageId: String) async -> AppActorScreenPurchaseOutcome {
-        purchasedPackageIds.append(packageId)
-        while stall {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        return purchaseOutcome
-    }
-
-    func restore() async -> AppActorScreenRestoreOutcome { restoreOutcome }
-
-    func awaitServerConfirmation(transactionId: String) async -> AppActorScreenConfirmation { confirmation }
-}
 
 #endif

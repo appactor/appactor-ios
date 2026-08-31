@@ -164,12 +164,30 @@ final class CustomerAttributesTests: XCTestCase {
         }
     }
 
+    /// What `AppActor.platformName` reports on the destination these tests are
+    /// running against. Hard-coding "macos" made both of the tests below pass
+    /// only on `swift test`'s macOS destination and fail the moment they were
+    /// run on a simulator -- which is where the SDK actually ships.
+    private var expectedPlatform: String {
+        #if os(iOS)
+        return "ios"
+        #elseif os(tvOS)
+        return "tvos"
+        #elseif os(watchOS)
+        return "watchos"
+        #elseif os(macOS)
+        return "macos"
+        #else
+        return "apple"
+        #endif
+    }
+
     func testAutomaticProfileContextSendsServerRoutedSystemAttributesWithoutIdfv() async throws {
         try await appactor.collectAutomaticProfileContext()
 
         let attributes = try XCTUnwrap(client.patchAttributesCalls.last?.request.attributes)
         XCTAssertEqual(attributes[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))
-        XCTAssertEqual(attributes[AppActorAttributeKey.platform], .string("macos"))
+        XCTAssertEqual(attributes[AppActorAttributeKey.platform], .string(expectedPlatform))
         XCTAssertNotNil(attributes[AppActorAttributeKey.locale])
         XCTAssertNotNil(attributes[AppActorAttributeKey.timezone])
         XCTAssertNotNil(attributes[AppActorAttributeKey.osVersion])
@@ -248,7 +266,7 @@ final class CustomerAttributesTests: XCTestCase {
 
         let attributes = try XCTUnwrap(client.patchAttributesCalls.last?.request.attributes)
         XCTAssertEqual(attributes[AppActorAttributeKey.sdkVersion], .string(AppActorSDK.version))
-        XCTAssertEqual(attributes[AppActorAttributeKey.platform], .string("macos"))
+        XCTAssertEqual(attributes[AppActorAttributeKey.platform], .string(expectedPlatform))
         XCTAssertNotNil(attributes[AppActorAttributeKey.locale])
         XCTAssertNotNil(attributes[AppActorAttributeKey.timezone])
         XCTAssertTrue(client.patchIntegrationIdentifiersCalls.isEmpty)

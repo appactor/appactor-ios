@@ -69,6 +69,19 @@ final class ScreenBridgeProtocolTests: XCTestCase {
         XCTAssertEqual(failure(envelope(version: nil)), .protocolMismatch(received: nil))
     }
 
+    /// JSON has one number type, so `1` and `1.0` are the same version and both
+    /// have to pass. Everything else that merely *truncates* to a version we
+    /// know must not: reading the field with `NSNumber.intValue` alone accepts
+    /// 1.5 as 1, and `true` bridges to an NSNumber that reads as 1 as well.
+    func testVersionIsComparedExactlyNotTruncated() {
+        XCTAssertNotNil(decoded(envelope(version: 1.0)))
+
+        XCTAssertEqual(failure(envelope(version: 1.5)), .protocolMismatch(received: 1))
+        XCTAssertEqual(failure(envelope(version: 0.5)), .protocolMismatch(received: 0))
+        XCTAssertEqual(failure(envelope(version: true)), .protocolMismatch(received: nil))
+        XCTAssertEqual(failure(envelope(version: "1")), .protocolMismatch(received: nil))
+    }
+
     func testRejectsAnUnknownType() {
         XCTAssertEqual(failure(envelope(type: "teleport")), .unknownType("teleport"))
     }

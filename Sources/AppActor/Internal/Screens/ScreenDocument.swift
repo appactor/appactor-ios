@@ -2,19 +2,15 @@ import Foundation
 
 /// A screen document as it arrives from remote config.
 ///
-/// Delivery rides the existing `/v1/remote-config` channel under the reserved
-/// `screen.<lookupKey>` key — no new endpoint, no new table, no SDK release
-/// train. That also means the document arrives as an ``AppActorConfigValue``
-/// tree rather than as bytes, so the first job here is turning it back into
-/// something `JSONSerialization` will accept.
+/// Delivery rides `/v1/remote-config` under the reserved `screen.<lookupKey>`
+/// key, so the document arrives as an ``AppActorConfigValue`` tree rather than
+/// bytes -- the first job here is turning it back into something
+/// `JSONSerialization` accepts.
 ///
-/// Almost nothing about the document's *contents* is validated on this side.
-/// The publisher validates against the full schema before anything is written,
-/// the API refuses a document whose `lookupKey` disagrees with its key, and
-/// every component in the tree carries a `fallback` so the runtime degrades
-/// instead of blanking when it meets something it does not know. A second
-/// opinion here would only add a way for an old SDK to reject a document a new
-/// runtime could have rendered.
+/// Contents are deliberately *not* validated here: the publisher checks the
+/// full schema, the API refuses a mismatched `lookupKey`, and every component
+/// carries a `fallback`. A second opinion would only add a way for an old SDK
+/// to reject a document a new runtime could have rendered.
 struct AppActorScreenDocument {
 
     let lookupKey: String
@@ -34,6 +30,14 @@ struct AppActorScreenDocument {
     /// for. A paywall naming three of an offering's nine packages should not
     /// wait on six `Product` lookups it will never display.
     let packageIds: [String]
+
+    /// `image { ref: … }` sources found in the document.
+    ///
+    /// A ref is half an address: the runtime resolves it against `assetBase`
+    /// and draws nothing without one. No asset host exists yet, so collecting
+    /// the refs is what lets ``presentScreen`` say so instead of shipping a
+    /// screen with holes in it and reporting success.
+    let assetRefs: [String]
 }
 
 enum AppActorScreenDocumentError: Error, Equatable {
@@ -88,20 +92,26 @@ extension AppActorScreenDocument {
             lookupKey: lookupKey,
             json: json,
             comparisons: packages.comparisons,
-            packageIds: packages.order
+            packageIds: packages.order,
+            assetRefs: packages.assetRefs
         )
     }
 
     /// Walks every slot for `package` components.
     ///
-    /// Iterative, with an explicit node budget: the document is server-supplied
-    /// and a hand-edited one could nest deeply enough to exhaust the stack. The
-    /// budget matches the schema's own node ceiling, so a document that passed
-    /// publish validation always fits.
-    private static func collectPackages(_ document: [String: Any]) -> (comparisons: [String: String], order: [String]) {
+    /// Iterative, with a node budget: the document is server-supplied and a
+    /// hand-edited one could nest deeply enough to exhaust the stack.
+    ///
+    /// The budget counts **components** -- dictionaries -- because that is what
+    /// the schema's `LIMITS.maxNodes` counts. Counting dequeued elements made
+    /// it stricter than publish validation: arrays and every `fallback` burned
+    /// budget too, so a screen well inside the ceiling could run out mid-walk
+    /// and silently drop a `package`.
+    private static func collectPackages(_ document: [String: Any]) -> (comparisons: [String: String], order: [String], assetRefs: [String]) {
         let maxNodes = 400
         var comparisons: [String: String] = [:]
         var order: [String] = []
+        var assetRefs: [String] = []
         var seen = Set<String>()
         var visited = 0
 
@@ -117,8 +127,12 @@ extension AppActorScreenDocument {
 
         while !queue.isEmpty, visited < maxNodes {
             let node = queue.removeFirst()
-            visited += 1
             guard let object = node as? [String: Any] else { continue }
+            visited += 1
+
+            if let src = object["src"] as? [String: Any], let ref = src["ref"] as? String, !ref.isEmpty {
+                assetRefs.append(ref)
+            }
 
             if object["type"] as? String == "package", let id = object["packageId"] as? String, !id.isEmpty {
                 if seen.insert(id).inserted { order.append(id) }
@@ -133,7 +147,7 @@ extension AppActorScreenDocument {
             if let fallback = object["fallback"] { queue.append(fallback) }
         }
 
-        return (comparisons, order)
+        return (comparisons, order, assetRefs)
     }
 
     /// ``AppActorConfigValue`` → a `JSONSerialization`-compatible graph.

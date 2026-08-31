@@ -3,80 +3,64 @@ import StoreKit
 
 /// Builds the `package` objects the runtime interpolates as `{{package.*}}`.
 ///
-/// The field list is frozen (`spec/package-fields.ts`, `FROZEN.md` §2) because
-/// these names are written *inside published documents*: renaming one breaks
-/// every screen that already shipped. The runtime is a pure pass-through — it
-/// reads whatever key the document names off the object native sent and hides
-/// the component when the value is missing — so every field here has to be
-/// filled by this file or deliberately sent as null.
+/// The field list is frozen (`spec/package-fields.ts`, `FROZEN.md` §2): these
+/// names live inside published documents. The runtime is a pure pass-through
+/// that hides a component when its value is missing, so every field here must
+/// be filled or deliberately null.
 ///
-/// Most of it is not on ``AppActorPackage``. `AppActorPackage` carries id,
-/// price and currency; subscription period, trial length, introductory offer
-/// and eligibility all live on the live StoreKit `Product`. Reading them here
-/// rather than adding them to the public model keeps this branch off the
-/// public API surface — moving them onto `AppActorPackage` (and making Android
-/// agree on what "trial" means when Play hands back an ordered phase list) is
-/// its own piece of work.
+/// Period, trial and offer come from the live StoreKit `Product`, not from
+/// ``AppActorPackage``. Moving them onto the public model -- and making Android
+/// agree what "trial" means given Play's ordered phase list -- is its own work.
 enum AppActorScreenPackagePayload {
 
-    /// Approximate day counts, used only to normalise one subscription period
-    /// against another. Marketing maths, not calendar maths: "$2.50 / week" on
-    /// an annual plan is the same 365/52 approximation every store in this
-    /// category uses, and a calendar-exact figure would change month to month.
-    private static func days(unit: Product.SubscriptionPeriod.Unit, count: Int) -> Decimal {
-        let perUnit: Decimal
+    /// One subscription period unit, resolved once. Four separate switches used
+    /// to answer these questions with four `@unknown default`s that had to stay
+    /// consistent by hand -- a wire unit of `"month"` beside a day count of 7
+    /// is a wrong price per week.
+    ///
+    /// `perUnitDays` is marketing maths, not calendar maths: the 365/52
+    /// approximation every store in this category uses.
+    private struct PeriodShape {
+        let wire: String
+        let perUnitDays: Decimal
+        let allowedUnit: NSCalendar.Unit
+        let component: Calendar.Component
+    }
+
+    private static func shape(_ unit: Product.SubscriptionPeriod.Unit) -> PeriodShape {
         switch unit {
-        case .day: perUnit = 1
-        case .week: perUnit = 7
-        case .month: perUnit = 30
-        case .year: perUnit = 365
-        @unknown default: perUnit = 30
+        case .day: return PeriodShape(wire: "day", perUnitDays: 1, allowedUnit: .day, component: .day)
+        case .week: return PeriodShape(wire: "week", perUnitDays: 7, allowedUnit: .weekOfMonth, component: .weekOfMonth)
+        case .month: return PeriodShape(wire: "month", perUnitDays: 30, allowedUnit: .month, component: .month)
+        case .year: return PeriodShape(wire: "year", perUnitDays: 365, allowedUnit: .year, component: .year)
+        // `periodUnit` is a closed set: an unrecognised unit is reported as a
+        // month rather than a new string both renderers would have to guess at.
+        @unknown default: return PeriodShape(wire: "month", perUnitDays: 30, allowedUnit: .month, component: .month)
         }
-        return perUnit * Decimal(max(count, 1))
+    }
+
+    private static func days(unit: Product.SubscriptionPeriod.Unit, count: Int) -> Decimal {
+        shape(unit).perUnitDays * Decimal(max(count, 1))
     }
 
     private static func wireUnit(_ unit: Product.SubscriptionPeriod.Unit) -> String {
-        switch unit {
-        case .day: return "day"
-        case .week: return "week"
-        case .month: return "month"
-        case .year: return "year"
-        // The wire format's `periodUnit` is a closed set. An unrecognised unit
-        // is reported as a month rather than as a new string the runtime and
-        // the Android SDK would both have to guess at.
-        @unknown default: return "month"
-        }
+        shape(unit).wire
     }
 
-    private static func calendarComponent(_ unit: Product.SubscriptionPeriod.Unit) -> NSCalendar.Unit {
-        switch unit {
-        case .day: return .day
-        case .week: return .weekOfMonth
-        case .month: return .month
-        case .year: return .year
-        @unknown default: return .month
-        }
-    }
-
-    /// "1 month", "3 months", "1 year" — localised by `DateComponentsFormatter`
-    /// rather than hand-assembled, so a Turkish device reads "1 ay" without the
-    /// SDK shipping a string table it would then have to keep in sync.
+    /// "1 month", "1 year" — via `DateComponentsFormatter`, so a Turkish device
+    /// reads "1 ay" without the SDK shipping a string table.
     private static func periodString(unit: Product.SubscriptionPeriod.Unit, count: Int) -> String {
+        let shape = shape(unit)
+
         let formatter = DateComponentsFormatter()
         formatter.unitsStyle = .full
-        formatter.allowedUnits = [calendarComponent(unit)]
+        formatter.allowedUnits = [shape.allowedUnit]
         formatter.maximumUnitCount = 1
 
         var components = DateComponents()
-        switch unit {
-        case .day: components.day = count
-        case .week: components.weekOfMonth = count
-        case .month: components.month = count
-        case .year: components.year = count
-        @unknown default: components.month = count
-        }
+        components.setValue(count, for: shape.component)
 
-        return formatter.string(from: components) ?? "\(count) \(wireUnit(unit))"
+        return formatter.string(from: components) ?? "\(count) \(shape.wire)"
     }
 
     private static func trialDays(_ offer: Product.SubscriptionOffer?) -> Int {
@@ -85,42 +69,36 @@ enum AppActorScreenPackagePayload {
         return NSDecimalNumber(decimal: value).intValue
     }
 
-    /// Price for one day of this subscription. The common denominator behind
-    /// `pricePerWeekString`, `pricePerMonthString` and `discountPercent` — a
-    /// ratio between two daily rates is the same ratio their weekly or monthly
-    /// rates would give, so there is one normalisation to get wrong instead of
-    /// three.
+    /// Price for one day: the common denominator behind `pricePerWeekString`,
+    /// `pricePerMonthString` and `discountPercent`, so there is one
+    /// normalisation to get wrong instead of three.
     private static func dailyRate(price: Decimal, period: Product.SubscriptionPeriod?) -> Decimal? {
         guard let period else { return nil }
-        let total = days(unit: period.unit, count: period.value)
-        guard total > 0 else { return nil }
-        return price / total
+        // `days` cannot return zero: `perUnitDays` and the clamped count are
+        // both at least 1.
+        return price / days(unit: period.unit, count: period.value)
     }
 
     private static func money(_ amount: Decimal, _ product: Product) -> String {
         amount.formatted(product.priceFormatStyle)
     }
 
-    private static func currencyCode(_ package: AppActorPackage, _ product: Product) -> String {
+    /// `product` is optional so this owns the whole fallback chain.
+    private static func currencyCode(_ package: AppActorPackage, _ product: Product?) -> String {
         if let code = package.currencyCode, !code.isEmpty { return code }
-        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
+        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *), let product {
             return product.priceFormatStyle.currencyCode
         }
-        // iOS 15 exposes no currency code on the format style. The frozen
-        // contract types this as a string, so the honest answer for "unknown"
-        // is the empty one — the runtime hides a component whose variable
-        // resolves to an empty string the same way it hides a missing one.
+        // iOS 15 exposes no currency code on the format style, and the frozen
+        // contract types this as a string -- the runtime hides an empty value
+        // the same way it hides a missing one.
         return ""
     }
 
-    /// One package as the runtime will see it.
-    ///
-    /// `product` is optional because a package can outlive its StoreKit
-    /// product — pulled from App Store Connect, or simply not returned by a
-    /// flaky `Product.products(for:)`. When it is missing every subscription
-    /// field degrades to its "not a subscription" value rather than dropping
-    /// the package: the document still needs `{{package.priceString}}` to
-    /// render, and `AppActorPackage` alone can answer that.
+    /// One package as the runtime will see it. `product` is optional because a
+    /// package can outlive its StoreKit product; every subscription field then
+    /// degrades rather than dropping the package, since the document still
+    /// needs `{{package.priceString}}` and `AppActorPackage` can answer that.
     static func make(package: AppActorPackage, product: Product?) async -> [String: Any] {
         let price = product?.price ?? package.price ?? 0
         let priceString = product.map { money(price, $0) } ?? package.localizedPriceString
@@ -131,7 +109,7 @@ enum AppActorScreenPackagePayload {
             "id": package.id,
             "priceString": priceString,
             "price": NSDecimalNumber(decimal: price).doubleValue,
-            "currencyCode": product.map { currencyCode(package, $0) } ?? (package.currencyCode ?? ""),
+            "currencyCode": currencyCode(package, product),
             "periodUnit": period.map { wireUnit($0.unit) } ?? "month",
             "periodCount": period?.value ?? 0,
             "periodString": period.map { periodString(unit: $0.unit, count: $0.value) } ?? "",

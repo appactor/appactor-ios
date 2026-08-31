@@ -5,6 +5,17 @@
 - Added: `AppActor.shared.presentScreen(_:)` presents a server-driven screen — a JSON document published from the dashboard, rendered on device in a `WKWebView` behind a narrow message handler that carries only purchase, restore, close, `openUrl` and telemetry. Returns `.purchased`, `.restored` or `.dismissed`; throws rather than presenting a screen that did not render, so a bundled paywall stays a usable fallback.
 - Added: `AppActor.shared.onScreenEvent` delivers screen analytics (`impression`, `screen_view`, `cta_tap`, `purchase_started`, `purchase_completed`, `purchase_cancelled`, `dismiss`, `fallback_shown`, `slow_first_paint`).
 - The screen runtime is embedded in the SDK rather than fetched, so a published screen opens with no connection once its document has been cached. Regenerate it with `./scripts/sync_screen_runtime.sh`.
+- Fixed: a presented screen could navigate away from the page the SDK built for it. Only the exact request handed to `loadSimulatedRequest` is allowed now, and only once — a document that reached `location.href` can no longer replace the shell while the purchase bridge stays live.
+- Fixed: `presentScreen(_:)` no longer suspends forever when UIKit refuses the presentation (a presenter already presenting, or mid-transition). It throws, and releases the one-screen-at-a-time claim, instead of leaving every later call to refuse.
+- Fixed: `protocol_version` is compared exactly. `1.5` and `true` were both read as version 1 and their messages processed.
+- Fixed: the walk that collects a document's packages counted array elements against its node budget instead of components, so a screen well inside the schema's limit could silently drop a plan near the end of the tree.
+- Fixed: `openUrl`'s length bound counts UTF-16 units, matching the shared policy it backstops. Grapheme clusters made the native copy the looser of the two.
+- Fixed: the init context sends a BCP 47 language tag (`en-US`), not an ICU identifier (`en_US`), as the bridge contract specifies.
+- Fixed: the screen's message handler is removed on the main actor in `finish()` rather than in `deinit`, which is not guaranteed to run there.
+- Changed: `AppActorScreenEvent` is `Sendable`, so an analytics layer behind an actor can capture it.
+- Added: `image { ref: … }` sources are reported at presentation time. The SDK has no asset base to resolve them against yet, and they would otherwise render as nothing with no diagnostic.
+- Fixed: a screen (and every other remote-config value) no longer fails to load offline after the app is relaunched. The SDK probed without the user context, fell back to a good document on disk, then discarded it before a user-context refetch that could not reach the network — so the copy it already had was thrown away. It is now kept until an answer exists to replace it. A failed refetch also no longer records "this project needs the user context", which had pinned every later call to a context it could not fetch.
+- Added: `scripts/test_ios.sh` runs the suite on a simulator. `swift test` targets macOS, where 721 lines of screen tests are compiled out.
 
 ## 0.1.13
 

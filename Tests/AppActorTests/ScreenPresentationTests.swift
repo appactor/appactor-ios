@@ -173,42 +173,37 @@ final class ScreenPresentationTests: XCTestCase {
         XCTAssertEqual(client.getRemoteConfigsCalls.count, before, "no network call should have been attempted")
     }
 
-    func testAColdLaunchWithNoNetworkCannotReachTheDiskCachedDocumentYet() async throws {
-        // Documents what actually happens on a relaunch with no connection, so
-        // that it changes deliberately rather than by accident.
+    func testAColdLaunchWithNoNetworkStillReachesTheDiskCachedDocument() async throws {
+        // A relaunch in airplane mode: same disk, empty memory, nothing
+        // answering the network.
         //
-        // The document IS on disk and `RemoteConfigManager` finds it. What
-        // fails is what happens next: the manager records "this response does
-        // not need user context" in memory only, so a fresh process cannot
-        // know it, and it always follows the public result with a
-        // user-context refetch. Offline that refetch fails, and the failure
-        // discards the public result the fallback had already produced.
+        // This used to fail with `.network` before the document was even read.
+        // `RemoteConfigManager` recorded "this response does not need user
+        // context" in memory only, so a fresh process always followed the
+        // public result with a user-context refetch -- and offline, that
+        // refetch's failure threw away the public result the disk fallback had
+        // already produced.
         //
-        // Not fixed here: the obvious repair -- serve the public result when
-        // the user refetch fails offline -- would break the deliberate
-        // invariant that
-        // `RemoteConfigManagerTests.testUserRequiredPublicProbeIsNotReusedAfterUserFetchFailure`
-        // pins. The invariant-preserving repair is to persist the
-        // `requiresUserContext` decision alongside the cache entry, which
-        // changes remote-config behaviour for every consumer and belongs in
-        // its own change.
+        // Now the public result survives, so the document is reached. The call
+        // still fails, but one stage later and for a different reason: the
+        // prices are not on disk. That distinction is the point of this test —
+        // "we cannot read the screen" and "we can read the screen but not
+        // price it" need different fixes, and only the second one is left.
         configure(apiKey: "pk_test_screen_cold_disk")
         serveDocument(key: "screen.paywall_main", lookupKey: "paywall_main")
         _ = try await appactor.getRemoteConfigs()
 
-        // Same disk, empty memory, nothing answering the network -- a relaunch.
         client.getRemoteConfigsHandler = { _, _, _, _ in
             throw AppActorError.networkError(URLError(.notConnectedToInternet))
         }
         configure(apiKey: "pk_test_screen_cold_disk")
         XCTAssertNil(appactor.cachedRemoteConfigs, "memory must be cold for this to prove anything")
 
-        do {
-            _ = try await appactor.presentScreen("paywall_main")
-            XCTFail("expected the cold offline launch to fail while this limitation stands")
-        } catch let error as AppActorError {
-            XCTAssertEqual(error.kind, .network)
-        }
+        let message = await failureMessage("paywall_main")
+        XCTAssertTrue(
+            message.contains("names no packages"),
+            "the disk-cached document should be reached; got: \(message)"
+        )
     }
 
     func testAFirstLaunchWithNoNetworkAndNoCacheFailsHonestly() async {

@@ -58,13 +58,25 @@ for f in "$RUNTIME_JS" "$SHELL_HTML"; do
     echo "error: $f contains \\# , the raw-string escape introducer; embedding it would silently rewrite the runtime." >&2
     exit 1
   fi
+  # Same class of silent rewrite, different mechanism: Swift normalises CR and
+  # CRLF inside a multiline literal to LF, so a carriage return -- from a
+  # bundler run on a CRLF checkout, or one sitting inside a JS string constant
+  # -- would leave the embedded runtime no longer byte-identical to the one
+  # that was built and tested, while the header below still claimed it was.
+  # Escaping it is not enough to be safe here: a CR that is part of the source
+  # is a sign the build is not the one we think it is.
+  if LC_ALL=C grep -q "$(printf '\r')" "$f"; then
+    echo "error: $f contains a carriage return; Swift would normalise it away and the embedded runtime would stop matching the built one." >&2
+    exit 1
+  fi
 done
 
 # Swift rejects unprintable ASCII in source, and the minified runtime carries a
 # literal U+0001 as an array join separator. Inside a `#"""` literal the escape
 # hatch is `\#u{..}`, which produces the same byte without the compiler ever
 # seeing it. Newline and tab are left alone -- both are legal in a multiline
-# literal and rewriting them would only make the file unreadable.
+# literal and rewriting them would only make the file unreadable. CR is not in
+# the class either, but it is rejected outright above rather than escaped.
 escape_control() {
   perl -0pe 's/([\x00-\x08\x0B\x0C\x0E-\x1F\x7F])/sprintf("\\#u{%02X}", ord($1))/ge'
 }

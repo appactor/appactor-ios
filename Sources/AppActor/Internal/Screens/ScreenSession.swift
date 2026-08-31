@@ -2,11 +2,9 @@ import Foundation
 
 /// Everything the screen needs from the world around it, behind two protocols.
 ///
-/// This is what lets the whole bridge be tested on the macOS host: the session
-/// owns the protocol, the request matching, the purchase state machine and the
-/// watchdog, and none of that needs a `WKWebView` or a `UIViewController` to
-/// exercise. The WebKit layer implements ``AppActorScreenHost`` and does
-/// nothing but move bytes.
+/// This is what lets the bridge be tested on the macOS host: the session owns
+/// the protocol, request matching, the purchase state machine and the watchdog,
+/// none of which need WebKit. The WebKit layer just moves bytes.
 @MainActor
 protocol AppActorScreenHost: AnyObject {
     /// Delivers a batch to the runtime. Always a batch, never a single message.
@@ -66,7 +64,11 @@ public enum AppActorScreenOutcome: Sendable, Equatable {
 /// The names are a closed, frozen list (`FROZEN.md` §1) because
 /// `purchase_completed` is tied to historical revenue attribution. Adding a
 /// name is allowed; renaming one is not.
-public struct AppActorScreenEvent {
+/// `@unchecked` because `properties` is `[String: Any]`: its contents can only
+/// be immutable `JSONSerialization` output from one runtime message, and
+/// nothing writes to it after construction. Leaving it non-`Sendable` would
+/// break the README's own example under Swift 6.
+public struct AppActorScreenEvent: @unchecked Sendable {
     /// e.g. `impression`, `screen_view`, `cta_tap`, `purchase_completed`.
     public let name: String
     /// The screen the event came from.
@@ -74,12 +76,9 @@ public struct AppActorScreenEvent {
     public let properties: [String: Any]
 }
 
-/// Routes bridge traffic for one presented screen.
-///
-/// Owns the request/response matching for purchase and restore. The runtime
-/// refuses any result it cannot match to an in-flight request by `requestId`
-/// (day-1 rule #14) and answers with `unmatched_purchase_result`, so every
-/// reply this file sends carries back the id it was asked with.
+/// Routes bridge traffic for one presented screen, and owns request/response
+/// matching for purchase and restore: the runtime refuses any result it cannot
+/// match by `requestId` (day-1 rule #14), so every reply carries its id back.
 @MainActor
 final class AppActorScreenSession {
 
@@ -91,7 +90,8 @@ final class AppActorScreenSession {
 
     private var didBecomeReady = false
     private var watchdog: Task<Void, Never>?
-    private var work: [Task<Void, Never>] = []
+    private var work: [Int: Task<Void, Never>] = [:]
+    private var nextWorkToken = 0
     private(set) var outcome: AppActorScreenOutcome = .dismissed
 
     /// Fires when the runtime never reports `ready`. Distinct from the
@@ -138,15 +138,12 @@ final class AppActorScreenSession {
         }
     }
 
-    /// Cancels the watchdog and every in-flight reply.
-    ///
-    /// Called when the screen goes away. A purchase that resolves after this
-    /// point must not post into a dead web view, and — more importantly — must
-    /// not deliver a result the user can no longer see.
+    /// Cancels the watchdog and every in-flight reply. A purchase that resolves
+    /// after the screen is gone must not deliver a result nobody can see.
     func cancel() {
         watchdog?.cancel()
         watchdog = nil
-        for task in work { task.cancel() }
+        for task in work.values { task.cancel() }
         work.removeAll()
     }
 
@@ -217,10 +214,12 @@ final class AppActorScreenSession {
             return
         }
 
-        // The runtime applies this policy too, but it applies it inside the
-        // page. This copy is the one a compromised document cannot reach, so
-        // it has to be at least as strict -- not merely similar.
-        guard raw.count <= 2048, raw.rangeOfCharacter(from: Self.rejectedURLCharacters) == nil else {
+        // The runtime applies this policy too, but inside the page. This copy
+        // is the one a compromised document cannot reach, so it has to be at
+        // least as strict -- hence `utf16.count`, matching the shared policy's
+        // JS string measure. Graphemes would make it looser: 2048 emoji are
+        // ~8 KB of UTF-16.
+        guard raw.utf16.count <= 2048, raw.rangeOfCharacter(from: Self.rejectedURLCharacters) == nil else {
             Log.screens.warn("Screen \(document.lookupKey) sent an openUrl with an unusable URL")
             return
         }
@@ -374,20 +373,14 @@ final class AppActorScreenSession {
     /// one per tap.
     private func track(_ operation: @escaping () async -> Void) {
         // The task has to be able to drop its own handle when it finishes, and
-        // it cannot capture a variable it is itself being assigned to. A box
-        // gives the closure a stable thing to read once the assignment has
-        // happened, which is always after the closure's first suspension.
-        let box = TaskBox()
-        let task = Task { [weak self] in
+        // it cannot capture the variable it is itself being assigned to. A
+        // token captured by value sidesteps that without a box: the same
+        // pattern `PaymentProcessor` uses for its timeout tasks.
+        nextWorkToken += 1
+        let token = nextWorkToken
+        work[token] = Task { [weak self] in
             await operation()
-            guard let self, let handle = box.task else { return }
-            self.work.removeAll { $0 == handle }
+            self?.work[token] = nil
         }
-        box.task = task
-        work.append(task)
-    }
-
-    private final class TaskBox {
-        var task: Task<Void, Never>?
     }
 }

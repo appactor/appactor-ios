@@ -91,7 +91,8 @@ actor AppActorRemoteConfigManager {
                 return try await refetchWithUserContext(
                     userContext: userContext,
                     publicContext: preferredContext,
-                    modeContext: modeContext
+                    modeContext: modeContext,
+                    publicResult: cached
                 )
             }
             lastCacheContext = preferredContext
@@ -108,7 +109,8 @@ actor AppActorRemoteConfigManager {
             return try await refetchWithUserContext(
                 userContext: userContext,
                 publicContext: preferredContext,
-                modeContext: modeContext
+                modeContext: modeContext,
+                publicResult: configs
             )
         }
 
@@ -392,18 +394,57 @@ actor AppActorRemoteConfigManager {
         return requiresUserContextByContext[publicContext] != false
     }
 
+    /// Re-runs the fetch with the user context after a public probe.
+    ///
+    /// Two cases, and they differ in whether the public body is *safe*.
+    ///
+    /// **The server said this project needs the user context.** Then the public
+    /// body is a probe that is wrong for this user, and it must not survive --
+    /// on disk or anywhere else. It is dropped before the refetch, so a later
+    /// process cannot find it either, and a failed refetch is an error.
+    ///
+    /// **We have never been told.** That is the offline cold start: the probe
+    /// never reached the server, it fell back to a perfectly good document on
+    /// disk, and the refetch cannot reach the network either. Dropping the
+    /// public copy first threw that document away and left the caller with an
+    /// error -- a screen that was on disk did not open, and the SDK looked
+    /// like it had cached nothing. Here the copy is kept until a user-context
+    /// answer exists to replace it, and a network failure falls back to it.
     private func refetchWithUserContext(
         userContext: CacheContext,
         publicContext: CacheContext,
-        modeContext: ModeContext
+        modeContext: ModeContext,
+        publicResult: AppActorRemoteConfigs?
     ) async throws -> AppActorRemoteConfigs {
-        updateModeDecision(modeContext: modeContext, requiresUserContext: true)
-        await discardPublicProbeCache(context: publicContext)
+        let publicBodyIsUnsafe = requiresUserContextByContext[publicContext] == true
+        if publicBodyIsUnsafe {
+            updateModeDecision(modeContext: modeContext, requiresUserContext: true)
+            await discardPublicProbeCache(context: publicContext)
+        }
+
         if let cached = freshMemoryCache(for: userContext) {
+            updateModeDecision(modeContext: modeContext, requiresUserContext: true)
+            if !publicBodyIsUnsafe { await discardPublicProbeCache(context: publicContext) }
             lastCacheContext = userContext
             return cached
         }
-        return try await fetchCoalesced(context: userContext)
+
+        do {
+            let configs = try await fetchCoalesced(context: userContext)
+            updateModeDecision(modeContext: modeContext, requiresUserContext: true)
+            if !publicBodyIsUnsafe { await discardPublicProbeCache(context: publicContext) }
+            return configs
+        } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
+            guard !publicBodyIsUnsafe, let publicResult else { throw error }
+            // The mode decision stays unrecorded on this path. Writing
+            // "needs the user context" from a refetch that never reached the
+            // server pins every later call to a context it cannot fetch --
+            // so the first offline failure made all the ones after it fail
+            // too, even though the answer was on disk the whole time.
+            Log.sdk.debug("Remote config user-context refetch failed offline — keeping the public result")
+            lastCacheContext = publicContext
+            return publicResult
+        }
     }
 
     private func recordRequiresUserContext(_ requiresUserContext: Bool?, for context: CacheContext) {
