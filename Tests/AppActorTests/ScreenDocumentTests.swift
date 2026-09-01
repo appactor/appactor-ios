@@ -105,9 +105,9 @@ final class ScreenDocumentTests: XCTestCase {
 
     func testFindsPackagesInDocumentOrder() throws {
         let parsed = try document(minimal(slots: """
-        {"body":[{"id":"s","type":"stack","children":[
-          {"id":"p1","type":"package","packageId":"pkg_annual","children":[]},
-          {"id":"p2","type":"package","packageId":"pkg_monthly","children":[]}
+        {"body":[{"id":"s","type":"Column","children":[
+          {"id":"p1","type":"PackageCard","packageId":"pkg_annual","children":[]},
+          {"id":"p2","type":"PackageCard","packageId":"pkg_monthly","children":[]}
         ]}]}
         """))
         XCTAssertEqual(parsed.packageIds, ["pkg_annual", "pkg_monthly"])
@@ -116,8 +116,8 @@ final class ScreenDocumentTests: XCTestCase {
     func testDeduplicatesARepeatedPackage() throws {
         let parsed = try document(minimal(slots: """
         {"body":[
-          {"id":"p1","type":"package","packageId":"pkg_annual","children":[]},
-          {"id":"p2","type":"package","packageId":"pkg_annual","children":[]}
+          {"id":"p1","type":"PackageCard","packageId":"pkg_annual","children":[]},
+          {"id":"p2","type":"PackageCard","packageId":"pkg_annual","children":[]}
         ]}
         """))
         XCTAssertEqual(parsed.packageIds, ["pkg_annual"])
@@ -126,8 +126,8 @@ final class ScreenDocumentTests: XCTestCase {
     func testReadsCompareToForDiscounts() throws {
         let parsed = try document(minimal(slots: """
         {"body":[
-          {"id":"p1","type":"package","packageId":"pkg_annual","compareTo":"pkg_monthly","children":[]},
-          {"id":"p2","type":"package","packageId":"pkg_monthly","children":[]}
+          {"id":"p1","type":"PackageCard","packageId":"pkg_annual","compareTo":"pkg_monthly","children":[]},
+          {"id":"p2","type":"PackageCard","packageId":"pkg_monthly","children":[]}
         ]}
         """))
         XCTAssertEqual(parsed.comparisons, ["pkg_annual": "pkg_monthly"])
@@ -138,15 +138,15 @@ final class ScreenDocumentTests: XCTestCase {
         // so the package inside one still has to be priced.
         let parsed = try document(minimal(slots: """
         {"body":[{"id":"x","type":"toggle",
-          "fallback":{"id":"p1","type":"package","packageId":"pkg_annual","children":[]}}]}
+          "fallback":{"id":"p1","type":"PackageCard","packageId":"pkg_annual","children":[]}}]}
         """))
         XCTAssertEqual(parsed.packageIds, ["pkg_annual"])
     }
 
     func testWalksEverySlot() throws {
         let parsed = try document(minimal(slots: """
-        {"body":[{"id":"p1","type":"package","packageId":"pkg_a","children":[]}],
-         "bottom":[{"id":"p2","type":"package","packageId":"pkg_b","children":[]}]}
+        {"body":[{"id":"p1","type":"PackageCard","packageId":"pkg_a","children":[]}],
+         "bottom":[{"id":"p2","type":"PackageCard","packageId":"pkg_b","children":[]}]}
         """))
         XCTAssertEqual(Set(parsed.packageIds), ["pkg_a", "pkg_b"])
     }
@@ -156,9 +156,9 @@ final class ScreenDocumentTests: XCTestCase {
         // the first package in document order when nothing else is chosen. A
         // default that changes between launches would be a very quiet bug.
         let json = minimal(slots: """
-        {"zzz":[{"id":"p3","type":"package","packageId":"pkg_z","children":[]}],
-         "aaa":[{"id":"p1","type":"package","packageId":"pkg_a","children":[]}],
-         "mmm":[{"id":"p2","type":"package","packageId":"pkg_m","children":[]}]}
+        {"zzz":[{"id":"p3","type":"PackageCard","packageId":"pkg_z","children":[]}],
+         "aaa":[{"id":"p1","type":"PackageCard","packageId":"pkg_a","children":[]}],
+         "mmm":[{"id":"p2","type":"PackageCard","packageId":"pkg_m","children":[]}]}
         """)
         for _ in 0..<20 {
             XCTAssertEqual(try document(json).packageIds, ["pkg_a", "pkg_m", "pkg_z"])
@@ -167,16 +167,16 @@ final class ScreenDocumentTests: XCTestCase {
 
     func testIgnoresAPackageWithNoIdentifier() throws {
         let parsed = try document(minimal(slots: """
-        {"body":[{"id":"p1","type":"package","packageId":"","children":[]},
-                 {"id":"p2","type":"package","children":[]}]}
+        {"body":[{"id":"p1","type":"PackageCard","packageId":"","children":[]},
+                 {"id":"p2","type":"PackageCard","children":[]}]}
         """))
         XCTAssertTrue(parsed.packageIds.isEmpty)
     }
 
     private func nested(depth: Int) -> String {
-        var node = #"{"id":"leaf","type":"package","packageId":"pkg_deep","children":[]}"#
+        var node = #"{"id":"leaf","type":"PackageCard","packageId":"pkg_deep","children":[]}"#
         for i in 0..<depth {
-            node = #"{"id":"n\#(i)","type":"stack","children":[\#(node)]}"#
+            node = #"{"id":"n\#(i)","type":"Column","children":[\#(node)]}"#
         }
         return "{\"body\":[\(node)]}"
     }
@@ -200,7 +200,7 @@ final class ScreenDocumentTests: XCTestCase {
 
     func testSurvivesAVeryWideDocument() throws {
         let many = (0..<5_000)
-            .map { #"{"id":"p\#($0)","type":"package","packageId":"pkg_\#($0)","children":[]}"# }
+            .map { #"{"id":"p\#($0)","type":"PackageCard","packageId":"pkg_\#($0)","children":[]}"# }
             .joined(separator: ",")
         let parsed = try document(minimal(slots: "{\"body\":[\(many)]}"))
         XCTAssertLessThanOrEqual(parsed.packageIds.count, 400)
@@ -217,10 +217,10 @@ final class ScreenDocumentTests: XCTestCase {
         // 300 components, every one of them carrying a fallback subtree, and
         // the package that matters last. Comfortably inside the schema's 400.
         let filler = (0..<299)
-            .map { #"{"id":"t\#($0)","type":"text","value":"x","fallback":{"id":"f\#($0)","type":"text","value":"y"}}"# }
+            .map { #"{"id":"t\#($0)","type":"Text","value":"x","fallback":{"id":"f\#($0)","type":"Text","value":"y"}}"# }
             .joined(separator: ",")
         let parsed = try document(
-            minimal(slots: #"{"body":[\#(filler),{"id":"p","type":"package","packageId":"pkg_last","children":[]}]}"#)
+            minimal(slots: #"{"body":[\#(filler),{"id":"p","type":"PackageCard","packageId":"pkg_last","children":[]}]}"#)
         )
         XCTAssertEqual(parsed.packageIds, ["pkg_last"])
     }
@@ -231,12 +231,12 @@ final class ScreenDocumentTests: XCTestCase {
     func testCollectsAssetRefs() throws {
         let ref = String(repeating: "a", count: 32)
         let parsed = try document(
-            minimal(slots: #"{"body":[{"id":"i","type":"image","src":{"ref":"\#(ref)"},"width":10,"height":10}]}"#)
+            minimal(slots: #"{"body":[{"id":"i","type":"Image","src":{"ref":"\#(ref)"},"width":10,"height":10}]}"#)
         )
         XCTAssertEqual(parsed.assetRefs, [ref])
 
         let byUrl = try document(
-            minimal(slots: #"{"body":[{"id":"i","type":"image","src":{"url":"https://example.com/a.png"},"width":10,"height":10}]}"#)
+            minimal(slots: #"{"body":[{"id":"i","type":"Image","src":{"url":"https://example.com/a.png"},"width":10,"height":10}]}"#)
         )
         XCTAssertTrue(byUrl.assetRefs.isEmpty)
     }
@@ -265,7 +265,7 @@ final class ScreenDocumentTests: XCTestCase {
 
     func testRoundTripsADocumentThroughTheInitEnvelope() throws {
         let parsed = try document(minimal(slots: """
-        {"body":[{"id":"t","type":"text","value":"₺39,99 \\" \\\\ 🧾"}]}
+        {"body":[{"id":"t","type":"Text","value":"₺39,99 \\" \\\\ 🧾"}]}
         """))
         let message = AppActorScreenInbound(.initialise, payload: ["document": parsed.json])
         let base64 = try XCTUnwrap(message.base64())

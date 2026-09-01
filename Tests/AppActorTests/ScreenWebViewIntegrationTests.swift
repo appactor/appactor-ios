@@ -48,16 +48,16 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
          "minRuntime":"1.0.0","layout":"sticky_footer",
          "slots":{
            "body":[
-             {"id":"title","type":"text","value":"AppActor <b>Pro</b>","element":"h1"},
-             {"id":"price","type":"text","value":"{{package.priceString}} / {{package.periodString}}"},
-             {"id":"card","type":"package","packageId":"pkg_annual","children":[
-               {"id":"cardLabel","type":"text","value":"Annual"}
+             {"id":"title","type":"Text","value":"AppActor <b>Pro</b>","element":"h1"},
+             {"id":"price","type":"Text","value":"{{package.priceString}} / {{package.periodString}}"},
+             {"id":"card","type":"PackageCard","packageId":"pkg_annual","children":[
+               {"id":"cardLabel","type":"Text","value":"Annual"}
              ]}
            ],
            "bottom":[
-             {"id":"cta","type":"button","label":"Continue","action":{"type":"purchase"}},
-             {"id":"restore","type":"button","label":"Restore","action":{"type":"restore"}},
-             {"id":"close","type":"button","label":"Not now","action":{"type":"close"}}
+             {"id":"cta","type":"Button","label":"Continue","action":{"type":"purchase"}},
+             {"id":"restore","type":"Button","label":"Restore","action":{"type":"restore"}},
+             {"id":"close","type":"Button","label":"Not now","action":{"type":"close"}}
            ]
          }}
         """
@@ -428,7 +428,7 @@ final class ScreenWebViewIntegrationTests: XCTestCase {
         let json = """
         {"schemaVersion":1,"lookupKey":"paywall_main","kind":"paywall",
          "minRuntime":"99.0.0","layout":"fill",
-         "slots":{"body":[{"id":"t","type":"text","value":"should never appear"}]}}
+         "slots":{"body":[{"id":"t","type":"Text","value":"should never appear"}]}}
         """
         let document = try AppActorScreenDocument.parse(
             try JSONDecoder().decode(AppActorConfigValue.self, from: Data(json.utf8)),

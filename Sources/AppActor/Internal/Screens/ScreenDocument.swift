@@ -19,7 +19,7 @@ struct AppActorScreenDocument {
 
     /// `packageId` → the `packageId` its `compareTo` names.
     ///
-    /// Extracted here because `compareTo` sits on the document's `package`
+    /// Extracted here because `compareTo` sits on the document's `PackageCard`
     /// components but `discountPercent` has to be computed natively — the
     /// runtime treats every `package.*` field as pass-through.
     let comparisons: [String: String]
@@ -31,7 +31,7 @@ struct AppActorScreenDocument {
     /// wait on six `Product` lookups it will never display.
     let packageIds: [String]
 
-    /// `image { ref: … }` sources found in the document.
+    /// `Image { ref: … }` sources found in the document.
     ///
     /// A ref is half an address: the runtime resolves it against `assetBase`
     /// and draws nothing without one. No asset host exists yet, so collecting
@@ -97,7 +97,7 @@ extension AppActorScreenDocument {
         )
     }
 
-    /// Walks every slot for `package` components.
+    /// Walks every slot for `PackageCard` components.
     ///
     /// Iterative, with a node budget: the document is server-supplied and a
     /// hand-edited one could nest deeply enough to exhaust the stack.
@@ -106,7 +106,7 @@ extension AppActorScreenDocument {
     /// the schema's `LIMITS.maxNodes` counts. Counting dequeued elements made
     /// it stricter than publish validation: arrays and every `fallback` burned
     /// budget too, so a screen well inside the ceiling could run out mid-walk
-    /// and silently drop a `package`.
+    /// and silently drop a `PackageCard`.
     private static func collectPackages(_ document: [String: Any]) -> (comparisons: [String: String], order: [String], assetRefs: [String]) {
         let maxNodes = 400
         var comparisons: [String: String] = [:]
@@ -134,7 +134,7 @@ extension AppActorScreenDocument {
                 assetRefs.append(ref)
             }
 
-            if object["type"] as? String == "package", let id = object["packageId"] as? String, !id.isEmpty {
+            if object["type"] as? String == "PackageCard", let id = object["packageId"] as? String, !id.isEmpty {
                 if seen.insert(id).inserted { order.append(id) }
                 if let against = object["compareTo"] as? String, !against.isEmpty {
                     comparisons[id] = against
@@ -142,8 +142,9 @@ extension AppActorScreenDocument {
             }
 
             if let children = object["children"] as? [Any] { queue.append(contentsOf: children) }
-            // A `package` can hide behind an unknown component's fallback, and
-            // that fallback is exactly what an older runtime will render.
+            // A `PackageCard` can hide behind an unknown component's
+            // fallback, and that fallback is exactly what an older runtime
+            // will render.
             if let fallback = object["fallback"] { queue.append(fallback) }
         }
 

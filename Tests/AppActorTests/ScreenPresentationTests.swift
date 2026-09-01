@@ -46,7 +46,7 @@ final class ScreenPresentationTests: XCTestCase {
         let json = """
         {"schemaVersion":1,"lookupKey":"\(lookupKey)","kind":"paywall",
          "minRuntime":"1.0.0","layout":"fill",
-         "slots":{"body":[{"id":"t","type":"text","value":"Pro"}]}}
+         "slots":{"body":[{"id":"t","type":"Text","value":"Pro"}]}}
         """
         return try! JSONDecoder().decode(AppActorConfigValue.self, from: Data(json.utf8))
     }
