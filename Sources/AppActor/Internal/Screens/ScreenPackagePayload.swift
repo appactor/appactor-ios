@@ -148,7 +148,7 @@ enum AppActorScreenPackagePayload {
     /// Fills in `discountPercent` for every package the document asks to
     /// compare, then returns the list.
     ///
-    /// `compareTo` lives on the document's `package` component (the schema
+    /// `compareTo` lives on the document's `PackageCard` component (the schema
     /// documents it as "`discountPercent` is computed against this one"), and
     /// the runtime treats every `package.*` field as pass-through. So the
     /// comparison has to happen on this side, and it happens against the daily
