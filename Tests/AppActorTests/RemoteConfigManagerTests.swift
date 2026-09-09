@@ -488,7 +488,7 @@ final class RemoteConfigManagerTests: XCTestCase {
         // the probe falls back to a perfectly good document on disk -- and the
         // refetch that follows cannot reach the network either. Dropping the
         // public copy before that refetch threw the good document away, so a
-        // screen that was sitting on disk did not open.
+        // document that was sitting on disk did not load.
         await etagManager.storeFresh(
             makeDTOs([("layout", .string("cached"), "string")]),
             for: .remoteConfigsContext(appUserId: nil, appVersion: "2.1.0", country: "TR"),

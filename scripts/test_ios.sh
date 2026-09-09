@@ -3,18 +3,15 @@
 # Runs the test suite on an iOS simulator.
 #
 # `swift test` builds for the macOS destination, where `canImport(UIKit)` is
-# false. Two suites are fenced on it -- `ScreenPresentationTests` and
-# `ScreenWebViewIntegrationTests` -- so a plain `swift test` silently skips
-# them: they are the only coverage for `presentScreen`'s glue (document
-# lookup, the offline path, package-resolution failures) and for the one thing
-# that cannot be checked without a running WebKit, which is whether the runtime
-# boots at all under the shell's CSP. Without this lane a CSP or shell
-# regression from `sync_screen_runtime.sh` ships green.
+# false, so anything fenced on it is silently skipped rather than reported --
+# and the platform the SDK ships on is the one that never ran. This lane runs
+# the same suite where UIKit exists. It caught assertions that had hardcoded
+# `platform == "macos"` the first time it was used.
 #
 # Usage:
 #   scripts/test_ios.sh                 # first available iPhone simulator
 #   scripts/test_ios.sh 'iPhone 17 Pro' # a named one
-#   scripts/test_ios.sh '' ScreenWebViewIntegrationTests   # one suite
+#   scripts/test_ios.sh '' BootstrapTests                  # one suite
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

@@ -199,20 +199,10 @@ actor AppActorOfferingsManager {
     /// The last `request_id` from an offerings response.
     var requestId: String? { lastRequestId }
 
-    /// Resolves several StoreKit products in one round trip.
-    ///
-    /// A screen renders every package at once, so asking for them one at a time
-    /// would put N StoreKit round trips on the path to first paint. Goes through
-    /// the manager's injected fetcher so tests can still stand in for the store.
-    func storeKitProducts(for identifiers: Set<String>) async throws -> [String: Product] {
-        guard !identifiers.isEmpty else { return [:] }
-        return try await productFetcher.fetchProducts(for: identifiers)
-    }
-
-    /// Resolves a single StoreKit product. The one-identifier case of
-    /// ``storeKitProducts(for:)``, not a second path to the fetcher.
+    /// Resolves a single StoreKit product through the manager's injected fetcher.
     func storeKitProduct(for identifier: String) async throws -> Product? {
-        try await storeKitProducts(for: [identifier])[identifier]
+        let products = try await productFetcher.fetchProducts(for: [identifier])
+        return products[identifier]
     }
 
     /// Toggle background mode (longer TTL).

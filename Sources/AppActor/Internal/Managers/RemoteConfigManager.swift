@@ -407,7 +407,7 @@ actor AppActorRemoteConfigManager {
     /// never reached the server, it fell back to a perfectly good document on
     /// disk, and the refetch cannot reach the network either. Dropping the
     /// public copy first threw that document away and left the caller with an
-    /// error -- a screen that was on disk did not open, and the SDK looked
+    /// error -- a value that was on disk did not load, and the SDK looked
     /// like it had cached nothing. Here the copy is kept until a user-context
     /// answer exists to replace it, and a network failure falls back to it.
     private func refetchWithUserContext(
