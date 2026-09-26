@@ -324,8 +324,25 @@ final class IdentitySessionTests: XCTestCase {
         let configs = try await fetch.value
 
         let anonymousId = try XCTUnwrap(storage.currentAppUserId)
+        XCTAssertTrue(anonymousId.hasPrefix("appactor-anon-"))
         XCTAssertEqual(configs["tier"], .string(anonymousId))
         XCTAssertEqual(appactor.cachedRemoteConfigs?["tier"], .string(anonymousId))
+    }
+
+    func testRemoteConfigFetchedForAnIdSwitchedAwayFromIsFetchedAgain() async throws {
+        let fetchStarted = calledExpectation("user_a's fetch sent")
+        let releaseFetch = AsyncSignal()
+        serveUserTargetedRemoteConfig(holdingUserA: fetchStarted, until: releaseFetch)
+
+        let fetch = Task { try await appactor.getRemoteConfigs() }
+        await fulfillment(of: [fetchStarted], timeout: 2)
+        // Same session, no cache clear and so no cancel: only the ID check catches it.
+        storage.setAppUserId("user_z")
+        await releaseFetch.signal()
+        let configs = try await fetch.value
+
+        XCTAssertEqual(configs["tier"], .string("user_z"))
+        XCTAssertEqual(appactor.cachedRemoteConfigs?["tier"], .string("user_z"))
     }
 
     func testRemoteConfigFetchedBeforeResetIsNotPublishedIntoTheNextSession() async throws {
