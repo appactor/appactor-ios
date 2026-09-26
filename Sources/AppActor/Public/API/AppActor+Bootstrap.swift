@@ -14,6 +14,10 @@ extension AppActor {
         let verboseBootstrap = (paymentConfig?.options.logLevel ?? AppActorLogger.level) >= .verbose
         let watcher = transactionWatcher
 
+        // First: the cache seed below already notifies the host, which may enqueue work.
+        if let processor = paymentProcessor, let storage = paymentStorage {
+            await processor.reassignUnpostedItemsWithRejectedAppUserId(to: storage.ensureAppUserId())
+        }
         // Wire receipt callbacks before Transaction.updates can enqueue work.
         await wireReceiptCustomerInfoUpdateHandler()
 
@@ -128,6 +132,12 @@ extension AppActor {
     /// Otherwise, notifies the host app via callback or auto-purchases.
     @available(iOS 16.4, macOS 14.4, tvOS 16.4, watchOS 9.4, *)
     private func handlePurchaseIntent(_ intent: PurchaseIntent) {
+        // The watcher hands intents over asynchronously, so one can land while reset() runs
+        // or after it. It belongs to the reset session: dropped, neither bought nor queued.
+        guard paymentLifecycle == .configured else {
+            Log.storeKit.info("🍎 PurchaseIntent dropped (SDK not configured): \(intent.product.id)")
+            return
+        }
         guard isBootstrapComplete else {
             // Not yet ready — queue for post-bootstrap processing
             pendingPurchaseIntents.append(intent)

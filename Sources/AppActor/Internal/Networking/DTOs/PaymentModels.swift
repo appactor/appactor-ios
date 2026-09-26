@@ -264,16 +264,56 @@ struct AppActorErrorResponse: Decodable {
 
 enum AppActorPaymentValidation {
 
-    /// Validates an appUserId: non-empty, <=255, not "nan".
+    /// Validates an appUserId by the server's rules. The server rejects every request made with
+    /// an ID that fails them, receipts included, so a purchase by that user would be finished
+    /// on the device and never recorded.
     static func validateAppUserId(_ id: String) throws {
-        guard !id.isEmpty else {
+        let trimmed = id.trimmingCharacters(in: serverTrimmedCharacters)
+        guard !trimmed.isEmpty else {
             throw AppActorError.validationError("appUserId must not be empty")
         }
-        guard id.count <= 255 else {
+        // The server counts UTF-16 code units, as JavaScript does.
+        guard id.utf16.count <= 255 else {
             throw AppActorError.validationError("appUserId must be at most 255 characters")
         }
-        guard id.lowercased() != "nan" else {
-            throw AppActorError.validationError("appUserId must not be 'nan'")
+        guard !id.unicodeScalars.contains("/") else {
+            throw AppActorError.validationError("appUserId must not contain '/'")
+        }
+        guard !id.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
+            throw AppActorError.validationError("appUserId must not contain control characters")
+        }
+        guard !isPlaceholderAppUserId(id) else {
+            throw AppActorError.validationError("appUserId '\(trimmed)' is reserved")
         }
     }
+
+    /// A "no user" stand-in such as "null", "guest" or "0": one of the server's reserved IDs.
+    static func isPlaceholderAppUserId(_ id: String) -> Bool {
+        blockedAppUserIds.contains(id.trimmingCharacters(in: serverTrimmedCharacters).lowercased())
+    }
+
+    static func isValidAppUserId(_ id: String) -> Bool {
+        (try? validateAppUserId(id)) != nil
+    }
+
+    /// Whether `id` is empty once trimmed the way the server trims it. A blank ID passed to
+    /// `configure` means none.
+    static func isBlank(_ id: String) -> Bool {
+        id.trimmingCharacters(in: serverTrimmedCharacters).isEmpty
+    }
+
+    /// The server's `BLOCKED_USER_IDS`, compared lowercased after trimming.
+    private static let blockedAppUserIds: Set<String> = [
+        "null", "(null)", "anonymous", "guest", "-1", "0", "none", "nil", "nan", "no_user",
+        "undefined", "unknown", "unidentified", "[]", "{}", "[object object]",
+    ]
+
+    /// What JavaScript's `String.prototype.trim()` removes, which the server trims with:
+    /// space separators, tab, the line terminators and U+FEFF. Unlike `.whitespacesAndNewlines`
+    /// it keeps U+0085.
+    private static let serverTrimmedCharacters: CharacterSet = {
+        var set = CharacterSet.whitespaces
+        set.insert(charactersIn: "\n\u{0B}\u{0C}\r\u{2028}\u{2029}\u{FEFF}")
+        return set
+    }()
 }

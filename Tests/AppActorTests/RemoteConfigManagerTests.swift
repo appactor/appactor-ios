@@ -599,6 +599,20 @@ final class RemoteConfigManagerTests: XCTestCase {
         XCTAssertNil(configs["str_flag"]?.boolValue)
     }
 
+    /// A number outside Int's range decodes as .double; reading it as an Int is nil, not a trap.
+    func testIntValueOfANumberBeyondIntRangeIsNil() throws {
+        for json in ["9223372036854776000", "1e19", "-1e19", "99999999999999999999"] {
+            let value = try JSONDecoder().decode(AppActorConfigValue.self, from: Data(json.utf8))
+            XCTAssertNil(value.intValue, json)
+        }
+        XCTAssertEqual(try JSONDecoder().decode(AppActorConfigValue.self, from: Data("9223372036854775807".utf8)).intValue, Int.max)
+        XCTAssertEqual(AppActorConfigValue.double(3.0).intValue, 3)
+        XCTAssertEqual(AppActorConfigValue.double(-9.007199254740992e15).intValue, -9_007_199_254_740_992)
+        XCTAssertNil(AppActorConfigValue.double(3.5).intValue)
+        XCTAssertNil(AppActorConfigValue.double(.nan).intValue)
+        XCTAssertNil(AppActorConfigValue.double(.infinity).intValue)
+    }
+
     // MARK: - Empty Response
 
     func testEmptyResponseReturnsEmptyConfigs() async throws {

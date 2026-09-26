@@ -137,11 +137,12 @@ extension AppActorConfigValue {
     }
 
     /// Returns the value as an `Int`, or `nil` if the type doesn't match.
-    /// Accepts `.int` and whole `.double` values (e.g. `3.0` → `3`).
+    /// Accepts `.int` and whole `.double` values within `Int`'s range (e.g. `3.0` → `3`);
+    /// a number too large for `Int`, such as `1e19`, is `nil`.
     public var intValue: Int? {
         switch self {
         case .int(let v): return v
-        case .double(let v) where v == v.rounded(): return Int(v)
+        case .double(let v): return Int(exactly: v)
         default: return nil
         }
     }

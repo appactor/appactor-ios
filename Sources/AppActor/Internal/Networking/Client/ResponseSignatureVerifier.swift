@@ -147,10 +147,10 @@ enum ResponseSignatureVerifier {
 				return .signatureInvalid
 			}
 
-			let bodyString = String(data: body, encoding: .utf8) ?? ""
 			let binding = requestBinding(method: method, target: requestPath, body: requestBody)
-			let payload = "\(sentNonce)\n\(timestampStr)\n\(binding)\n\(bodyString)"
-			guard let payloadData = payload.data(using: .utf8) else {
+			guard let payloadData = signedPayload(
+				header: "\(sentNonce)\n\(timestampStr)\n\(binding)\n", statusCode: response.statusCode, body: body
+			) else {
 				return .signatureInvalid
 			}
 
@@ -181,13 +181,21 @@ enum ResponseSignatureVerifier {
 		}
 
 		let eTag = response.value(forHTTPHeaderField: "ETag") ?? ""
-		let bodyString = String(data: body, encoding: .utf8) ?? ""
-		let payload = "\(saltBase64)\n\(apiKey)\n\(requestPath)\n\(timestampStr)\n\(eTag)\n\(bodyString)"
-		guard let payloadData = payload.data(using: .utf8) else {
+		guard let payloadData = signedPayload(
+			header: "\(saltBase64)\n\(apiKey)\n\(requestPath)\n\(timestampStr)\n\(eTag)\n", statusCode: response.statusCode, body: body
+		) else {
 			return .signatureInvalid
 		}
 
 		return verifySignature(signatureData, payloadData: payloadData, v1Key: v1Key, rootKey: rootKey, now: now)
+	}
+
+	/// The signed bytes: `header`, then the body exactly as received (the server signs the UTF-8
+	/// of its JSON). The status isn't signed, so a 304 must have no body and any other status
+	/// one, as the server sends them: a signed 304 can't pass as a 200. `nil` otherwise.
+	private static func signedPayload(header: String, statusCode: Int, body: Data) -> Data? {
+		guard (statusCode == 304) == body.isEmpty else { return nil }
+		return Data(header.utf8) + body
 	}
 
 	/// Routes signature verification to v1 or v2 based on blob size.

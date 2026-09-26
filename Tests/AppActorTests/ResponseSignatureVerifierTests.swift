@@ -35,8 +35,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
     /// Signs a v1 payload with the test key and returns the base64 signature.
     private func signV1(body: Data, nonce: String, timestamp: String) -> String {
-        let bodyString = String(data: body, encoding: .utf8) ?? ""
-        return signV1(payload: "\(nonce)\n\(timestamp)\n\(requestBinding)\n\(bodyString)")
+        signV1(payload: "\(nonce)\n\(timestamp)\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))")
     }
 
     private func signV1(payload: String) -> String {
@@ -83,9 +82,8 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         intermediateKey: Curve25519.Signing.PrivateKey? = nil,
         rootSigningKey: Curve25519.Signing.PrivateKey? = nil
     ) -> Data {
-        let bodyString = String(data: body, encoding: .utf8) ?? ""
-        return buildV2Blob(
-            payloadString: "\(nonce)\n\(timestamp)\n\(requestBinding)\n\(bodyString)",
+        buildV2Blob(
+            payloadString: "\(nonce)\n\(timestamp)\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))",
             issuedAt: issuedAt, expiresAt: expiresAt,
             intermediateKey: intermediateKey, rootSigningKey: rootSigningKey
         )
@@ -176,12 +174,39 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         XCTAssertEqual(result, .success)
     }
 
+    /// JSON a proxy could put in place of a signed 304's empty body: UTF-16 with a BOM, which a
+    /// UTF-8 decode rejects and JSONDecoder reads.
+    private var forgedUTF16Body: Data {
+        Data([0xFF, 0xFE]) + "{\"customer\":{\"entitlements\":{\"premium\":{\"isActive\":true}}}}".data(using: .utf16LittleEndian)!
+    }
+
+    /// Statuses and bodies a proxy could pair with a signed 304's signature.
+    private var forgedFrom304: [(status: Int, body: Data)] {
+        [(200, forgedUTF16Body), (200, Data()), (304, forgedUTF16Body)]
+    }
+
+    func testNonceBasedSigned304CannotPassAsA200() {
+        let timestampStr = String(Int(now))
+        let headers = [
+            "X-AppActor-Request-Nonce": nonce,
+            "X-AppActor-Signature": signV1(body: Data(), nonce: nonce, timestamp: timestampStr),
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ]
+
+        for (status, body) in forgedFrom304 {
+            let result = ResponseSignatureVerifier.verify(
+                response: makeResponse(headers: headers, statusCode: status), body: body, sentNonce: nonce,
+                apiKey: "", requestPath: nonceTarget,
+                v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+            )
+            XCTAssertEqual(result, .signatureInvalid, "\(status) with a \(body.count)-byte body")
+        }
+    }
+
     func testV1TamperedBody() {
         let body = Data("{\"ok\":true}".utf8)
         let timestampStr = String(Int(now))
         let sig = signV1(body: body, nonce: nonce, timestamp: timestampStr)
-
-        let tamperedBody = Data("{\"ok\":false}".utf8)
 
         let response = makeResponse(headers: [
             "X-AppActor-Request-Nonce": nonce,
@@ -189,12 +214,15 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             "X-AppActor-Signature-Timestamp": timestampStr
         ])
 
-        let result = ResponseSignatureVerifier.verify(
-            response: response, body: tamperedBody, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
-            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
-        )
-        XCTAssertEqual(result, .signatureInvalid)
+        // Other JSON, and the same text behind a UTF-8 BOM: the bytes are what's signed.
+        for tamperedBody in [Data("{\"ok\":false}".utf8), Data([0xEF, 0xBB, 0xBF]) + body] {
+            let result = ResponseSignatureVerifier.verify(
+                response: response, body: tamperedBody, sentNonce: nonce,
+                apiKey: "", requestPath: nonceTarget,
+                v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+            )
+            XCTAssertEqual(result, .signatureInvalid)
+        }
     }
 
     // MARK: - v2 Tests
@@ -509,8 +537,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
     }
 
     private func saltPayloadString(body: Data, salt: String, apiKey: String, path: String, timestamp: String, eTag: String = "") -> String {
-        let bodyString = String(data: body, encoding: .utf8) ?? ""
-        return "\(salt)\n\(apiKey)\n\(path)\n\(timestamp)\n\(eTag)\n\(bodyString)"
+        "\(salt)\n\(apiKey)\n\(path)\n\(timestamp)\n\(eTag)\n\(String(decoding: body, as: UTF8.self))"
     }
 
     /// Signs a salt-based payload with the v1 test key.
@@ -781,6 +808,27 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .success)
+    }
+
+    func testSaltBasedSigned304CannotPassAsA200() {
+        let timestampStr = String(Int(now))
+        let salt = randomSalt()
+        let eTag = "W/\"abc123\""
+        let headers = [
+            "X-AppActor-Signature-Salt": salt,
+            "X-AppActor-Signature": signSaltV1(body: Data(), salt: salt, apiKey: testApiKey, path: testPath, timestamp: timestampStr, eTag: eTag),
+            "X-AppActor-Signature-Timestamp": timestampStr,
+            "ETag": eTag
+        ]
+
+        for (status, body) in forgedFrom304 {
+            let result = ResponseSignatureVerifier.verify(
+                response: makeResponse(headers: headers, statusCode: status), body: body, sentNonce: nil,
+                apiKey: testApiKey, requestPath: testPath,
+                v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+            )
+            XCTAssertEqual(result, .signatureInvalid, "\(status) with a \(body.count)-byte body")
+        }
     }
 
     // MARK: - Nonce Generation

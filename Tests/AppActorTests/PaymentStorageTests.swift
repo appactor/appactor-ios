@@ -82,10 +82,42 @@ final class PaymentStorageTests: XCTestCase {
         XCTAssertEqual(storage.currentAppUserId, resolved)
     }
 
+    func testResolvingAPlaceholderKeepsTheAnonymousIdAndDropsASignedInOne() {
+        let anonymous = storage.generateAnonymousAppUserId()
+        let token = storage.ensureAppAccountToken()
+        XCTAssertEqual(storage.resolveAppUserId(explicit: "null"), anonymous)
+        XCTAssertEqual(storage.appAccountToken, token)
+
+        storage.setAppUserId("user_42")
+        let resolved = storage.resolveAppUserId(explicit: " Guest ")
+        XCTAssertTrue(resolved.hasPrefix("appactor-anon-"))
+        XCTAssertNotEqual(resolved, anonymous)
+        XCTAssertEqual(storage.currentAppUserId, resolved)
+        XCTAssertNil(storage.appAccountToken)
+    }
+
+    func testEnsureAppUserIdReplacesAStoredIdTheServerRejects() {
+        storage.setAppUserId("guest")
+        storage.ensureAppAccountToken()
+
+        let id = storage.ensureAppUserId()
+
+        XCTAssertTrue(id.hasPrefix("appactor-anon-"))
+        XCTAssertEqual(storage.currentAppUserId, id)
+        XCTAssertNil(storage.appAccountToken)
+    }
+
     func testPaymentConfigurationTreatsWhitespaceAppUserIdAsOmitted() {
         let config = AppActorPaymentConfiguration(apiKey: "pk_test_123", appUserId: "   ")
 
         XCTAssertNil(config.appUserId)
+    }
+
+    /// Blank as the server trims: U+FEFF goes, U+0085 stays (and is a valid ID there).
+    func testBlankAppUserIdFollowsTheServerTrim() {
+        XCTAssertNil(AppActorPaymentConfiguration(apiKey: "pk_test_123", appUserId: "\u{FEFF} ").appUserId)
+        XCTAssertEqual(AppActorPaymentConfiguration(apiKey: "pk_test_123", appUserId: "\u{85}").appUserId, "\u{85}")
+        XCTAssertEqual(storage.resolveAppUserId(explicit: "\u{85}"), "\u{85}")
     }
 
     // MARK: - Legacy Identity Cleanup

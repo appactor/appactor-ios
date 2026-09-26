@@ -232,6 +232,35 @@ final class PaymentClientSignatureTests: XCTestCase {
         XCTAssertEqual(requests[0].httpMethod, "DELETE")
     }
 
+    func testCustomerPathEncodesTheAppUserIdOnce() async throws {
+        PaymentClientURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: [:])!, Data())
+        }
+
+        _ = try? await makeClient().getCustomer(appUserId: "auth0|64f1 ç%", eTag: nil)
+
+        let requests = PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests }
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(
+            URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)?.percentEncodedPath,
+            "/v1/customers/auth0%7C64f1%20%C3%A7%25"
+        )
+    }
+
+    func testExperimentPathEncodesTheKeyOnce() async throws {
+        PaymentClientURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: [:])!, Data())
+        }
+
+        _ = try? await makeClient().postExperimentAssignment(experimentKey: "a|b/c", appUserId: "user_1", appVersion: nil, country: nil)
+
+        let requests = PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests }
+        XCTAssertEqual(requests.count, 1)
+        let components = URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)
+        XCTAssertEqual(components?.percentEncodedPath, "/v1/experiments/a%7Cb%2Fc/assignments")
+        XCTAssertEqual(components?.percentEncodedQuery, "app_user_id=user_1")
+    }
+
     func testRestoreReportsOnlyRecordedTransactions() async throws {
         let body = Data("""
         {"data":{"user":{"entitlements":{},"subscriptions":{},"nonSubscriptions":{}},"restoredCount":1,"transferred":false,"hasFailures":true,"items":[

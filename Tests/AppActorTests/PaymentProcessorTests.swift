@@ -67,6 +67,28 @@ final class PaymentProcessorTests: XCTestCase {
         )
     }
 
+    // MARK: - Rejected app user IDs from older SDKs
+
+    func testUnpostedReceiptsUnderARejectedAppUserIdMoveToTheCurrentUser() async {
+        store.upsert(makeItem(key: "apple:1", transactionId: "1", appUserId: "guest"))
+        store.upsert(makeItem(key: "apple:2", transactionId: "2", phase: .posting, appUserId: "org/7"))
+        // Already sent: the server's answer was final, so nothing is left to rescue.
+        store.upsert(makeItem(key: "apple:3", transactionId: "3", phase: .needsFinish, appUserId: "guest"))
+        store.upsert(makeItem(key: "apple:4", transactionId: "4", phase: .deadLettered, appUserId: "guest"))
+        store.upsert(makeItem(key: "apple:5", transactionId: "5", appUserId: "user_123"))
+
+        await processor.reassignUnpostedItemsWithRejectedAppUserId(to: "appactor-anon-new")
+
+        let ids = Dictionary(uniqueKeysWithValues: store.snapshot().map { ($0.key, $0.appUserId) })
+        XCTAssertEqual(ids, [
+            "apple:1": "appactor-anon-new",
+            "apple:2": "appactor-anon-new",
+            "apple:3": "guest",
+            "apple:4": "guest",
+            "apple:5": "user_123",
+        ])
+    }
+
     // MARK: - 1. Dedup / Merge
 
     func testUpsertDedup() async {
