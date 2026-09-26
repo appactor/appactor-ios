@@ -835,9 +835,12 @@ final class PaymentIdentityTests: XCTestCase {
         }
     }
 
-    func testConfigureRejectsAReservedAppUserId() {
-        XCTAssertNotNil(AppActorPaymentConfiguration.validationError(apiKey: "pk_test", appUserId: "guest"))
+    /// A placeholder ("guest", "null", "0"…) means nobody is signed in and resolves to an
+    /// anonymous ID; any other ID the server rejects fails configure.
+    func testConfigureRejectsAnAppUserIdTheServerRejects() {
         XCTAssertNotNil(AppActorPaymentConfiguration.validationError(apiKey: "pk_test", appUserId: "org/123"))
+        XCTAssertNotNil(AppActorPaymentConfiguration.validationError(apiKey: "pk_test", appUserId: "a\n"))
+        XCTAssertNil(AppActorPaymentConfiguration.validationError(apiKey: "pk_test", appUserId: " Guest "))
         XCTAssertNil(AppActorPaymentConfiguration.validationError(apiKey: "pk_test", appUserId: "auth0|abc"))
     }
 

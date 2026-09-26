@@ -282,9 +282,14 @@ enum AppActorPaymentValidation {
         guard !id.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
             throw AppActorError.validationError("appUserId must not contain control characters")
         }
-        guard !blockedAppUserIds.contains(trimmed.lowercased()) else {
+        guard !isPlaceholderAppUserId(id) else {
             throw AppActorError.validationError("appUserId '\(trimmed)' is reserved")
         }
+    }
+
+    /// A "no user" stand-in such as "null", "guest" or "0": one of the server's reserved IDs.
+    static func isPlaceholderAppUserId(_ id: String) -> Bool {
+        blockedAppUserIds.contains(id.trimmingCharacters(in: serverTrimmedCharacters).lowercased())
     }
 
     static func isValidAppUserId(_ id: String) -> Bool {

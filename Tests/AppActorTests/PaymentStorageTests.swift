@@ -82,6 +82,20 @@ final class PaymentStorageTests: XCTestCase {
         XCTAssertEqual(storage.currentAppUserId, resolved)
     }
 
+    func testResolvingAPlaceholderKeepsTheAnonymousIdAndDropsASignedInOne() {
+        let anonymous = storage.generateAnonymousAppUserId()
+        let token = storage.ensureAppAccountToken()
+        XCTAssertEqual(storage.resolveAppUserId(explicit: "null"), anonymous)
+        XCTAssertEqual(storage.appAccountToken, token)
+
+        storage.setAppUserId("user_42")
+        let resolved = storage.resolveAppUserId(explicit: " Guest ")
+        XCTAssertTrue(resolved.hasPrefix("appactor-anon-"))
+        XCTAssertNotEqual(resolved, anonymous)
+        XCTAssertEqual(storage.currentAppUserId, resolved)
+        XCTAssertNil(storage.appAccountToken)
+    }
+
     func testEnsureAppUserIdReplacesAStoredIdTheServerRejects() {
         storage.setAppUserId("guest")
         storage.ensureAppAccountToken()

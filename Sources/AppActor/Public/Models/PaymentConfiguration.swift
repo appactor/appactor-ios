@@ -77,7 +77,10 @@ public struct AppActorPaymentConfiguration: Sendable {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return AppActorError.validationError("apiKey must not be blank.")
         }
-        if let appUserId = Self.normalizedAppUserId(appUserId) {
+        // A placeholder such as "null" means nobody is signed in; configure resolves it to an
+        // anonymous ID.
+        if let appUserId = Self.normalizedAppUserId(appUserId),
+           !AppActorPaymentValidation.isPlaceholderAppUserId(appUserId) {
             do {
                 try AppActorPaymentValidation.validateAppUserId(appUserId)
             } catch let error as AppActorError {
