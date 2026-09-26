@@ -14,7 +14,10 @@ extension AppActor {
         let verboseBootstrap = (paymentConfig?.options.logLevel ?? AppActorLogger.level) >= .verbose
         let watcher = transactionWatcher
 
-        // Wire receipt callbacks before Transaction.updates can enqueue work.
+        // Before Transaction.updates can enqueue work.
+        if let processor = paymentProcessor, let storage = paymentStorage {
+            await processor.reassignUnpostedItemsWithRejectedAppUserId(to: storage.ensureAppUserId())
+        }
         await wireReceiptCustomerInfoUpdateHandler()
 
         // ── Cache-first: surface persisted/offline premium instantly, before the

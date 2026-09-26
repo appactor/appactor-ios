@@ -198,13 +198,8 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     }
 
     func getCustomer(appUserId: String, eTag: String?) async throws -> AppActorCustomerFetchResult {
-        // Encoded once. appendingPathComponent would encode the '%' again ("auth0|x" would
-        // reach the server as "auth0%7Cx" and read as another user).
         let path = "/v1/customers/\(encodedPathSegment(appUserId))"
-        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
-            throw AppActorError.networkError(URLError(.badURL))
-        }
-        var urlRequest = URLRequest(url: url)
+        var urlRequest = URLRequest(url: try url(encodedPath: path))
         urlRequest.httpMethod = "GET"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
         let nonce = applyAuth(to: &urlRequest, path: path)
@@ -312,8 +307,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         country: String?
     ) async throws -> AppActorExperimentFetchResult {
         let path = "/v1/experiments/\(encodedPathSegment(experimentKey))/assignments"
-        guard let pathURL = URL(string: path, relativeTo: baseURL),
-              var components = URLComponents(url: pathURL, resolvingAgainstBaseURL: true) else {
+        guard var components = URLComponents(url: try url(encodedPath: path), resolvingAgainstBaseURL: false) else {
             throw AppActorError.networkError(URLError(.badURL))
         }
         var queryItems: [URLQueryItem] = [
@@ -586,10 +580,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         path: String,
         body: Body?
     ) async throws -> AppActorMutationResult {
-        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
-            throw AppActorError.networkError(URLError(.badURL))
-        }
-        var urlRequest = URLRequest(url: url)
+        var urlRequest = URLRequest(url: try url(encodedPath: path))
         urlRequest.httpMethod = method
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
@@ -646,6 +637,16 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         default:
             return nil
         }
+    }
+
+    /// The URL for a path whose dynamic segments are already percent-encoded (by
+    /// `encodedPathSegment`). `appendingPathComponent` would encode the '%' again, and
+    /// "auth0|x" would reach the server as "auth0%7Cx", another user.
+    private func url(encodedPath path: String) throws -> URL {
+        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
+            throw AppActorError.networkError(URLError(.badURL))
+        }
+        return url
     }
 
     private func encodedPathSegment(_ value: String) -> String {

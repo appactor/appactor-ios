@@ -287,6 +287,10 @@ enum AppActorPaymentValidation {
         }
     }
 
+    static func isValidAppUserId(_ id: String) -> Bool {
+        (try? validateAppUserId(id)) != nil
+    }
+
     /// Whether `id` is empty once trimmed the way the server trims it. A blank ID passed to
     /// `configure` means none.
     static func isBlank(_ id: String) -> Bool {

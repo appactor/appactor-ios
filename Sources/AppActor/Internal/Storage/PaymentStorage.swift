@@ -102,20 +102,24 @@ extension AppActorPaymentStorage {
     }
 
     /// Ensures an `app_user_id` exists, generating an anonymous one if needed.
+    /// A stored ID the server rejects (stored by an older SDK) is replaced the same way, with
+    /// a new `appAccountToken`: the server never had that user.
     @discardableResult
     func ensureAppUserId() -> String {
-        if let existing = currentAppUserId {
-            return existing
+        guard let existing = currentAppUserId else {
+            return generateAnonymousAppUserId()
         }
-        return generateAnonymousAppUserId()
+        guard AppActorPaymentValidation.isValidAppUserId(existing) else {
+            clearAppAccountToken()
+            return generateAnonymousAppUserId()
+        }
+        return existing
     }
 
     /// Resolves the canonical local app user ID for the session.
     /// Priority: explicit non-blank ID -> cached ID -> new anonymous ID.
     /// A different explicit ID drops the stored `appAccountToken`, so the new identity gets
     /// its own token, as it does after `logIn` or `logOut`.
-    /// A cached ID the server rejects (stored by an older SDK) is replaced by a new anonymous
-    /// one: the server never had that user.
     @discardableResult
     func resolveAppUserId(explicit explicitAppUserId: String?) -> String {
         if let explicitAppUserId, !AppActorPaymentValidation.isBlank(explicitAppUserId) {
@@ -124,11 +128,6 @@ extension AppActorPaymentStorage {
             }
             setAppUserId(explicitAppUserId)
             return explicitAppUserId
-        }
-        if let cached = currentAppUserId,
-           (try? AppActorPaymentValidation.validateAppUserId(cached)) == nil {
-            clearAppAccountToken()
-            return generateAnonymousAppUserId()
         }
         return ensureAppUserId()
     }
