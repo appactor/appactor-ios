@@ -86,16 +86,12 @@ actor AppActorCustomerManager {
     /// Cancels every fetch still running, whoever started it. The fetches are unstructured tasks
     /// shared by every caller for the user, so a caller's own cancellation never reaches them.
     /// Called when an identity or a session ends (logOut() through `clearCache(appUserId:)`,
-    /// reset(), a cancelled startup); every waiter gets a `CancellationError`.
+    /// reset(), a cancelled startup); waiters get a `CancellationError`, unless the fetch had its
+    /// answer already and is writing it.
     func cancelInFlight() {
         runningFetches.values.forEach { $0.cancel() }
         runningFetches.removeAll()
         inflight = nil
-    }
-
-    func clearCache() async {
-        guard let userId = currentAppUserId else { return }
-        await clearCache(appUserId: userId)
     }
 
     // MARK: - Public API

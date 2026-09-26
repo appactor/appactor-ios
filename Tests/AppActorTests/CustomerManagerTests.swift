@@ -258,8 +258,6 @@ final class CustomerManagerTests: XCTestCase {
         await etagManager.storeFresh(premiumInfo, for: .customer(appUserId: "user_123"), eTag: nil)
 
         let manager = makeManager(cacheTTL: 3600)
-        // Seed the manager's currentAppUserId by fetching once
-        // or by calling seedCache
         await manager.seedCache(info: premiumInfo, eTag: nil, appUserId: "user_123")
         let keys = await manager.activeEntitlementKeysOffline(appUserId: "user_123")
 

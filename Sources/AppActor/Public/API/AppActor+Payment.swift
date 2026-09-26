@@ -65,9 +65,16 @@ extension AppActor {
         testClient: (any AppActorPaymentClientProtocol)? = nil
     ) async {
         // Again after each wake: another waiter may have configured, and its startup be in flight.
+        let resets = paymentContext.resetCount
         while paymentLifecycle == .configured, !isBootstrapComplete {
             await waitForStartupToSettle()
             if Task.isCancelled { return }
+        }
+        // A reset() while it waited came after it: configuring now would bring back a session
+        // reset() wiped. Ignored, as a configure() during reset() is.
+        guard paymentContext.resetCount == resets else {
+            Log.sdk.warn("configure() waited out a startup that reset() ended — ignored. Call configure() again.")
+            return
         }
         guard configureInternal(config, testClient: testClient) else { return }
         await runStartupSequence()
@@ -96,7 +103,9 @@ extension AppActor {
         }
 
         paymentLifecycle = .configured
-        // Its startup sets it; a startup that ended with an earlier session must not have left it set.
+        // Its startup sets it. reset() and a revert clear it, but configure() must never find it
+        // set before its own startup ran, or a configure() after it wouldn't wait (see
+        // configureAndStart); test setups leave it set.
         isBootstrapComplete = false
 
         // If payment options specify a log level, escalate (never downgrade).
@@ -163,8 +172,12 @@ extension AppActor {
         storage.resolveAppUserId(explicit: config.appUserId)
         // A cancelled startup reverts without clearing what its session published, which a retry
         // for the same user keeps. Another user must not see it, nor have their launch seed
-        // skipped or their caches cleared against the previous user's entitlements.
-        if storage.currentAppUserId != previousAppUserId {
+        // skipped or their caches cleared against the previous user's entitlements. The published
+        // snapshot can also belong to another user than the stored one: a logIn that reset()
+        // or a revert cut off after its identity switch.
+        let publishedAppUserId = customerInfo.appUserId
+        if storage.currentAppUserId != previousAppUserId
+            || (publishedAppUserId != nil && publishedAppUserId != storage.currentAppUserId) {
             customerInfo = .empty
             paymentRemoteConfigs = nil
         }
@@ -174,7 +187,7 @@ extension AppActor {
         self.asaManager = nil
 
         // Watcher setup and bootstrap are awaited in runStartupSequence(),
-        // which is called from configure() after configureInternal().
+        // which configureAndStart() calls after configureInternal().
         // ASA runs as a separate fire-and-forget task.
 
         // Register app lifecycle observers for offerings TTL
@@ -565,6 +578,7 @@ extension AppActor {
     public func reset() async {
         // ── Phase 0: State transition ──
         paymentLifecycle = .resetting
+        paymentContext.resetCount &+= 1
 
         // ── Phase 1: Synchronous — runs before any suspension point ──
         // Remove lifecycle observers FIRST to close the race window where

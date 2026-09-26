@@ -506,8 +506,21 @@ public final class AppActorBridge {
     private var currentCustomerInfoListener: ((AppActorCustomerInfo) -> Void)?
     private var currentReceiptPipelineListener: ((AppActorBridgeReceiptEvent) -> Void)?
     private var currentDeferredPurchaseListener: ((_ productId: String, _ customerInfo: AppActorCustomerInfo) -> Void)?
-    /// Feeds receipt pipeline events to the current listener on the main thread, in order.
-    private var receiptEventDelivery: AsyncStream<AppActorReceiptPipelineEventDetail>.Continuation?
+    /// Feeds receipt pipeline events to the listener current when each one is delivered, on the
+    /// main thread and in the order emitted. The processor emits them on its own executor: one
+    /// stream, drained by one MainActor task, keeps the order (a Task per event would not). It
+    /// lives as long as the bridge, so an event the processor emits while it still holds the
+    /// previous handler (it gets a new one asynchronously) reaches the current listener, and none
+    /// reaches a cleared one.
+    private lazy var receiptEventDelivery: AsyncStream<AppActorReceiptPipelineEventDetail>.Continuation = {
+        let (events, delivery) = AsyncStream<AppActorReceiptPipelineEventDetail>.makeStream()
+        Task { @MainActor [weak self] in
+            for await detail in events {
+                self?.currentReceiptPipelineListener?(AppActorBridgeReceiptEvent(from: detail))
+            }
+        }
+        return delivery
+    }()
 
     /// The currently set customer info listener, or `nil` if none.
     public var customerInfoListener: ((AppActorCustomerInfo) -> Void)? {
@@ -546,19 +559,8 @@ public final class AppActorBridge {
         _ listener: ((AppActorBridgeReceiptEvent) -> Void)?
     ) {
         currentReceiptPipelineListener = listener
-        receiptEventDelivery?.finish()
-        receiptEventDelivery = nil
-        if let listener {
-            // The processor emits events on its own executor. They reach the listener on the
-            // main thread, in the order emitted: one stream, drained by one MainActor task (a
-            // Task per event would not keep the order).
-            let (events, delivery) = AsyncStream<AppActorReceiptPipelineEventDetail>.makeStream()
-            receiptEventDelivery = delivery
-            Task { @MainActor in
-                for await detail in events {
-                    listener(AppActorBridgeReceiptEvent(from: detail))
-                }
-            }
+        if listener != nil {
+            let delivery = receiptEventDelivery
             AppActor.shared.onReceiptPipelineEvent = { detail in
                 delivery.yield(detail)
             }
@@ -582,8 +584,6 @@ public final class AppActorBridge {
     public func clearListeners() {
         currentCustomerInfoListener = nil
         currentReceiptPipelineListener = nil
-        receiptEventDelivery?.finish()
-        receiptEventDelivery = nil
         currentDeferredPurchaseListener = nil
         AppActor.shared.onCustomerInfoChanged = nil
         AppActor.shared.onReceiptPipelineEvent = nil

@@ -10,8 +10,9 @@ extension AppActor {
 
     /// Runs the full startup sequence: watcher setup → bootstrap.
     ///
-    /// Called from `configure()` and awaited directly. When this returns,
-    /// the SDK is fully initialized (watcher running, bootstrap complete).
+    /// Called from `configureAndStart()` and awaited directly. When this returns,
+    /// the SDK is fully initialized (watcher running, bootstrap complete), unless the
+    /// startup was cancelled (it reverted to `.idle`) or its session ended (reset()).
     func runStartupSequence() async {
         // Every exit settles it: a completed bootstrap, a revert, or a reset() that took over.
         defer { settleStartup() }
