@@ -195,6 +195,7 @@ final class PaymentClientSignatureTests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "X-AppActor-Signature-Target"), "path-query")
         XCTAssertNil(requests[0].value(forHTTPHeaderField: "X-AppActor-Nonce"))
+        XCTAssertNil(requests[0].value(forHTTPHeaderField: "X-AppActor-Signature-Binding"))
         let components = URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)
         XCTAssertEqual(components?.path, "/v1/remote-config")
         XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "app_user_id" })?.value, "user_123")
@@ -260,6 +261,9 @@ final class PaymentClientSignatureTests: XCTestCase {
 
         XCTAssertEqual(result.recordedTransactionIds, ["1001", "1002"])
         XCTAssertEqual(result.restoredCount, 1)
+        let requests = PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests }
+        XCTAssertNotNil(requests.first?.value(forHTTPHeaderField: "X-AppActor-Nonce"))
+        XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "X-AppActor-Signature-Binding"), "request")
     }
 
     private func makeClient(requireSignatures: Bool = true) -> AppActorPaymentClient {

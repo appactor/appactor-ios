@@ -42,6 +42,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     private let responseLogger: (@Sendable (_ path: String, _ status: Int, _ body: Data) -> Void)?
     private static let signatureTargetHeader = "X-AppActor-Signature-Target"
     private static let signatureTargetPathQuery = "path-query"
+    private static let signatureBindingHeader = "X-AppActor-Signature-Binding"
     private static let remoteConfigRequiresUserContextHeader = "X-AppActor-Remote-Config-Requires-User-Context"
 
     init(
@@ -671,10 +672,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
         let nonce = ResponseSignatureVerifier.generateNonce()
         request.setValue(nonce, forHTTPHeaderField: "X-AppActor-Nonce")
+        // Asks the server to sign method, path + query and body next to the nonce, so a
+        // response to a rewritten request can't pass as the answer to this one.
+        request.setValue("request", forHTTPHeaderField: Self.signatureBindingHeader)
         return nonce
     }
 
-    /// Returns the exact request target used by salt-based response signing.
+    /// Returns the exact request target (path + query) used by response signing.
     /// Query params are part of the signature so targeted resources cannot be replayed across contexts.
     private func signatureRequestTarget(for request: URLRequest, fallbackPath: String) -> String {
         guard let url = request.url,
@@ -718,12 +722,18 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         // Verify response signature for successful responses, including 304 validators.
         var signatureVerified = false
         if verifySignatures && ((200..<300).contains(http.statusCode) || http.statusCode == 304) {
+            let requestTarget = signatureRequestTarget(for: urlRequest, fallbackPath: path)
             let result = ResponseSignatureVerifier.verify(
                 response: http,
                 body: data,
                 sentNonce: sentNonce,
                 apiKey: apiKey,
-                requestPath: signatureRequestTarget(for: urlRequest, fallbackPath: path)
+                requestPath: requestTarget,
+                requestBinding: ResponseSignatureVerifier.requestBinding(
+                    method: urlRequest.httpMethod ?? "GET",
+                    target: requestTarget,
+                    body: urlRequest.httpBody
+                )
             )
 
             switch result {

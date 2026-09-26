@@ -75,8 +75,9 @@ enum ResponseSignatureVerifier {
 		response: HTTPURLResponse,
 		body: Data,
 		sentNonce: String?,
-		apiKey: String = "",
-		requestPath: String = ""
+		apiKey: String,
+		requestPath: String,
+		requestBinding: String
 	) -> VerificationResult {
 		verify(
 			response: response,
@@ -84,6 +85,7 @@ enum ResponseSignatureVerifier {
 			sentNonce: sentNonce,
 			apiKey: apiKey,
 			requestPath: requestPath,
+			requestBinding: requestBinding,
 			v1Key: v1PublicKey,
 			rootKey: rootPublicKey,
 			now: Date().timeIntervalSince1970
@@ -95,14 +97,19 @@ enum ResponseSignatureVerifier {
 	/// Test-injectable overload. Production `verify()` delegates to this.
 	///
 	/// Mode selection:
-	///   - sentNonce != nil → nonce-based verification (existing, unchanged)
-	///   - sentNonce == nil → salt-based verification (new, CDN-cacheable)
+	///   - sentNonce != nil → nonce-based verification, bound to `requestBinding`
+	///   - sentNonce == nil → salt-based verification (CDN-cacheable)
+	///
+	/// `requestBinding` is what the server signs next to the nonce for a client that sends
+	/// `X-AppActor-Signature-Binding: request`: method, path + query and the SHA-256 of the
+	/// request body. A response to a rewritten request (another user's path or body) fails.
 	static func verify(
 		response: HTTPURLResponse,
 		body: Data,
 		sentNonce: String?,
 		apiKey: String,
 		requestPath: String,
+		requestBinding: String,
 		v1Key: Curve25519.Signing.PublicKey?,
 		rootKey: Curve25519.Signing.PublicKey?,
 		now: TimeInterval
@@ -139,7 +146,7 @@ enum ResponseSignatureVerifier {
 			}
 
 			let bodyString = String(data: body, encoding: .utf8) ?? ""
-			let payload = "\(sentNonce)\n\(timestampStr)\n\(bodyString)"
+			let payload = "\(sentNonce)\n\(timestampStr)\n\(requestBinding)\n\(bodyString)"
 			guard let payloadData = payload.data(using: .utf8) else {
 				return .signatureInvalid
 			}
@@ -273,6 +280,13 @@ enum ResponseSignatureVerifier {
 
 	static func generateNonce() -> String {
 		UUID().uuidString
+	}
+
+	/// The request binding for a nonce-signed response: method, path + query, and the
+	/// lowercase hex SHA-256 of the request body (of no bytes when there is none).
+	static func requestBinding(method: String, target: String, body: Data?) -> String {
+		let bodyHash = SHA256.hash(data: body ?? Data()).map { String(format: "%02x", $0) }.joined()
+		return "\(method)\n\(target)\n\(bodyHash)"
 	}
 
 	static func readUInt64BE(_ data: Data, offset: Int) -> UInt64 {
