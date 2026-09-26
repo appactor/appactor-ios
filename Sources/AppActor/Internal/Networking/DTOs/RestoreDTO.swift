@@ -50,8 +50,8 @@ struct AppActorRestoreTransactionItem: Encodable, Sendable {
 
 /// `data` payload from `POST /v1/payment/restore/apple`.
 ///
-/// The server sends the customer twice: `customer` is the full CustomerInfo view that
-/// `GET /v1/customers` returns; `user` is a reduced view without `isActive` on subscriptions.
+/// `customer` is the full CustomerInfo view that `GET /v1/customers` returns. The response's
+/// `user` is a different, reduced view; the SDK does not read it.
 struct AppActorRestoreResponseData: Decodable, Sendable {
     let customer: AppActorCustomerDTO
     let restoredCount: Int

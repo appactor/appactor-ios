@@ -399,21 +399,26 @@ final class IdentitySessionTests: XCTestCase {
         let client = try XCTUnwrap(mockClient)
         let firstStarted = AsyncSignal()
         let releaseFirst = AsyncSignal()
+        let ownRequest = expectation(description: "the refresh sends its own request")
         client.getCustomerHandler = { appUserId, _ in
             if client.getCustomerCalls.count == 1 {
                 // The host's fetch, sent before the server committed the revocation.
                 await firstStarted.signal()
                 await releaseFirst.wait()
+            } else {
+                ownRequest.fulfill()
             }
             return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
         }
         let hostFetch = Task { try await appactor.getCustomerInfo() }
         await firstStarted.wait()
 
-        await appactor.refreshCustomerInfoAfterRevocation()
-
-        XCTAssertEqual(client.getCustomerCalls.count, 2, "the refresh sends its own request")
+        // A refresh that joined the host's fetch would wait on it: the expectation then times
+        // out, and releasing the host's fetch afterwards lets the test end instead of hanging.
+        let refresh = Task { await appactor.refreshCustomerInfoAfterRevocation() }
+        await fulfillment(of: [ownRequest], timeout: 2)
         await releaseFirst.signal()
+        await refresh.value
         _ = try await hostFetch.value
     }
 }
