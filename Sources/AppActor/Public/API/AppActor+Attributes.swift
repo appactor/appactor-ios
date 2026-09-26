@@ -507,7 +507,7 @@ extension AppActor {
     /// stored identity reads as missing, so no anonymous ID is minted then.
     private func attributesAppUserId() throws -> String {
         if customerAttributesManager.currentAppUserId == nil, !AppActorProtectedData.isAvailable() {
-            throw AppActorError.notAvailable("Protected data is unavailable until the device is unlocked")
+            throw AppActorError.notAvailable("The stored identity can't be read until the device is unlocked for the first time after boot")
         }
         return customerAttributesManager.ensureAppUserId()
     }

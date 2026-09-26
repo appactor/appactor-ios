@@ -34,11 +34,14 @@ enum AppActorCacheResource: Hashable, Sendable {
         }
     }
 
+    /// Common prefix of every remote-config cache key.
+    static let remoteConfigsKeyPrefix = "remote_configs_"
+
     static func remoteConfigsPrefix(appUserId: String?) -> String {
         guard let appUserId, !appUserId.isEmpty else {
-            return "remote_configs_anon"
+            return "\(remoteConfigsKeyPrefix)anon"
         }
-        return "remote_configs_\(hash(appUserId))"
+        return "\(remoteConfigsKeyPrefix)\(hash(appUserId))"
     }
 
     static func experimentsPrefix(appUserId: String) -> String {

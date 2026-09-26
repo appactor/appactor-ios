@@ -6,8 +6,7 @@ import Foundation
 /// for all cacheable payment resources (offerings, customer).
 ///
 /// When `responseVerificationEnabled` is `true`, cache entries with failed
-/// verification are treated as untrusted and are not reused, and bootstrap removes
-/// every entry that doesn't hold a verified response.
+/// verification are treated as untrusted and are not reused.
 actor AppActorETagManager {
 
     private let diskStore: AppActorCacheDiskStore
@@ -110,15 +109,21 @@ actor AppActorETagManager {
 
     // MARK: - Verification-mode cache invalidation
 
-    /// Removes every cache entry that doesn't hold a verified response when verification is
-    /// enabled: `.failed` entries and `.notRequested` ones left by older SDK versions, which
-    /// accepted unsigned offerings and remote-config responses. The offline product catalog
-    /// built from the app's fallback offerings is `.notRequested` too; it is rebuilt from the
-    /// fallback the next time it is used. This covers offerings, remote config, experiments
-    /// and every per-user customer cache.
+    /// Removes all failed-verification cache entries from disk when verification is enabled.
+    ///
+    /// Scans every cached file and removes entries whose verification result is
+    /// `.failed`. This covers both offerings and all per-user customer caches.
     func clearUnverifiedIfNeeded() async {
         guard responseVerificationEnabled else { return }
         await diskStore.clearAllUnverified()
+    }
+
+    /// Removes unverified offerings, remote-config and offline-catalog entries, which SDK
+    /// versions that accepted unsigned responses on those routes may have stored forged.
+    /// Run once per install: this SDK never stores an unsigned response from those routes,
+    /// and the catalog it builds from bundled fallback offerings must survive relaunch.
+    func clearUnverifiedSaltRouteEntries() async {
+        await diskStore.clearUnverifiedSaltRouteEntries()
     }
 
     // MARK: - Clear

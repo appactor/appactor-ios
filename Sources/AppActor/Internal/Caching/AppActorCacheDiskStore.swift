@@ -96,9 +96,9 @@ actor AppActorCacheDiskStore {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Removes all cache files that don't hold a verified response: `.failed` entries and
-    /// `.notRequested` ones, which older SDK versions stored from unsigned offerings and
-    /// remote-config responses. Used for hygiene cleanup at bootstrap when verification is on.
+    /// Removes all cache files whose verification result resolved to `.failed`.
+    /// Keeps `.verified` and `.notRequested` entries intact.
+    /// Used for hygiene cleanup at bootstrap when verification mode is enabled.
     func clearAllUnverified() {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
@@ -109,7 +109,27 @@ actor AppActorCacheDiskStore {
                 try? fm.removeItem(at: file)
                 continue
             }
-            if !entry.resolvedVerification.isVerified {
+            if entry.resolvedVerification == .failed {
+                try? fm.removeItem(at: file)
+            }
+        }
+    }
+
+    /// Removes offerings, remote-config and offline-catalog entries that don't hold a verified
+    /// response. Earlier SDK versions accepted unsigned responses on these salt-signed routes,
+    /// so such an entry may carry a forged body.
+    func clearUnverifiedSaltRouteEntries() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        let prefixes = [
+            AppActorCacheResource.offerings.cacheKey,
+            AppActorCacheResource.offlineProductCatalog.cacheKey,
+            AppActorCacheResource.remoteConfigsKeyPrefix
+        ]
+        for file in files where file.pathExtension == "json"
+            && prefixes.contains(where: { file.lastPathComponent.hasPrefix($0) }) {
+            let entry = (try? Data(contentsOf: file)).flatMap { try? decoder.decode(AppActorCacheEntry.self, from: $0) }
+            if entry?.resolvedVerification.isVerified != true {
                 try? fm.removeItem(at: file)
             }
         }

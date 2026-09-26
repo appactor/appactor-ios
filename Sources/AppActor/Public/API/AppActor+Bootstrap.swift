@@ -204,6 +204,11 @@ extension AppActor {
         // 0a. Clear stale unverified cache if verification mode was escalated (off→on)
         if let etagMgr = self.paymentETagManager {
             await etagMgr.clearUnverifiedIfNeeded()
+            if let storage = paymentStorage,
+               storage.string(forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged) == nil {
+                await etagMgr.clearUnverifiedSaltRouteEntries()
+                storage.set("1", forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged)
+            }
         }
 
         // 0b. Keep handler wiring idempotent for tests and custom setup paths.

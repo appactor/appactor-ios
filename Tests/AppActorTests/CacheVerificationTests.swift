@@ -103,25 +103,40 @@ final class CacheVerificationTests: XCTestCase {
         XCTAssertTrue(json.contains("verificationResult"))
         XCTAssertTrue(json.contains("verified"))
     }
-    func testBootstrapPurgeKeepsOnlyVerifiedEntries() async throws {
+    func testSaltRoutePurgeRemovesOnlyUnverifiedSaltRouteEntries() async throws {
         let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("appactor-purge-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: cacheDir) }
         let etagManager = AppActorETagManager(
             diskStore: AppActorCacheDiskStore(directory: cacheDir),
             responseVerificationEnabled: true
         )
-        await etagManager.storeFresh(["plan": "signed"], for: .customer(appUserId: "user_1"), eTag: nil, verified: true)
+        let experiments = AppActorCacheResource.experiments(appUserId: "user_1")
+        await etagManager.storeFresh(["v": "signed"], for: .customer(appUserId: "user_1"), eTag: nil, verified: true)
+        await etagManager.storeFresh(["v": "signed"], for: .remoteConfigs(appUserId: nil), eTag: nil, verified: true)
+        await etagManager.storeFresh(["v": "local"], for: experiments, eTag: nil, verified: false)
         // Left by an SDK version that accepted unsigned salt-route responses.
-        await etagManager.storeFresh(["plan": "unsigned"], for: .offerings, eTag: "W/\"u\"", verified: false)
-        await etagManager.storeFresh(["plan": "unsigned"], for: .remoteConfigs(appUserId: "user_1"), eTag: nil, verified: false)
+        await etagManager.storeFresh(["v": "unsigned"], for: .offerings, eTag: "W/\"u\"", verified: false)
+        await etagManager.storeFresh(["v": "unsigned"], for: .offlineProductCatalog, eTag: nil, verified: false)
+        await etagManager.storeFresh(["v": "unsigned"], for: .remoteConfigs(appUserId: "user_1"), eTag: nil, verified: false)
 
+        // The per-launch hygiene pass leaves unsigned-but-not-failed entries alone.
         await etagManager.clearUnverifiedIfNeeded()
+        let offeringsAfterHygiene = await etagManager.cached([String: String].self, for: .offerings)
+        XCTAssertNotNil(offeringsAfterHygiene)
+
+        await etagManager.clearUnverifiedSaltRouteEntries()
 
         let customer = await etagManager.cached([String: String].self, for: .customer(appUserId: "user_1"))
+        let signedRemoteConfigs = await etagManager.cached([String: String].self, for: .remoteConfigs(appUserId: nil))
+        let experimentAssignments = await etagManager.cached([String: String].self, for: experiments)
         let offerings = await etagManager.cached([String: String].self, for: .offerings)
-        let remoteConfigs = await etagManager.cached([String: String].self, for: .remoteConfigs(appUserId: "user_1"))
-        XCTAssertEqual(customer?.value["plan"], "signed")
+        let catalog = await etagManager.cached([String: String].self, for: .offlineProductCatalog)
+        let unsignedRemoteConfigs = await etagManager.cached([String: String].self, for: .remoteConfigs(appUserId: "user_1"))
+        XCTAssertEqual(customer?.value["v"], "signed")
+        XCTAssertEqual(signedRemoteConfigs?.value["v"], "signed")
+        XCTAssertEqual(experimentAssignments?.value["v"], "local")
         XCTAssertNil(offerings)
-        XCTAssertNil(remoteConfigs)
+        XCTAssertNil(catalog)
+        XCTAssertNil(unsignedRemoteConfigs)
     }
 }

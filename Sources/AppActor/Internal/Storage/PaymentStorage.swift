@@ -20,6 +20,9 @@ enum AppActorPaymentStorageKey {
     /// bucket. Lets cold start skip the redundant attribute PATCH when nothing changed.
     static let automaticProfileContextFingerprintPrefix = "appactor_profile_context_fp_v1_"
 
+    /// Set once the one-time purge of unverified salt-route cache entries has run.
+    static let unverifiedSaltRouteCachePurged = "appactor_unverified_salt_route_cache_purged_v1"
+
     // App Account Token (for StoreKit purchase → Apple transaction binding)
     static let appAccountToken = "appactor_app_account_token"
 
