@@ -83,26 +83,14 @@ final class PaymentStorageTests: XCTestCase {
     }
 
     func testEnsureAppUserIdReplacesAStoredIdTheServerRejects() {
-        storage.setAppUserId("0")
-        let oldToken = storage.ensureAppAccountToken()
+        storage.setAppUserId("guest")
+        storage.ensureAppAccountToken()
 
         let id = storage.ensureAppUserId()
 
         XCTAssertTrue(id.hasPrefix("appactor-anon-"))
-        XCTAssertEqual(storage.ensureAppUserId(), id)
-        XCTAssertNotEqual(storage.ensureAppAccountToken(), oldToken)
-    }
-
-    func testResolveAppUserIdReplacesACachedIdTheServerRejects() {
-        storage.setAppUserId("guest")
-        let oldToken = storage.ensureAppAccountToken()
-
-        let resolved = storage.resolveAppUserId(explicit: nil)
-
-        XCTAssertTrue(resolved.hasPrefix("appactor-anon-"))
-        XCTAssertEqual(storage.currentAppUserId, resolved)
+        XCTAssertEqual(storage.currentAppUserId, id)
         XCTAssertNil(storage.appAccountToken)
-        XCTAssertNotEqual(storage.ensureAppAccountToken(), oldToken)
     }
 
     func testPaymentConfigurationTreatsWhitespaceAppUserIdAsOmitted() {

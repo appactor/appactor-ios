@@ -149,7 +149,7 @@ enum ResponseSignatureVerifier {
 
 			let binding = requestBinding(method: method, target: requestPath, body: requestBody)
 			guard let payloadData = signedPayload(
-				header: "\(sentNonce)\n\(timestampStr)\n\(binding)\n", response: response, body: body
+				header: "\(sentNonce)\n\(timestampStr)\n\(binding)\n", statusCode: response.statusCode, body: body
 			) else {
 				return .signatureInvalid
 			}
@@ -182,7 +182,7 @@ enum ResponseSignatureVerifier {
 
 		let eTag = response.value(forHTTPHeaderField: "ETag") ?? ""
 		guard let payloadData = signedPayload(
-			header: "\(saltBase64)\n\(apiKey)\n\(requestPath)\n\(timestampStr)\n\(eTag)\n", response: response, body: body
+			header: "\(saltBase64)\n\(apiKey)\n\(requestPath)\n\(timestampStr)\n\(eTag)\n", statusCode: response.statusCode, body: body
 		) else {
 			return .signatureInvalid
 		}
@@ -190,14 +190,11 @@ enum ResponseSignatureVerifier {
 		return verifySignature(signatureData, payloadData: payloadData, v1Key: v1Key, rootKey: rootKey, now: now)
 	}
 
-	/// The signed bytes: `header`, then the body exactly as received. The server signs the UTF-8
-	/// of its JSON, so a body that isn't those same bytes (UTF-16, a BOM) can't verify.
-	///
-	/// The status isn't signed. The server signs a 304 over no body and every other response
-	/// over its JSON, so that pairing is required here: a signed 304 can't pass as a 200.
-	/// `nil` when the pairing doesn't hold.
-	private static func signedPayload(header: String, response: HTTPURLResponse, body: Data) -> Data? {
-		guard (response.statusCode == 304) == body.isEmpty else { return nil }
+	/// The signed bytes: `header`, then the body exactly as received (the server signs the UTF-8
+	/// of its JSON). The status isn't signed, so a 304 must have no body and any other status
+	/// one, as the server sends them: a signed 304 can't pass as a 200. `nil` otherwise.
+	private static func signedPayload(header: String, statusCode: Int, body: Data) -> Data? {
+		guard (statusCode == 304) == body.isEmpty else { return nil }
 		return Data(header.utf8) + body
 	}
 

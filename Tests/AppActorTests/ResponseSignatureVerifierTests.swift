@@ -180,6 +180,11 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         Data([0xFF, 0xFE]) + "{\"customer\":{\"entitlements\":{\"premium\":{\"isActive\":true}}}}".data(using: .utf16LittleEndian)!
     }
 
+    /// Statuses and bodies a proxy could pair with a signed 304's signature.
+    private var forgedFrom304: [(status: Int, body: Data)] {
+        [(200, forgedUTF16Body), (200, Data()), (304, forgedUTF16Body)]
+    }
+
     func testNonceBasedSigned304CannotPassAsA200() {
         let timestampStr = String(Int(now))
         let headers = [
@@ -188,7 +193,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             "X-AppActor-Signature-Timestamp": timestampStr
         ]
 
-        for (status, body) in [(200, forgedUTF16Body), (200, Data()), (304, forgedUTF16Body)] {
+        for (status, body) in forgedFrom304 {
             let result = ResponseSignatureVerifier.verify(
                 response: makeResponse(headers: headers, statusCode: status), body: body, sentNonce: nonce,
                 apiKey: "", requestPath: nonceTarget,
@@ -198,30 +203,10 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         }
     }
 
-    func testBodyIsVerifiedByteForByte() {
-        let body = Data("{\"ok\":true}".utf8)
-        let timestampStr = String(Int(now))
-        let response = makeResponse(headers: [
-            "X-AppActor-Request-Nonce": nonce,
-            "X-AppActor-Signature": signV1(body: body, nonce: nonce, timestamp: timestampStr),
-            "X-AppActor-Signature-Timestamp": timestampStr
-        ])
-
-        // The same text behind a UTF-8 BOM.
-        let result = ResponseSignatureVerifier.verify(
-            response: response, body: Data([0xEF, 0xBB, 0xBF]) + body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
-            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
-        )
-        XCTAssertEqual(result, .signatureInvalid)
-    }
-
     func testV1TamperedBody() {
         let body = Data("{\"ok\":true}".utf8)
         let timestampStr = String(Int(now))
         let sig = signV1(body: body, nonce: nonce, timestamp: timestampStr)
-
-        let tamperedBody = Data("{\"ok\":false}".utf8)
 
         let response = makeResponse(headers: [
             "X-AppActor-Request-Nonce": nonce,
@@ -229,12 +214,15 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             "X-AppActor-Signature-Timestamp": timestampStr
         ])
 
-        let result = ResponseSignatureVerifier.verify(
-            response: response, body: tamperedBody, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
-            v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
-        )
-        XCTAssertEqual(result, .signatureInvalid)
+        // Other JSON, and the same text behind a UTF-8 BOM: the bytes are what's signed.
+        for tamperedBody in [Data("{\"ok\":false}".utf8), Data([0xEF, 0xBB, 0xBF]) + body] {
+            let result = ResponseSignatureVerifier.verify(
+                response: response, body: tamperedBody, sentNonce: nonce,
+                apiKey: "", requestPath: nonceTarget,
+                v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+            )
+            XCTAssertEqual(result, .signatureInvalid)
+        }
     }
 
     // MARK: - v2 Tests
@@ -833,7 +821,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             "ETag": eTag
         ]
 
-        for (status, body) in [(200, forgedUTF16Body), (200, Data()), (304, forgedUTF16Body)] {
+        for (status, body) in forgedFrom304 {
             let result = ResponseSignatureVerifier.verify(
                 response: makeResponse(headers: headers, statusCode: status), body: body, sentNonce: nil,
                 apiKey: testApiKey, requestPath: testPath,
