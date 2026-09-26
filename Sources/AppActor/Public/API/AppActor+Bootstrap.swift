@@ -65,11 +65,9 @@ extension AppActor {
         }
 
         // ── Phase 2: Bootstrap (sequential: offerings(api) → sweep → drain+refresh) ──
-        // Cancelled, the startup reverts the session to idle (below), and a configure() may be
-        // waiting for that. The customer fetch bootstrap waits on is an unstructured task the
-        // manager shares between callers, which this cancellation doesn't reach. The startup
-        // owns the session's teardown, so it cancels that fetch instead of waiting out its retry
-        // cycle (about 96 s on a stalled network).
+        // Cancelled, the startup reverts the session (below), and a configure() may be waiting
+        // for that. The customer fetch bootstrap waits on is shared, and this cancellation doesn't
+        // reach it (see cancelInFlight()): the startup owns the teardown and cancels it itself.
         let customerManager = self.customerManager
         await withTaskCancellationHandler {
             await self.runBootstrap(verboseBootstrap: verboseBootstrap, session: session)
@@ -78,11 +76,10 @@ extension AppActor {
         }
 
         // If bootstrap was cancelled mid-way, revert lifecycle so configure() can be retried.
-        guard !Task.isCancelled else {
+        guard !Task.isCancelled, isSessionCurrent(session) else {
             await revertLifecycleIfCancelled(session: session)
             return
         }
-        guard isSessionCurrent(session) else { return }
 
         self.isBootstrapComplete = true
         settleStartup()
@@ -260,8 +257,7 @@ extension AppActor {
         let paymentProcessor = self.paymentProcessor
         let intentWatcher = purchaseIntentWatcher
         prefetch?.cancel()
-        // The prefetch waits on the manager's shared network task, which its cancel doesn't reach.
-        await offeringsManager?.cancelInFlight()
+        await offeringsManager?.cancelInFlight() // the prefetch waits on the shared network task
         await prefetch?.value
         await transactionWatcher?.stop()
         await paymentProcessor?.stop()
@@ -310,7 +306,7 @@ extension AppActor {
             self.offeringsPrefetchTask = Task { await manager.prefetchForBootstrap() }
         }
         logStep("offerings/api")
-        guard !Task.isCancelled, isSessionCurrent(session) else { return }
+        guard !Task.isCancelled else { return }
 
         // 2. Sweep unfinished transactions from previous sessions.
         if let watcher = self.transactionWatcher {

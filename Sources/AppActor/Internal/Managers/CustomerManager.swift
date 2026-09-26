@@ -19,13 +19,12 @@ actor AppActorCustomerManager {
     /// The app user ID this manager is currently caching for.
     private var currentAppUserId: String?
 
-    /// In-flight dedup: only one fetch at a time, keyed by userId to prevent cross-user coalescing.
-    private var inflight: (userId: String, task: Task<AppActorCustomerInfo, Error>)?
-    /// Generation counter for safe inflight bookkeeping (avoids `===` on Task).
+    /// Every fetch still running, keyed by generation. The newest is the one callers coalesce on
+    /// (keyed by userId to prevent cross-user coalescing); older ones, replaced by a force refresh
+    /// or another user's fetch, keep running for the callers already waiting on them.
+    private var runningFetches: [UInt64: (userId: String, task: Task<AppActorCustomerInfo, Error>)] = [:]
+    /// Generation of the newest fetch (avoids `===` on Task).
     private var inflightGeneration: UInt64 = 0
-    /// Every fetch still running, keyed by generation: the one in `inflight`, and any that a force
-    /// refresh or another user's fetch replaced there while callers still wait on it.
-    private var runningFetches: [UInt64: Task<AppActorCustomerInfo, Error>] = [:]
 
     /// Last `request_id` from the server, for debugging.
     private(set) var lastRequestId: String?
@@ -84,14 +83,14 @@ actor AppActorCustomerManager {
     }
 
     /// Cancels every fetch still running, whoever started it. The fetches are unstructured tasks
-    /// shared by every caller for the user, so a caller's own cancellation never reaches them.
-    /// Called when an identity or a session ends (logOut() through `clearCache(appUserId:)`,
-    /// reset(), a cancelled startup); waiters get a `CancellationError`, unless the fetch had its
-    /// answer already and is writing it.
+    /// shared by every caller for the user, so a caller's own cancellation never reaches them, and
+    /// one a cancelled caller started would run to the end of its retry cycle with nobody to
+    /// cancel it. Called when an identity or a session ends (logOut(), reset(), a cancelled
+    /// startup); waiters get a `CancellationError`, unless the fetch had its answer already and
+    /// is writing it.
     func cancelInFlight() {
-        runningFetches.values.forEach { $0.cancel() }
+        runningFetches.values.forEach { $0.task.cancel() }
         runningFetches.removeAll()
-        inflight = nil
     }
 
     // MARK: - Public API
@@ -108,13 +107,12 @@ actor AppActorCustomerManager {
     func getCustomerInfo(appUserId: String, forceRefresh: Bool = false) async throws -> AppActorCustomerInfo {
         currentAppUserId = appUserId
         let resource = AppActorCacheResource.customer(appUserId: appUserId)
-        // A cancelled caller neither starts nor waits on a fetch: nothing would cancel one it
-        // started (see cancelInFlight()), and a reset() or a cancelled startup would wait for it.
+        // A cancelled caller neither starts nor waits on a fetch (see cancelInFlight()).
         try Task.checkCancellation()
 
         // Coalesce only if same userId and not a force refresh.
-        if !forceRefresh, let inflight, inflight.userId == appUserId {
-            return try await inflight.task.value
+        if !forceRefresh, let newest = runningFetches[inflightGeneration], newest.userId == appUserId {
+            return try await newest.task.value
         }
 
         let client = self.client
@@ -127,8 +125,7 @@ actor AppActorCustomerManager {
 
             do {
                 let result = try await client.getCustomer(appUserId: appUserId, eTag: lastETag)
-                // Cancelled by cancelInFlight() while the response was on its way: logOut() or
-                // reset() is deleting this cache, and a write now would bring it back.
+                // Cancelled while the response was on its way: the teardown is deleting this cache.
                 try Task.checkCancellation()
 
                 switch result {
@@ -176,20 +173,9 @@ actor AppActorCustomerManager {
 
         inflightGeneration &+= 1
         let generation = inflightGeneration
-        inflight = (userId: appUserId, task: task)
-        runningFetches[generation] = task
-
-        do {
-            let info = try await task.value
-            // Only clear if still our task (forceRefresh may have replaced it)
-            if inflightGeneration == generation { inflight = nil }
-            runningFetches[generation] = nil
-            return info
-        } catch {
-            if inflightGeneration == generation { inflight = nil }
-            runningFetches[generation] = nil
-            throw error
-        }
+        runningFetches[generation] = (userId: appUserId, task: task)
+        defer { runningFetches[generation] = nil }
+        return try await task.value
     }
 
     /// Derives active entitlement keys offline from StoreKit 2 transactions and

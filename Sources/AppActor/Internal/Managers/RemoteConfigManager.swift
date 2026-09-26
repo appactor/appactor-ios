@@ -106,7 +106,7 @@ actor AppActorRemoteConfigManager {
         let configs: AppActorRemoteConfigs
         do {
             configs = try await fetchCoalesced(context: preferredContext)
-        } catch let error as AppActorError where (error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500))
+        } catch let error as AppActorError where error.isNetworkOrServerError
             && freshModeDecision(for: modeContext) != .publicOnly
             && shouldRefetchPublicResultWithUser(publicContext: preferredContext, userContext: userContext) {
             // The probe reached neither the server nor a public copy on disk. A project that
@@ -189,7 +189,7 @@ actor AppActorRemoteConfigManager {
             guard let self else { throw AppActorError.notConfigured }
             do {
                 return try await self.executePipeline(context: context, generation: generation)
-            } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
+            } catch let error as AppActorError where error.isNetworkOrServerError {
                 // Network / 5xx fallback: return disk-cached configs if available
                 try await self.ensureFetchStillCurrent(context: context, generation: generation)
                 if let cached = try await self.loadFromDiskCache(context: context, generation: generation) {
@@ -474,7 +474,7 @@ actor AppActorRemoteConfigManager {
             updateModeDecision(modeContext: modeContext, requiresUserContext: true)
             if !publicBodyIsUnsafe { await discardPublicProbeCache(context: publicContext) }
             return configs
-        } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
+        } catch let error as AppActorError where error.isNetworkOrServerError {
             guard !publicBodyIsUnsafe, let publicResult else { throw error }
             // The mode decision stays unrecorded on this path. Writing
             // "needs the user context" from a refetch that never reached the

@@ -629,11 +629,10 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     /// Whether a 304's ETag revalidates the one sent: an absent one does; otherwise the weak
     /// comparison the server uses (RFC 7232 §2.3.2, lib/response.ts `etagMatches`), where tags
     /// match when they are equal once a `W/` prefix is dropped.
-    static func etagMatches(_ returned: String?, sent: String) -> Bool {
-        guard let returned = returned?.trimmingCharacters(in: .whitespaces), !returned.isEmpty else { return true }
+    private func etagMatches(_ returned: String?, sent: String) -> Bool {
+        guard let returned = normalizeETag(returned) else { return true }
         func opaqueTag(_ tag: String) -> Substring {
-            let trimmed = tag.trimmingCharacters(in: .whitespaces)
-            return trimmed.hasPrefix("W/") ? trimmed.dropFirst(2) : Substring(trimmed)
+            tag.hasPrefix("W/") ? tag.dropFirst(2) : Substring(tag)
         }
         return opaqueTag(returned) == opaqueTag(sent)
     }
@@ -866,8 +865,9 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     return try onSuccess(data, http, signatureVerified, requestId)
 
                 case 304:
+                    let sentETag = mutableRequest.value(forHTTPHeaderField: "If-None-Match")
                     if verifySignatures && !signatureVerified {
-                        if attempt == 0, normalizeETag(eTag) != nil {
+                        if sentETag != nil {
                             lastError = AppActorError.signatureError(.signatureMissing, requestId: requestId)
                             skipDelayForImmediateETagRetry = true
                             Log.signing.warn("Unsigned 304 for \(path); retrying once without ETag")
@@ -881,8 +881,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     // server's current ETag, and every genuine 304 after it would keep it. A 304
                     // that doesn't match is retried once without a validator; a 304 to a request
                     // that sent none is an answer the server never gives, and is refused.
-                    let sentETag = mutableRequest.value(forHTTPHeaderField: "If-None-Match")
-                    guard let sentETag, Self.etagMatches(http.value(forHTTPHeaderField: "ETag"), sent: sentETag) else {
+                    guard let sentETag, etagMatches(http.value(forHTTPHeaderField: "ETag"), sent: sentETag) else {
                         lastError = AppActorError.serverError(
                             httpStatus: 304,
                             code: "CACHE_INCONSISTENCY",

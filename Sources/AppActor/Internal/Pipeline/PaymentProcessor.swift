@@ -636,10 +636,9 @@ actor AppActorPaymentProcessor {
                 resumeContinuation(key: item.key, result: .queued)
             } else {
                 // A 2xx whose signature can't be verified (a device clock off by more than the
-                // allowed drift, a proxy rewriting responses) or an error outside AppActorError.
-                // The item is never finished on an answer it can't verify, but a flat 3 s retry
-                // re-posts the receipt forever; these back off on their own curve instead. A
-                // cancelled POST says nothing about the response and keeps the short schedule.
+                // allowed drift, a proxy rewriting responses) or an error outside AppActorError:
+                // never finished, and retried on its own curve, not every 3 s forever. A cancelled
+                // POST says nothing about the response and keeps the short schedule.
                 updated.phase = .needsPost
                 updated.nextRetryAt = Date().addingTimeInterval(
                     error is CancellationError
@@ -954,7 +953,7 @@ actor AppActorPaymentProcessor {
     /// long a queued purchase waits once the cause is fixed, on the device clock (a clock that was
     /// set ahead and put back also holds it back by the difference).
     static func unverifiedResponseBackoffDelay(attempt: Int) -> TimeInterval {
-        min(pow(2, Double(min(attempt, 10))), 10 * 60)
+        min(pow(2, Double(attempt)), 10 * 60)
     }
 
     /// Computes retry delay, respecting server `retryAfterSeconds` if provided.

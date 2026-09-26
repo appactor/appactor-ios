@@ -223,8 +223,9 @@ actor AppActorOfferingsManager {
 
     /// Cancels every fetch in flight, whoever started it, and moves the generation on so none of
     /// them writes its result. The fetches are unstructured tasks shared by every caller, so a
-    /// caller's own cancellation never reaches them; only the owner of a teardown (reset(), a
-    /// cancelled startup) calls this, and every waiter gets a `CancellationError`.
+    /// caller's own cancellation never reaches them, and one a cancelled caller started would run
+    /// to the end of its retry cycle with nobody to cancel it. Called by the owner of a teardown
+    /// (reset(), a cancelled startup); every waiter gets a `CancellationError`.
     func cancelInFlight() {
         cacheGeneration &+= 1
         inFlightTask?.cancel()
@@ -277,7 +278,7 @@ actor AppActorOfferingsManager {
             startEnrichmentTaskIfNeeded(dto: dto, cacheDate: cacheDate, generation: gen, verification: payload.verification)
         } catch is CancellationError {
             return
-        } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
+        } catch let error as AppActorError where error.isNetworkOrServerError {
             if let entry = await loadCachedPayload(), isLocaleCompatible(entry.value.preferredLocales) {
                 startEnrichmentTaskIfNeeded(dto: entry.value.dto, cacheDate: entry.cachedAt, generation: gen, verification: entry.verification)
             } else if let fallback = fallbackDTO {
@@ -303,7 +304,7 @@ actor AppActorOfferingsManager {
                 let result = try await self.executePipeline(generation: gen)
                 await self.setInFlightComplete(generation: gen)
                 return result
-            } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
+            } catch let error as AppActorError where error.isNetworkOrServerError {
                 // Network / 5xx fallback chain: disk cache → bundled fallback → throw
                 // Keep inFlightTask alive during recovery so concurrent callers coalesce
                 if let cached = await self.loadFromDiskCache(generation: gen) {
@@ -382,7 +383,7 @@ actor AppActorOfferingsManager {
 
     private func fetchNetworkStageCoalesced(generation: UInt64) async throws -> NetworkStagePayload {
         // A cancelled caller (a prefetch cancelled before it ran) neither starts nor waits on the
-        // shared task: nothing would cancel one it started, and whoever cancelled it would wait.
+        // shared task (see cancelInFlight()).
         try Task.checkCancellation()
         if let existing = networkStageTask {
             return try await existing.value

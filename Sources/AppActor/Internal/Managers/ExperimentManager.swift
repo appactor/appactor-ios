@@ -203,7 +203,7 @@ actor AppActorExperimentManager {
                     cacheKey: cacheKey,
                     generation: generation
                 )
-            } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
+            } catch let error as AppActorError where error.isNetworkOrServerError {
                 // Network / 5xx fallback: return disk-cached assignment if available.
                 // Use hasCachedEntry to distinguish "cached nil" from "cache miss".
                 try await self.ensureFetchStillCurrent(cacheKey: cacheKey, generation: generation)
@@ -311,7 +311,7 @@ actor AppActorExperimentManager {
     /// after every await, never into a copy taken before one, which would drop a key a
     /// concurrent fetch added meanwhile. It is published to memory before the write so that a
     /// concurrent write carries it too; a clear that wins during the write removes it from memory
-    /// as well, and `persistAssignmentsIfCurrent` removes the file.
+    /// as well, and the file is removed.
     private func storeAssignment(
         _ entry: CachedAssignment,
         forKey experimentKey: String,
@@ -327,13 +327,14 @@ actor AppActorExperimentManager {
         }
         try ensureFetchStillCurrent(cacheKey: cacheKey, generation: generation)
         cachedAssignmentsByContext[context, default: [:]][experimentKey] = entry
-        try await persistAssignmentsIfCurrent(
-            cachedAssignmentsByContext[context] ?? [:],
-            context: context,
-            verified: verified,
-            cacheKey: cacheKey,
-            generation: generation
-        )
+        let resource = resource(for: context)
+        await etagManager.storeFresh(cachedAssignmentsByContext[context] ?? [:], for: resource, eTag: nil, verified: verified)
+        do {
+            try ensureFetchStillCurrent(cacheKey: cacheKey, generation: generation)
+        } catch {
+            await etagManager.clear(resource)
+            throw error
+        }
         lastCacheContext = context
     }
 
@@ -345,24 +346,6 @@ actor AppActorExperimentManager {
             return
         }
         await etagManager.storeFresh(assignments, for: resource(for: context), eTag: nil, verified: verified)
-    }
-
-    private func persistAssignmentsIfCurrent(
-        _ assignments: [String: CachedAssignment],
-        context: CacheContext,
-        verified: Bool = false,
-        cacheKey: AssignmentCacheKey,
-        generation: UInt64
-    ) async throws {
-        let resource = resource(for: context)
-        try ensureFetchStillCurrent(cacheKey: cacheKey, generation: generation)
-        await etagManager.storeFresh(assignments, for: resource, eTag: nil, verified: verified)
-        do {
-            try ensureFetchStillCurrent(cacheKey: cacheKey, generation: generation)
-        } catch {
-            await etagManager.clear(resource)
-            throw error
-        }
     }
 
     /// Loads a specific experiment assignment from disk cache, distinguishing

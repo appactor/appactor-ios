@@ -54,12 +54,9 @@ extension AppActor {
     /// Configures and runs the startup sequence, after waiting out a startup still in flight.
     ///
     /// A cancelled configure() keeps `.configured` until its startup sees the cancellation and
-    /// reverts to `.idle`. A configure() in that window used to be ignored as "already
-    /// configured", and the revert then left the SDK unconfigured although that call returned
-    /// normally. A SwiftUI `.task(id:)` whose id changes during startup does this, and SwiftUI
-    /// doesn't document whether the old task is cancelled before the new one starts. So a
-    /// configure() that finds a startup in flight waits for it to settle and then decides:
-    /// after a revert it configures, otherwise it is ignored as before.
+    /// reverts to `.idle`, so a configure() in that window (a SwiftUI `.task(id:)` restarted by an
+    /// id change, whichever order SwiftUI cancels and starts them in) waits for it to settle and
+    /// then decides: after a revert it configures, otherwise it is ignored as before.
     func configureAndStart(
         _ config: AppActorPaymentConfiguration,
         testClient: (any AppActorPaymentClientProtocol)? = nil
@@ -103,9 +100,8 @@ extension AppActor {
         }
 
         paymentLifecycle = .configured
-        // Its startup sets it. reset() and a revert clear it, but configure() must never find it
-        // set before its own startup ran, or a configure() after it wouldn't wait (see
-        // configureAndStart); test setups leave it set.
+        // Set by this session's startup only: a configure() arriving before then must wait
+        // (see configureAndStart).
         isBootstrapComplete = false
 
         // If payment options specify a log level, escalate (never downgrade).
@@ -521,7 +517,7 @@ extension AppActor {
         let currentId = storage.currentAppUserId ?? ""
         // A customer fetch still in flight for this user would write their cache back after the
         // delete below, fresh for another 24 h.
-        await customerManager?.clearCache(appUserId: currentId)
+        await customerManager?.cancelInFlight()
         if let etagMgr = paymentETagManager {
             await etagMgr.clear(.customer(appUserId: currentId))
         }
@@ -592,10 +588,9 @@ extension AppActor {
         // ── Phase 2: Cancel + await all tracked tasks ──
         // The ASA task runs independently after configure completes.
         // The foreground task runs ASA flush + sync + customer refresh.
-        // Cancelling a tracked task reaches only its own structured work. The customer and
-        // offerings fetches it may be waiting on are unstructured tasks the managers share
-        // between callers, so reset() cancels those itself; otherwise the awaits below last
-        // until their whole retry cycle ends (about 96 s on a stalled network).
+        // Cancelling a tracked task doesn't reach the managers' shared fetches it may be waiting
+        // on (see cancelInFlight()), so reset() cancels those too, or the awaits below would last
+        // until their retry cycle ends (about 96 s on a stalled network).
         asaTask?.cancel()
         foregroundTask?.cancel()
         stalenessTimerTask?.cancel()

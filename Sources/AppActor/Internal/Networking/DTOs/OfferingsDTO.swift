@@ -112,29 +112,29 @@ private struct AppActorMetadataValue: Decodable {
     let string: String
 
     init(from decoder: Decoder) throws {
-        if let object = try? decoder.container(keyedBy: AppActorMetadataKey.self) {
+        // Scalars first: nearly every value is a string.
+        let value = try decoder.singleValueContainer()
+        if let text = try? value.decode(String.self) {
+            string = text
+        } else if let flag = try? value.decode(Bool.self) {
+            string = String(flag)
+        } else if let integer = try? value.decode(Int64.self) {
+            string = String(integer)
+        } else if let number = try? value.decode(Double.self) {
+            string = String(number)
+        } else if let object = try? decoder.container(keyedBy: AppActorMetadataKey.self) {
             let entries = try object.allKeys.map { key in
                 let value = try object.decodeNil(forKey: key) ? "null" : try object.decode(Self.self, forKey: key).string
                 return "\(key.stringValue)=\(value)"
             }
             string = "{\(entries.joined(separator: ", "))}"
-        } else if var array = try? decoder.unkeyedContainer() {
+        } else {
+            var array = try decoder.unkeyedContainer()
             var items: [String] = []
             while !array.isAtEnd {
                 items.append(try array.decodeNil() ? "null" : try array.decode(Self.self).string)
             }
             string = "[\(items.joined(separator: ", "))]"
-        } else {
-            let value = try decoder.singleValueContainer()
-            if let text = try? value.decode(String.self) {
-                string = text
-            } else if let flag = try? value.decode(Bool.self) {
-                string = String(flag)
-            } else if let integer = try? value.decode(Int64.self) {
-                string = String(integer)
-            } else {
-                string = String(try value.decode(Double.self))
-            }
         }
     }
 }
