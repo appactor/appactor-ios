@@ -297,8 +297,9 @@ actor AppActorTransactionWatcher {
             for: transaction,
             jwsPayload: jwsPayload
         )
-        // Only a transaction made with this purchase's appAccountToken can be its result;
-        // another identity's approved Ask to Buy or an offer code is left to the paths below.
+        // Only a transaction made with this identity's appAccountToken can be this purchase's
+        // result; another identity's approved Ask to Buy or an offer code is left to the paths
+        // below.
         if let token = foregroundPurchaseProductTokens[transaction.productID],
            transaction.appAccountToken == foregroundPurchaseAppAccountTokens[token],
            Self.shouldBufferForegroundTransaction(

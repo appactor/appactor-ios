@@ -118,14 +118,6 @@ actor AppActorETagManager {
         await diskStore.clearAllUnverified()
     }
 
-    /// Removes unverified offerings, remote-config and offline-catalog entries, which SDK
-    /// versions that accepted unsigned responses on those routes may have stored forged.
-    /// Run once per install: this SDK never stores an unsigned response from those routes,
-    /// and the catalog it builds from bundled fallback offerings must survive relaunch.
-    func clearUnverifiedSaltRouteEntries() async {
-        await diskStore.clearUnverifiedSaltRouteEntries()
-    }
-
     // MARK: - Clear
 
     /// Resets the freshness timestamp without deleting the cached data or ETag.

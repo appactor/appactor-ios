@@ -457,13 +457,23 @@ extension AppActorCustomerAttributesManager {
     struct PendingState: Codable, Sendable, Equatable {
         var buckets: [String: PendingBucket] = [:]
         var customAttributionSnapshots: [String: AppActorAttribution] = [:]
-        /// The attribution the server last accepted per user; queues saved before it existed
-        /// decode without it.
-        private var lastDeliveredAttributions: [String: AppActorAttribution]?
+        /// The attribution the server last accepted, per user.
+        var deliveredAttributions: [String: AppActorAttribution] = [:]
 
-        var deliveredAttributions: [String: AppActorAttribution] {
-            get { lastDeliveredAttributions ?? [:] }
-            set { lastDeliveredAttributions = newValue.isEmpty ? nil : newValue }
+        init() {}
+
+        private enum CodingKeys: String, CodingKey {
+            case buckets
+            case customAttributionSnapshots
+            case deliveredAttributions
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            buckets = try container.decode([String: PendingBucket].self, forKey: .buckets)
+            customAttributionSnapshots = try container.decode([String: AppActorAttribution].self, forKey: .customAttributionSnapshots)
+            // Queues saved before this key existed don't have it.
+            deliveredAttributions = try container.decodeIfPresent([String: AppActorAttribution].self, forKey: .deliveredAttributions) ?? [:]
         }
 
         var isEmpty: Bool {

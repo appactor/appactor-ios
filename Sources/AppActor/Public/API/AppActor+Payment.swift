@@ -37,10 +37,18 @@ extension AppActor {
             appUserId: appUserId,
             options: options
         )
-        if AppActorUserDefaultsPaymentStorage().currentAppUserId == nil {
+        let storage = AppActorUserDefaultsPaymentStorage()
+        if storage.currentAppUserId == nil {
             await AppActorProtectedData.waitUntilAvailable()
+            if Task.isCancelled { return }
         }
         AppActorProtectedData.recordFirstUnlockProbe()
+        // Once per install, before anything can read the cache: older SDKs accepted unsigned
+        // offerings and remote-config responses, so those entries may be forged.
+        if storage.string(forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged) == nil {
+            await AppActorCacheDiskStore().clearUnverifiedSaltRouteEntries()
+            storage.set("1", forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged)
+        }
         guard shared.configureInternal(config) else { return }
         await shared.runStartupSequence()
     }

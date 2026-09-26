@@ -57,34 +57,43 @@ enum AppActorProtectedData {
         guard !isAvailable() else { return }
         #if canImport(UIKit) && !os(watchOS)
         Log.sdk.warn("Device not unlocked since boot; waiting for the first unlock before reading the stored identity")
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let waiter = Waiter(continuation)
-            waiter.observer = NotificationCenter.default.addObserver(
-                forName: UIApplication.protectedDataDidBecomeAvailableNotification,
-                object: nil,
-                queue: .main
-            ) { _ in
-                MainActor.assumeIsolated { waiter.finish() }
+        let waiter = Waiter()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                waiter.start(continuation)
             }
-            // The device may have been unlocked between the first check and the observer.
-            if isAvailable() {
-                waiter.finish()
-            }
+        } onCancel: {
+            Task { @MainActor in waiter.finish() }
         }
         #endif
     }
 
     #if canImport(UIKit) && !os(watchOS)
+    /// Resumes once, on the first of: protected data becoming available, or cancellation.
     @MainActor
     private final class Waiter {
         private var continuation: CheckedContinuation<Void, Never>?
-        var observer: NSObjectProtocol?
+        private var observer: NSObjectProtocol?
+        private var finished = false
 
-        init(_ continuation: CheckedContinuation<Void, Never>) {
+        func start(_ continuation: CheckedContinuation<Void, Never>) {
+            // Cancelled already, or unlocked between the first check and now.
+            guard !finished, !Task.isCancelled, !isAvailable() else {
+                continuation.resume()
+                return
+            }
             self.continuation = continuation
+            observer = NotificationCenter.default.addObserver(
+                forName: UIApplication.protectedDataDidBecomeAvailableNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.finish() }
+            }
         }
 
         func finish() {
+            finished = true
             if let observer {
                 NotificationCenter.default.removeObserver(observer)
             }

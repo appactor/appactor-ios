@@ -416,6 +416,21 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(next.campaign, "launch")
     }
 
+    func testQueueSavedBeforeDeliveredAttributionsStillLoads() throws {
+        let queueStorage = InMemoryPaymentStorage()
+        let manager = AppActorCustomerAttributesManager(storage: queueStorage)
+        try manager.enqueueAttributes(appUserId: "user_1", attributes: ["plan": .string("pro")])
+        let raw = try XCTUnwrap(queueStorage.string(forKey: AppActorPaymentStorageKey.customerAttributesQueue))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        json.removeValue(forKey: "deliveredAttributions")
+        let oldFormat = try JSONSerialization.data(withJSONObject: json)
+        queueStorage.set(String(decoding: oldFormat, as: UTF8.self), forKey: AppActorPaymentStorageKey.customerAttributesQueue)
+
+        let reloaded = AppActorCustomerAttributesManager(storage: queueStorage)
+
+        XCTAssertEqual(reloaded.pendingBucket(appUserId: "user_1")?.attributes["plan"], .string("pro"))
+    }
+
     func testSingleRejectedKeyIsDropped() async throws {
         let invalid = AppActorError.serverError(httpStatus: 400, code: "VALIDATION_FAILED", message: nil, details: nil, requestId: nil)
         let rejectingClient = MockPaymentClient()

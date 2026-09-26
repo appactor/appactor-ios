@@ -266,6 +266,17 @@ final class PaymentClientSignatureTests: XCTestCase {
         XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "X-AppActor-Signature-Binding"), "request")
     }
 
+    func testSignatureTargetEncodesApostrophesInTheQueryLikeTheServer() {
+        // The server's WHATWG URL parser turns ' into %27 in an https query, and only there.
+        let request = URLRequest(url: URL(string: "https://api.appactor.test/v1/experiments/k/assignments?app_user_id=o'brien@x.com")!)
+        XCTAssertEqual(
+            AppActorPaymentClient.signatureRequestTarget(for: request, fallbackPath: "/"),
+            "/v1/experiments/k/assignments?app_user_id=o%27brien@x.com"
+        )
+        let pathRequest = URLRequest(url: URL(string: "https://api.appactor.test/v1/customers/o'brien")!)
+        XCTAssertEqual(AppActorPaymentClient.signatureRequestTarget(for: pathRequest, fallbackPath: "/"), "/v1/customers/o'brien")
+    }
+
     private func makeClient(requireSignatures: Bool = true) -> AppActorPaymentClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PaymentClientURLProtocol.self]

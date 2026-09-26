@@ -680,7 +680,11 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
     /// Returns the exact request target (path + query) used by response signing.
     /// Query params are part of the signature so targeted resources cannot be replayed across contexts.
-    private func signatureRequestTarget(for request: URLRequest, fallbackPath: String) -> String {
+    ///
+    /// The server reads the target back through the WHATWG URL parser, which percent-encodes
+    /// `'` in the query of an https URL. Foundation leaves `'` raw there, so it is encoded
+    /// here the same way; it is the only query character the two treat differently.
+    static func signatureRequestTarget(for request: URLRequest, fallbackPath: String) -> String {
         guard let url = request.url,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return fallbackPath
@@ -689,7 +693,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         guard let query = components.percentEncodedQuery, !query.isEmpty else {
             return path
         }
-        return "\(path)?\(query)"
+        return "\(path)?\(query.replacingOccurrences(of: "'", with: "%27"))"
     }
 
     /// Executes a single HTTP request (no retry). Returns raw (Data, HTTPURLResponse, signatureVerified).
@@ -722,18 +726,20 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         // Verify response signature for successful responses, including 304 validators.
         var signatureVerified = false
         if verifySignatures && ((200..<300).contains(http.statusCode) || http.statusCode == 304) {
-            let requestTarget = signatureRequestTarget(for: urlRequest, fallbackPath: path)
+            let requestTarget = Self.signatureRequestTarget(for: urlRequest, fallbackPath: path)
+            // Only nonce-signed responses are bound to the request.
+            let requestBinding = sentNonce == nil ? "" : ResponseSignatureVerifier.requestBinding(
+                method: urlRequest.httpMethod ?? "GET",
+                target: requestTarget,
+                body: urlRequest.httpBody
+            )
             let result = ResponseSignatureVerifier.verify(
                 response: http,
                 body: data,
                 sentNonce: sentNonce,
                 apiKey: apiKey,
                 requestPath: requestTarget,
-                requestBinding: ResponseSignatureVerifier.requestBinding(
-                    method: urlRequest.httpMethod ?? "GET",
-                    target: requestTarget,
-                    body: urlRequest.httpBody
-                )
+                requestBinding: requestBinding
             )
 
             switch result {

@@ -106,10 +106,8 @@ final class CacheVerificationTests: XCTestCase {
     func testSaltRoutePurgeRemovesOnlyUnverifiedSaltRouteEntries() async throws {
         let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("appactor-purge-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: cacheDir) }
-        let etagManager = AppActorETagManager(
-            diskStore: AppActorCacheDiskStore(directory: cacheDir),
-            responseVerificationEnabled: true
-        )
+        let diskStore = AppActorCacheDiskStore(directory: cacheDir)
+        let etagManager = AppActorETagManager(diskStore: diskStore, responseVerificationEnabled: true)
         let experiments = AppActorCacheResource.experiments(appUserId: "user_1")
         await etagManager.storeFresh(["v": "signed"], for: .customer(appUserId: "user_1"), eTag: nil, verified: true)
         await etagManager.storeFresh(["v": "signed"], for: .remoteConfigs(appUserId: nil), eTag: nil, verified: true)
@@ -124,7 +122,7 @@ final class CacheVerificationTests: XCTestCase {
         let offeringsAfterHygiene = await etagManager.cached([String: String].self, for: .offerings)
         XCTAssertNotNil(offeringsAfterHygiene)
 
-        await etagManager.clearUnverifiedSaltRouteEntries()
+        await diskStore.clearUnverifiedSaltRouteEntries()
 
         let customer = await etagManager.cached([String: String].self, for: .customer(appUserId: "user_1"))
         let signedRemoteConfigs = await etagManager.cached([String: String].self, for: .remoteConfigs(appUserId: nil))

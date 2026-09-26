@@ -101,7 +101,9 @@ actor AppActorCacheDiskStore {
 
     /// Removes offerings, remote-config and offline-catalog entries that don't hold a verified
     /// response. Earlier SDK versions accepted unsigned responses on these salt-signed routes,
-    /// so such an entry may carry a forged body.
+    /// so such an entry may carry a forged body. Run once per install: this SDK never stores an
+    /// unsigned response from those routes, and the catalog it builds from bundled fallback
+    /// offerings must survive relaunch.
     func clearUnverifiedSaltRouteEntries() {
         removeEntries(keyPrefixes: [
             AppActorCacheResource.offerings.cacheKey,
