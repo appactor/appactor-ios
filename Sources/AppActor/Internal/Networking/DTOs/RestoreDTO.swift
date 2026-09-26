@@ -53,6 +53,19 @@ struct AppActorRestoreResponseData: Decodable, Sendable {
     let user: AppActorCustomerDTO
     let restoredCount: Int
     let transferred: Bool
+    let items: [AppActorRestoreItemDTO]
+}
+
+/// Server outcome for one transaction of a bulk restore.
+///
+/// Only `restored` and `noop` mean the restore settled the transaction. `conflict` (not
+/// written, or kept with another owner) and `skipped_invalid` come back in a 2xx too.
+struct AppActorRestoreItemDTO: Decodable, Sendable {
+    let transactionId: String
+    let status: String
+
+    /// Whether the restore settled this transaction (`recordedTransactionIds`).
+    var isRecorded: Bool { status == "restored" || status == "noop" }
 }
 
 // MARK: - Internal Result
@@ -62,6 +75,7 @@ struct AppActorRestoreResult: Sendable {
     let customerInfo: AppActorCustomerInfo
     let restoredCount: Int
     let transferred: Bool
+    let recordedTransactionIds: Set<String>
     let requestId: String?
     let customerETag: String?
     let signatureVerified: Bool

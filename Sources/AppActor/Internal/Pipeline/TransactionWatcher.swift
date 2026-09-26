@@ -3,33 +3,26 @@ import StoreKit
 
 struct AppActorForegroundPurchaseScope {
     private let watcher: AppActorTransactionWatcher?
-    private let productId: String
-    private let appUserId: String
     private let token: UUID?
 
     static func begin(
         watcher: AppActorTransactionWatcher?,
         productId: String,
         appUserId: String,
+        appAccountToken: UUID,
         clientPurchaseContext: AppActorClientPurchaseContext
     ) async -> AppActorForegroundPurchaseScope {
         let token = await watcher?.beginForegroundPurchase(
             productId: productId,
             appUserId: appUserId,
+            appAccountToken: appAccountToken,
             clientPurchaseContext: clientPurchaseContext
         )
-        return AppActorForegroundPurchaseScope(
-            watcher: watcher,
-            productId: productId,
-            appUserId: appUserId,
-            token: token
-        )
+        return AppActorForegroundPurchaseScope(watcher: watcher, token: token)
     }
 
     func end(handledTransactionId: String?, preserveContextForPending: Bool = false) async {
         await watcher?.endForegroundPurchase(
-            productId: productId,
-            appUserId: appUserId,
             token: token,
             handledTransactionId: handledTransactionId,
             preserveContextForPending: preserveContextForPending
@@ -65,11 +58,18 @@ actor AppActorTransactionWatcher {
         let clientPurchaseContext: AppActorClientPurchaseContext?
     }
 
+    /// A purchase() in flight, keyed by its scope token.
+    private struct ForegroundPurchase {
+        let productId: String
+        let context: AppActorClientPurchaseContext
+        let appUserId: String
+        let appAccountToken: UUID
+        var buffered: [BufferedTransaction] = []
+    }
+
     private var pendingBuffer: [BufferedTransaction] = []
     private var foregroundPurchaseProductTokens: [String: UUID] = [:]
-    private var foregroundPurchaseContexts: [UUID: AppActorClientPurchaseContext] = [:]
-    private var foregroundPurchaseAppUserIds: [UUID: String] = [:]
-    private var foregroundPurchaseBuffer: [UUID: [BufferedTransaction]] = [:]
+    private var foregroundPurchases: [UUID: ForegroundPurchase] = [:]
     private var pendingPurchaseContexts: AppActorPendingPurchaseContextBuffer
 
     init(
@@ -174,34 +174,38 @@ actor AppActorTransactionWatcher {
     func beginForegroundPurchase(
         productId: String,
         appUserId: String,
+        appAccountToken: UUID,
         clientPurchaseContext: AppActorClientPurchaseContext
     ) -> UUID {
         let token = UUID()
         foregroundPurchaseProductTokens[productId] = token
-        foregroundPurchaseContexts[token] = clientPurchaseContext
-        foregroundPurchaseAppUserIds[token] = appUserId
+        foregroundPurchases[token] = ForegroundPurchase(
+            productId: productId,
+            context: clientPurchaseContext,
+            appUserId: appUserId,
+            appAccountToken: appAccountToken
+        )
         return token
     }
 
     func endForegroundPurchase(
-        productId: String,
-        appUserId: String,
         token: UUID?,
         handledTransactionId: String?,
         preserveContextForPending: Bool = false
     ) async {
-        guard let token else { return }
-        let context = foregroundPurchaseContexts[token]
-        if foregroundPurchaseProductTokens[productId] == token {
-            foregroundPurchaseProductTokens.removeValue(forKey: productId)
+        guard let token, let purchase = foregroundPurchases.removeValue(forKey: token) else { return }
+        if foregroundPurchaseProductTokens[purchase.productId] == token {
+            foregroundPurchaseProductTokens.removeValue(forKey: purchase.productId)
         }
-        foregroundPurchaseContexts.removeValue(forKey: token)
-        let capturedAppUserId = foregroundPurchaseAppUserIds.removeValue(forKey: token) ?? appUserId
-        let buffered = foregroundPurchaseBuffer.removeValue(forKey: token) ?? []
-        if preserveContextForPending, handledTransactionId == nil, buffered.isEmpty, let context {
-            pendingPurchaseContexts.append(context, productId: productId, appUserId: capturedAppUserId)
+        if preserveContextForPending, handledTransactionId == nil, purchase.buffered.isEmpty {
+            pendingPurchaseContexts.append(
+                purchase.context,
+                productId: purchase.productId,
+                appUserId: purchase.appUserId,
+                appAccountToken: purchase.appAccountToken
+            )
         }
-        for item in buffered {
+        for item in purchase.buffered {
             let source: AppActorPaymentQueueItem.Source =
                 handledTransactionId == String(item.transaction.id) ? .purchase : item.source
             await enqueueWithUserId(
@@ -287,6 +291,7 @@ actor AppActorTransactionWatcher {
             jwsPayload: jwsPayload
         )
         if let token = foregroundPurchaseProductTokens[transaction.productID],
+           let purchase = foregroundPurchases[token],
            Self.shouldBufferForegroundTransaction(
                source: source,
                transactionProductId: transaction.productID,
@@ -294,20 +299,19 @@ actor AppActorTransactionWatcher {
                originalTransactionId: String(transaction.originalID),
                purchaseDate: transaction.purchaseDate,
                transactionReason: transactionReason,
-               foregroundProductId: transaction.productID,
-               foregroundContext: foregroundPurchaseContexts[token]
+               transactionAppAccountToken: transaction.appAccountToken,
+               foregroundProductId: purchase.productId,
+               foregroundAppAccountToken: purchase.appAccountToken,
+               foregroundContext: purchase.context
            ) {
-            let capturedUserId = foregroundPurchaseAppUserIds[token] ?? storage.ensureAppUserId()
-            let foregroundContext = (foregroundPurchaseContexts[token] ?? observedContext)
-                .replacingDeliverySource(.transactionUpdates, observedAt: Date())
             let buffered = BufferedTransaction(
                 transaction: transaction,
                 jws: jws,
                 source: source,
-                capturedAppUserId: capturedUserId,
-                clientPurchaseContext: foregroundContext
+                capturedAppUserId: purchase.appUserId,
+                clientPurchaseContext: purchase.context.replacingDeliverySource(.transactionUpdates, observedAt: Date())
             )
-            foregroundPurchaseBuffer[token, default: []].append(buffered)
+            foregroundPurchases[token]?.buffered.append(buffered)
             Log.storeKit.debug("Buffered transaction \(transaction.id) during foreground purchase (product: \(transaction.productID))")
             return
         }
@@ -370,6 +374,7 @@ actor AppActorTransactionWatcher {
         }
         return pendingPurchaseContexts.consume(
             productId: transaction.productID,
+            appAccountToken: transaction.appAccountToken,
             observedAt: Date(),
             deliverySource: source.defaultClientDeliverySource,
             transactionPurchaseDate: transaction.purchaseDate,
@@ -397,11 +402,16 @@ actor AppActorTransactionWatcher {
         originalTransactionId: String,
         purchaseDate: Date,
         transactionReason: AppActorTransactionReason,
+        transactionAppAccountToken: UUID?,
         foregroundProductId: String,
-        foregroundContext: AppActorClientPurchaseContext?
+        foregroundAppAccountToken: UUID,
+        foregroundContext: AppActorClientPurchaseContext
     ) -> Bool {
+        // Same appAccountToken rule as the pending buffer's `consume`: another identity's
+        // approved Ask to Buy or an offer code is never this purchase's result.
         guard source == .transactionUpdates,
-              transactionProductId == foregroundProductId else {
+              transactionProductId == foregroundProductId,
+              transactionAppAccountToken == foregroundAppAccountToken else {
             return false
         }
         if originalTransactionId == transactionId {
@@ -413,7 +423,7 @@ actor AppActorTransactionWatcher {
         if transactionReason == .purchase {
             return true
         }
-        guard let attemptStartedAt = foregroundContext?.clientPurchaseAttemptStartedAt else {
+        guard let attemptStartedAt = foregroundContext.clientPurchaseAttemptStartedAt else {
             return false
         }
         return purchaseDate >= attemptStartedAt.addingTimeInterval(-60)

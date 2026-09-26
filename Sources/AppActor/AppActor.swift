@@ -253,8 +253,15 @@ public final class AppActor: ObservableObject {
             // Step 4: POST bulk restore
             let result = try await client.postRestore(request)
 
-            // Step 5: Finish only the transactions we sent
-            for entry in toSend {
+            // Step 5: Finish only the transactions the server recorded (see
+            // AppActorRestoreItemDTO). The rest are not finished, ledgered or dropped from the
+            // queue, so an unfinished one is posted again by the receipt queue or the next
+            // launch sweep.
+            let recorded = toSend.filter { result.recordedTransactionIds.contains(String($0.transaction.id)) }
+            if recorded.count < toSend.count {
+                Log.sdk.warn("Restore: server did not record \(toSend.count - recorded.count) of \(toSend.count) transaction(s); leaving them unfinished")
+            }
+            for entry in recorded {
                 await entry.transaction.finish()
             }
 
@@ -266,7 +273,7 @@ public final class AppActor: ObservableObject {
             // via the single-receipt pipeline, a duplicate POST may occur. This is safe because
             // the server enforces idempotency via the transaction-based key — no duplicate grant
             // or data loss is possible. The duplicate POST is wasted network I/O only.
-            let keysToMark = toSend.map { AppActorPaymentQueueItem.makeKey(transactionId: String($0.transaction.id)) }
+            let keysToMark = recorded.map { AppActorPaymentQueueItem.makeKey(transactionId: String($0.transaction.id)) }
             await processor.markPostedAndReconcile(keys: keysToMark)
 
             // Step 6: Route overflow through single-receipt pipeline

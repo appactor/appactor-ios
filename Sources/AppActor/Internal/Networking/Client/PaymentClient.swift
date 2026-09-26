@@ -42,6 +42,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     private let responseLogger: (@Sendable (_ path: String, _ status: Int, _ body: Data) -> Void)?
     private static let signatureTargetHeader = "X-AppActor-Signature-Target"
     private static let signatureTargetPathQuery = "path-query"
+    private static let signatureBindingHeader = "X-AppActor-Signature-Binding"
     private static let remoteConfigRequiresUserContextHeader = "X-AppActor-Remote-Config-Requires-User-Context"
 
     init(
@@ -443,6 +444,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 customerInfo: customerInfo,
                 restoredCount: envelope.data.restoredCount,
                 transferred: envelope.data.transferred,
+                recordedTransactionIds: Set(envelope.data.items.filter(\.isRecorded).map(\.transactionId)),
                 requestId: envelope.requestId ?? requestId,
                 customerETag: responseETag,
                 signatureVerified: signatureVerified
@@ -670,12 +672,19 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
         let nonce = ResponseSignatureVerifier.generateNonce()
         request.setValue(nonce, forHTTPHeaderField: "X-AppActor-Nonce")
+        // Asks the server to sign method, path + query and body next to the nonce, so a
+        // response to a rewritten request can't pass as the answer to this one.
+        request.setValue("request", forHTTPHeaderField: Self.signatureBindingHeader)
         return nonce
     }
 
-    /// Returns the exact request target used by salt-based response signing.
+    /// Returns the exact request target (path + query) used by response signing.
     /// Query params are part of the signature so targeted resources cannot be replayed across contexts.
-    private func signatureRequestTarget(for request: URLRequest, fallbackPath: String) -> String {
+    ///
+    /// The server reads the target back through the WHATWG URL parser, which percent-encodes
+    /// `'` in the query of an https URL. Foundation leaves `'` raw there, so it is encoded
+    /// here the same way; it is the only query character the two treat differently.
+    static func signatureRequestTarget(for request: URLRequest, fallbackPath: String) -> String {
         guard let url = request.url,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return fallbackPath
@@ -684,13 +693,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         guard let query = components.percentEncodedQuery, !query.isEmpty else {
             return path
         }
-        return "\(path)?\(query)"
+        return "\(path)?\(query.replacingOccurrences(of: "'", with: "%27"))"
     }
 
     /// Executes a single HTTP request (no retry). Returns raw (Data, HTTPURLResponse, signatureVerified).
-    /// Verifies Ed25519 response signature when enabled and the server provides one.
+    /// Verifies the Ed25519 response signature when enabled.
     /// The `signatureVerified` flag is `true` only when signature verification actually passed,
-    /// `false` if verification was skipped or server didn't support signing.
+    /// `false` if verification was skipped (signatures not required, or an unsigned 304).
     private func performRawRequest(
         _ urlRequest: URLRequest,
         path: String,
@@ -722,37 +731,28 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 body: data,
                 sentNonce: sentNonce,
                 apiKey: apiKey,
-                requestPath: signatureRequestTarget(for: urlRequest, fallbackPath: path)
+                requestPath: Self.signatureRequestTarget(for: urlRequest, fallbackPath: path),
+                method: urlRequest.httpMethod ?? "GET",
+                requestBody: urlRequest.httpBody
             )
 
             switch result {
             case .success:
                 signatureVerified = true
                 Log.signing.debug("Signature verified for \(path)")
-            case .signingNotSupported:
-                if http.statusCode == 304 {
-                    Log.signing.warn("304 response was not signed for \(path); forcing fresh validation")
-                    break
-                }
-                if sentNonce != nil {
-                    // Nonce-required endpoint: server didn't echo nonce
-                    if requireSignatures {
-                        Log.signing.error("Response signature required but server did not sign for \(path)")
-                        throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
-                    }
-                    Log.signing.debug("Response signing not active on server for \(path)")
-                } else {
-                    // Nonce-free endpoint: server doesn't support salt signing yet (transitional)
-                    Log.signing.debug("Salt-based signing not active on server for \(path)")
-                }
-            case .signatureMissing:
+            case .unsigned, .signatureMissing:
                 if http.statusCode == 304 {
                     Log.signing.warn("304 response signature missing for \(path); forcing fresh validation")
                     break
                 }
-                // Server echoed nonce but signature is missing — possible MITM header strip
-                Log.signing.error("Response signature missing (nonce was echoed) for \(path)")
-                throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
+                // The server signs every JSON response on both the nonce and the salt routes, so
+                // a 2xx without its signature had the headers stripped on the way. Only a response
+                // with no signature at all passes, and only when signatures aren't required.
+                if result == .signatureMissing || requireSignatures {
+                    Log.signing.error("Response signature missing for \(path)")
+                    throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
+                }
+                Log.signing.debug("Unsigned response accepted for \(path) (signatures not required)")
             case .signatureInvalid:
                 Log.signing.error("Response signature INVALID for \(path)")
                 throw AppActorError.signatureError(.signatureVerificationFailed, requestId: requestId)

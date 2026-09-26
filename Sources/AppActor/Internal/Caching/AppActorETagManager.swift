@@ -6,8 +6,7 @@ import Foundation
 /// for all cacheable payment resources (offerings, customer).
 ///
 /// When `responseVerificationEnabled` is `true`, cache entries with failed
-/// verification are treated as untrusted and are not reused. Transitional
-/// `.notRequested` entries are still allowed through until the server signs them.
+/// verification are treated as untrusted and are not reused.
 actor AppActorETagManager {
 
     private let diskStore: AppActorCacheDiskStore
@@ -36,7 +35,6 @@ actor AppActorETagManager {
         guard !forceRefresh else { return nil }
         guard let entry = await diskStore.load(resource) else { return nil }
         // Don't reuse ETag from failed verification — force fresh fetch.
-        // .notRequested (transitional unsigned) is intentionally allowed through.
         if responseVerificationEnabled && entry.resolvedVerification == .failed {
             return nil
         }
@@ -48,8 +46,8 @@ actor AppActorETagManager {
     /// Stores a fresh 200 response. The value must be Encodable.
     ///
     /// - Parameter verified: Whether this specific response was cryptographically verified.
-    ///   Defaults to `responseVerificationEnabled` — pass `false` explicitly when the server
-    ///   did not support signing (transitional `.signingNotSupported`).
+    ///   Defaults to `responseVerificationEnabled` — pass `false` explicitly when the
+    ///   response signature was not checked.
     func storeFresh<T: Encodable>(_ value: T, for resource: AppActorCacheResource, eTag: String?, verified: Bool? = nil) async {
         guard let data = try? encoder.encode(value) else { return }
         await diskStore.save(makeCacheEntry(data: data, eTag: eTag, verified: verified), for: resource)
@@ -63,7 +61,7 @@ actor AppActorETagManager {
     /// Creates a cache entry with correctly mapped verification status.
     ///
     /// - `verified == true`  → `.verified` (signature passed)
-    /// - `verified == false` → `.notRequested` (server didn't sign — transitional, NOT a failure)
+    /// - `verified == false` → `.notRequested` (signature not checked, NOT a failure)
     /// - `verified == nil`   → `nil` (verification wasn't relevant to the caller)
     private func makeCacheEntry(data: Data, eTag: String?, verified: Bool?) -> AppActorCacheEntry {
         AppActorCacheEntry(
@@ -114,8 +112,7 @@ actor AppActorETagManager {
     /// Removes all failed-verification cache entries from disk when verification is enabled.
     ///
     /// Scans every cached file and removes entries whose verification result is
-    /// `.failed`. Transitional `.notRequested` entries remain available until the
-    /// server signs them. This covers both offerings and all per-user customer caches.
+    /// `.failed`. This covers both offerings and all per-user customer caches.
     func clearUnverifiedIfNeeded() async {
         guard responseVerificationEnabled else { return }
         await diskStore.clearAllUnverified()

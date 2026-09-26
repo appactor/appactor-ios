@@ -54,10 +54,12 @@ enum ResponseSignatureVerifier {
 
 	enum VerificationResult {
 		case success
-		/// Server echoed nonce but signature is missing — possible MITM header strip.
+		/// The response is marked as signed (nonce echo or salt header) but the signature or its
+		/// timestamp is missing — possible MITM header strip.
 		case signatureMissing
-		/// Server did not echo nonce — signing not enabled server-side (transitional).
-		case signingNotSupported
+		/// The response carries no signature (no nonce echo, no salt header).
+		/// `AppActorPaymentClient` rejects it when signatures are required.
+		case unsigned
 		case signatureInvalid
 		case timestampOutOfRange
 		case nonceMismatch
@@ -74,8 +76,10 @@ enum ResponseSignatureVerifier {
 		response: HTTPURLResponse,
 		body: Data,
 		sentNonce: String?,
-		apiKey: String = "",
-		requestPath: String = ""
+		apiKey: String,
+		requestPath: String,
+		method: String,
+		requestBody: Data?
 	) -> VerificationResult {
 		verify(
 			response: response,
@@ -83,6 +87,8 @@ enum ResponseSignatureVerifier {
 			sentNonce: sentNonce,
 			apiKey: apiKey,
 			requestPath: requestPath,
+			method: method,
+			requestBody: requestBody,
 			v1Key: v1PublicKey,
 			rootKey: rootPublicKey,
 			now: Date().timeIntervalSince1970
@@ -94,25 +100,29 @@ enum ResponseSignatureVerifier {
 	/// Test-injectable overload. Production `verify()` delegates to this.
 	///
 	/// Mode selection:
-	///   - sentNonce != nil → nonce-based verification (existing, unchanged)
-	///   - sentNonce == nil → salt-based verification (new, CDN-cacheable)
+	///   - sentNonce != nil → nonce-based verification, bound to the request (`requestBinding`)
+	///   - sentNonce == nil → salt-based verification (CDN-cacheable)
+	///
+	/// `requestPath` is the signed request target (path + query) in both modes.
 	static func verify(
 		response: HTTPURLResponse,
 		body: Data,
 		sentNonce: String?,
 		apiKey: String,
 		requestPath: String,
+		method: String = "GET",
+		requestBody: Data? = nil,
 		v1Key: Curve25519.Signing.PublicKey?,
 		rootKey: Curve25519.Signing.PublicKey?,
 		now: TimeInterval
 	) -> VerificationResult {
 
-		// ── Route 1: Nonce-based verification (existing logic) ──
+		// ── Route 1: Nonce-based verification, bound to the request ──
 		if let sentNonce {
 			let echoedNonce = response.value(forHTTPHeaderField: "X-AppActor-Request-Nonce")
 
 			guard let echoedNonce else {
-				return .signingNotSupported
+				return .unsigned
 			}
 
 			guard let signatureBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature") else {
@@ -138,7 +148,8 @@ enum ResponseSignatureVerifier {
 			}
 
 			let bodyString = String(data: body, encoding: .utf8) ?? ""
-			let payload = "\(sentNonce)\n\(timestampStr)\n\(bodyString)"
+			let binding = requestBinding(method: method, target: requestPath, body: requestBody)
+			let payload = "\(sentNonce)\n\(timestampStr)\n\(binding)\n\(bodyString)"
 			guard let payloadData = payload.data(using: .utf8) else {
 				return .signatureInvalid
 			}
@@ -146,9 +157,9 @@ enum ResponseSignatureVerifier {
 			return verifySignature(signatureData, payloadData: payloadData, v1Key: v1Key, rootKey: rootKey, now: now)
 		}
 
-		// ── Route 2: Salt-based verification (new, CDN-cacheable) ──
+		// ── Route 2: Salt-based verification (CDN-cacheable) ──
 		guard let saltBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature-Salt") else {
-			return .signingNotSupported
+			return .unsigned
 		}
 
 		guard let signatureBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature") else {
@@ -272,6 +283,14 @@ enum ResponseSignatureVerifier {
 
 	static func generateNonce() -> String {
 		UUID().uuidString
+	}
+
+	/// What the server signs next to the nonce for a client that sends
+	/// `X-AppActor-Signature-Binding: request`: method, path + query, and the lowercase hex
+	/// SHA-256 of the request body (of no bytes when there is none). A response to a rewritten
+	/// request (another user's path or body) then fails verification.
+	static func requestBinding(method: String, target: String, body: Data?) -> String {
+		"\(method)\n\(target)\n\(Data(SHA256.hash(data: body ?? Data())).lowercaseHexString)"
 	}
 
 	static func readUInt64BE(_ data: Data, offset: Int) -> UInt64 {

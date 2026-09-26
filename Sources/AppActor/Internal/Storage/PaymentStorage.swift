@@ -20,6 +20,9 @@ enum AppActorPaymentStorageKey {
     /// bucket. Lets cold start skip the redundant attribute PATCH when nothing changed.
     static let automaticProfileContextFingerprintPrefix = "appactor_profile_context_fp_v1_"
 
+    /// Set once the one-time purge of unverified salt-route cache entries has run.
+    static let unverifiedSaltRouteCachePurged = "appactor_unverified_salt_route_cache_purged_v1"
+
     // App Account Token (for StoreKit purchase → Apple transaction binding)
     static let appAccountToken = "appactor_app_account_token"
 
@@ -109,10 +112,15 @@ extension AppActorPaymentStorage {
 
     /// Resolves the canonical local app user ID for the session.
     /// Priority: explicit non-blank ID -> cached ID -> new anonymous ID.
+    /// A different explicit ID drops the stored `appAccountToken`, so the new identity gets
+    /// its own token, as it does after `logIn` or `logOut`.
     @discardableResult
     func resolveAppUserId(explicit explicitAppUserId: String?) -> String {
         if let explicitAppUserId,
            !explicitAppUserId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if currentAppUserId != explicitAppUserId {
+                clearAppAccountToken()
+            }
             setAppUserId(explicitAppUserId)
             return explicitAppUserId
         }
@@ -192,6 +200,17 @@ extension AppActorPaymentStorage {
         setAppAccountToken(token)
         Log.identity.debug("Generated new appAccountToken: \(String(token.uuidString.lowercased().prefix(8)))…")
         return token
+    }
+
+    // MARK: - Cache Hygiene
+
+    /// Whether the one-time purge of unverified salt-route cache entries has run.
+    var unverifiedSaltRouteCachePurged: Bool {
+        string(forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged) == "true"
+    }
+
+    func setUnverifiedSaltRouteCachePurged() {
+        set("true", forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged)
     }
 
     // MARK: - ASA Helpers
