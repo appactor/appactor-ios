@@ -287,6 +287,12 @@ enum AppActorPaymentValidation {
         }
     }
 
+    /// Whether `id` is empty once trimmed the way the server trims it. A blank ID passed to
+    /// `configure` means none.
+    static func isBlank(_ id: String) -> Bool {
+        id.trimmingCharacters(in: serverTrimmedCharacters).isEmpty
+    }
+
     /// The server's `BLOCKED_USER_IDS`, compared lowercased after trimming.
     private static let blockedAppUserIds: Set<String> = [
         "null", "(null)", "anonymous", "guest", "-1", "0", "none", "nil", "nan", "no_user",

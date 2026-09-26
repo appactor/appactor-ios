@@ -311,9 +311,9 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         appVersion: String?,
         country: String?
     ) async throws -> AppActorExperimentFetchResult {
-        let encodedKey = experimentKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? experimentKey
-        let path = "/v1/experiments/\(encodedKey)/assignments"
-        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
+        let path = "/v1/experiments/\(encodedPathSegment(experimentKey))/assignments"
+        guard let pathURL = URL(string: path, relativeTo: baseURL),
+              var components = URLComponents(url: pathURL, resolvingAgainstBaseURL: true) else {
             throw AppActorError.networkError(URLError(.badURL))
         }
         var queryItems: [URLQueryItem] = [

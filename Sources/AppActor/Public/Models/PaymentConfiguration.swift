@@ -90,8 +90,7 @@ public struct AppActorPaymentConfiguration: Sendable {
     }
 
     private static func normalizedAppUserId(_ appUserId: String?) -> String? {
-        guard let appUserId,
-              !appUserId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let appUserId, !AppActorPaymentValidation.isBlank(appUserId) else {
             return nil
         }
         return appUserId

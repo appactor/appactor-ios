@@ -100,6 +100,13 @@ final class PaymentStorageTests: XCTestCase {
         XCTAssertNil(config.appUserId)
     }
 
+    /// Blank as the server trims: U+FEFF goes, U+0085 stays (and is a valid ID there).
+    func testBlankAppUserIdFollowsTheServerTrim() {
+        XCTAssertNil(AppActorPaymentConfiguration(apiKey: "pk_test_123", appUserId: "\u{FEFF} ").appUserId)
+        XCTAssertEqual(AppActorPaymentConfiguration(apiKey: "pk_test_123", appUserId: "\u{85}").appUserId, "\u{85}")
+        XCTAssertEqual(storage.resolveAppUserId(explicit: "\u{85}"), "\u{85}")
+    }
+
     // MARK: - Legacy Identity Cleanup
 
     func testClearLegacyIdentityStateRemovesLegacyKeys() {

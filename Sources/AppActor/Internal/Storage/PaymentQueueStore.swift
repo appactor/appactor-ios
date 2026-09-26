@@ -65,6 +65,19 @@ protocol AppActorPaymentQueueStoreProtocol: AnyObject, Sendable {
     func markPostedAndUpdate(key: String, item: AppActorPaymentQueueItem)
 }
 
+extension AppActorPaymentQueueStoreProtocol {
+    /// Moves receipts an older SDK queued under an app user ID the server rejects to
+    /// `appUserId`. The server would refuse them and have them finished, the purchase
+    /// never recorded. Call before the processor starts.
+    func reassignItemsWithRejectedAppUserId(to appUserId: String) {
+        for var item in snapshot() where item.phase != .needsFinish
+            && (try? AppActorPaymentValidation.validateAppUserId(item.appUserId)) == nil {
+            item.appUserId = appUserId
+            update(item)
+        }
+    }
+}
+
 // MARK: - File-Based Implementation
 
 /// File-backed payment queue store with atomic JSON writes.

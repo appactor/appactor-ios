@@ -136,8 +136,9 @@ extension AppActor {
 
         // Establish the canonical local identity synchronously so configure()
         // returns with appUserId/isAnonymous immediately usable.
-        storage.resolveAppUserId(explicit: config.appUserId)
+        let appUserId = storage.resolveAppUserId(explicit: config.appUserId)
         storage.ensureAppAccountToken()
+        queueStore.reassignItemsWithRejectedAppUserId(to: appUserId)
         storage.clearLegacyIdentityState()
 
         self.asaManager = nil
