@@ -126,6 +126,7 @@ extension AppActor {
             watcher: transactionWatcher,
             productId: product.id,
             appUserId: purchaseAppUserId,
+            appAccountToken: purchaseIdentity.token,
             clientPurchaseContext: clientPurchaseContext
         )
 

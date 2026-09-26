@@ -77,6 +77,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
     // MARK: - Fix #18b: Identity transition buffer captures correct appUserId
 
     func testPendingPurchaseContextBufferKeepsAttemptAndRefreshesObservedAt() {
+        let token = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let completedAt = startedAt.addingTimeInterval(3_600)
         let context = AppActorClientPurchaseContext(
@@ -88,18 +89,19 @@ final class PipelineEdgeCaseTests: XCTestCase {
         )
         var buffer = AppActorPendingPurchaseContextBuffer()
 
-        buffer.append(context, productId: "com.test.monthly")
-        let resolved = buffer.consume(productId: "com.test.monthly", observedAt: completedAt)
+        buffer.append(context, productId: "com.test.monthly", appAccountToken: token)
+        let resolved = buffer.consume(productId: "com.test.monthly", appAccountToken: token, observedAt: completedAt)
 
         XCTAssertEqual(resolved?.context.clientPurchaseAttemptStartedAt, startedAt)
         XCTAssertEqual(resolved?.context.clientObservedAt, completedAt)
         XCTAssertEqual(resolved?.context.clientDeliverySource, .transactionUpdates)
         XCTAssertEqual(resolved?.context.clientPurchaseAttemptId, "attempt-ios-pending")
         XCTAssertEqual(resolved?.context.placement, "paywall.pending")
-        XCTAssertNil(buffer.consume(productId: "com.test.monthly", observedAt: completedAt))
+        XCTAssertNil(buffer.consume(productId: "com.test.monthly", appAccountToken: token, observedAt: completedAt))
     }
 
     func testPendingPurchaseContextBufferPersistsAcrossRelaunch() {
+        let token = UUID()
         let storage = InMemoryPaymentStorage()
         let startedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
         let pendingAt = startedAt.addingTimeInterval(10)
@@ -113,10 +115,10 @@ final class PipelineEdgeCaseTests: XCTestCase {
         )
         var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
 
-        firstBoot.append(context, productId: "com.test.monthly", appUserId: "user-pending", recordedAt: pendingAt)
+        firstBoot.append(context, productId: "com.test.monthly", appUserId: "user-pending", appAccountToken: token, recordedAt: pendingAt)
 
         var secondBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
-        let resolved = secondBoot.consume(productId: "com.test.monthly", observedAt: completedAt)
+        let resolved = secondBoot.consume(productId: "com.test.monthly", appAccountToken: token, observedAt: completedAt)
 
         XCTAssertEqual(resolved?.appUserId, "user-pending")
         XCTAssertEqual(resolved?.context.clientPurchaseAttemptStartedAt, startedAt)
@@ -128,6 +130,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
     }
 
     func testPendingPurchaseContextBufferRestoresUnfinishedDeliverySourceAfterRelaunch() {
+        let token = UUID()
         let storage = InMemoryPaymentStorage()
         let startedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
         let completedAt = startedAt.addingTimeInterval(3_600)
@@ -139,11 +142,12 @@ final class PipelineEdgeCaseTests: XCTestCase {
         )
         var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
 
-        firstBoot.append(context, productId: "com.test.yearly", appUserId: "user-pending", recordedAt: startedAt)
+        firstBoot.append(context, productId: "com.test.yearly", appUserId: "user-pending", appAccountToken: token, recordedAt: startedAt)
 
         var secondBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
         let resolved = secondBoot.consume(
             productId: "com.test.yearly",
+            appAccountToken: token,
             observedAt: completedAt,
             deliverySource: .unfinished,
             transactionPurchaseDate: completedAt,
@@ -159,6 +163,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
     }
 
     func testPendingPurchaseResolvedFromUnfinishedUsesPurchaseIntentAndUnfinishedDelivery() {
+        let token = UUID()
         let storage = InMemoryPaymentStorage()
         let startedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
         let completedAt = startedAt.addingTimeInterval(3_600)
@@ -171,11 +176,12 @@ final class PipelineEdgeCaseTests: XCTestCase {
         )
         var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
 
-        firstBoot.append(context, productId: "com.test.yearly", appUserId: "user-pending", recordedAt: startedAt)
+        firstBoot.append(context, productId: "com.test.yearly", appUserId: "user-pending", appAccountToken: token, recordedAt: startedAt)
 
         var secondBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
         let resolved = secondBoot.consume(
             productId: "com.test.yearly",
+            appAccountToken: token,
             observedAt: completedAt,
             deliverySource: .unfinished,
             transactionPurchaseDate: completedAt,
@@ -324,6 +330,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
     }
 
     func testPendingPurchaseContextBufferDoesNotConsumeRenewal() {
+        let token = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let renewalAt = startedAt.addingTimeInterval(3_600)
         let context = AppActorClientPurchaseContext(
@@ -334,10 +341,11 @@ final class PipelineEdgeCaseTests: XCTestCase {
         )
         var buffer = AppActorPendingPurchaseContextBuffer()
 
-        buffer.append(context, productId: "com.test.monthly")
+        buffer.append(context, productId: "com.test.monthly", appAccountToken: token)
 
         let renewalMatch = buffer.consume(
             productId: "com.test.monthly",
+            appAccountToken: token,
             observedAt: renewalAt,
             deliverySource: .transactionUpdates,
             transactionPurchaseDate: renewalAt,
@@ -345,6 +353,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
         )
         let purchaseMatch = buffer.consume(
             productId: "com.test.monthly",
+            appAccountToken: token,
             observedAt: renewalAt,
             deliverySource: .transactionUpdates,
             transactionPurchaseDate: renewalAt,
@@ -356,6 +365,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
     }
 
     func testPendingPurchaseContextBufferDropsExpiredPersistedAttempts() {
+        let token = UUID()
         let storage = InMemoryPaymentStorage()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let expiredCompletion = startedAt.addingTimeInterval(AppActorPendingPurchaseContextBuffer.retentionInterval + 1)
@@ -367,12 +377,86 @@ final class PipelineEdgeCaseTests: XCTestCase {
         )
         var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
 
-        firstBoot.append(context, productId: "com.test.monthly", recordedAt: startedAt)
+        firstBoot.append(context, productId: "com.test.monthly", appAccountToken: token, recordedAt: startedAt)
         var secondBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
-        let resolved = secondBoot.consume(productId: "com.test.monthly", observedAt: expiredCompletion)
+        let resolved = secondBoot.consume(productId: "com.test.monthly", appAccountToken: token, observedAt: expiredCompletion)
 
         XCTAssertNil(resolved)
         XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts))
+    }
+
+    func testPendingPurchaseContextOnlyMatchesTheAttemptsAppAccountToken() {
+        let storage = InMemoryPaymentStorage()
+        let tokenA = UUID()
+        let tokenB = UUID()
+        let startedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let approvedAt = startedAt.addingTimeInterval(3_600)
+        let context = AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-user-a"
+        )
+        var firstBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
+        firstBoot.append(context, productId: "com.test.monthly", appUserId: "user-a", appAccountToken: tokenA, recordedAt: startedAt)
+
+        // User B's purchase of the same product (another token) or an offer code (no token)
+        // must not take user A's pending attempt.
+        var secondBoot = AppActorPendingPurchaseContextBuffer(storage: storage)
+        XCTAssertNil(secondBoot.consume(
+            productId: "com.test.monthly",
+            appAccountToken: tokenB,
+            observedAt: approvedAt,
+            transactionPurchaseDate: approvedAt,
+            transactionReason: .purchase
+        ))
+        XCTAssertNil(secondBoot.consume(
+            productId: "com.test.monthly",
+            appAccountToken: nil,
+            observedAt: approvedAt,
+            transactionPurchaseDate: approvedAt,
+            transactionReason: .purchase
+        ))
+
+        let match = secondBoot.consume(
+            productId: "com.test.monthly",
+            appAccountToken: tokenA,
+            observedAt: approvedAt,
+            transactionPurchaseDate: approvedAt,
+            transactionReason: .purchase
+        )
+        XCTAssertEqual(match?.appUserId, "user-a")
+        XCTAssertEqual(match?.context.clientPurchaseAttemptId, "attempt-user-a")
+        XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts))
+    }
+
+    func testPendingPurchaseContextsWithoutAppAccountTokenAreDroppedOnLoad() throws {
+        let token = UUID()
+        let startedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let contextJSON = try XCTUnwrap(String(data: try encoder.encode(AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-stored"
+        )), encoding: .utf8))
+        func storedState(tokenField: String) -> String {
+            #"{"contextsByProductId":{"com.test.monthly":[{"recordedAt":\#(Int(startedAt.timeIntervalSince1970)),"appUserId":"user-a",\#(tokenField)"context":\#(contextJSON)}]}}"#
+        }
+
+        // Control: the same entry with its token still loads and matches.
+        let current = InMemoryPaymentStorage()
+        current.set(storedState(tokenField: #""appAccountToken":"\#(token.uuidString)","#), forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
+        var currentBuffer = AppActorPendingPurchaseContextBuffer(storage: current)
+        XCTAssertEqual(currentBuffer.consume(productId: "com.test.monthly", appAccountToken: token)?.appUserId, "user-a")
+
+        // An entry written before the token was stored can't be matched safely, so it goes.
+        let legacy = InMemoryPaymentStorage()
+        legacy.set(storedState(tokenField: ""), forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
+        var legacyBuffer = AppActorPendingPurchaseContextBuffer(storage: legacy)
+        XCTAssertNil(legacyBuffer.consume(productId: "com.test.monthly", appAccountToken: token))
+        XCTAssertNil(legacy.string(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts))
     }
 
     func testIdentityTransitionBufferCapturesAppUserId() async {

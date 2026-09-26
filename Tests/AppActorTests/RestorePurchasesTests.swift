@@ -166,6 +166,7 @@ final class RestorePurchasesTests: XCTestCase {
                 customerInfo: expected,
                 restoredCount: 0,
                 transferred: false,
+                recordedTransactionIds: [],
                 requestId: "req_restore_app_transaction",
                 customerETag: nil,
                 signatureVerified: true
@@ -242,6 +243,7 @@ final class RestorePurchasesTests: XCTestCase {
             customerInfo: stale,
             restoredCount: 500,
             transferred: false,
+            recordedTransactionIds: [],
             requestId: "req_bulk",
             customerETag: "etag_bulk",
             signatureVerified: false
@@ -335,6 +337,7 @@ final class RestorePurchasesTests: XCTestCase {
             customerInfo: bulkInfo,
             restoredCount: 3,
             transferred: false,
+            recordedTransactionIds: [],
             requestId: "req_no_overflow",
             customerETag: "etag_no_overflow",
             signatureVerified: false
@@ -407,7 +410,12 @@ final class RestorePurchasesTests: XCTestCase {
                     "nonSubscriptions": {}
                 },
                 "restoredCount": 2,
-                "transferred": false
+                "transferred": false,
+                "hasFailures": false,
+                "items": [
+                    {"transactionId": "2000000001", "status": "restored", "replayedCount": 0, "didMutate": true, "userId": "u1"},
+                    {"transactionId": "2000000002", "status": "restored", "replayedCount": 0, "didMutate": true, "userId": "u1"}
+                ]
             },
             "requestId": "req_abc"
         }
@@ -421,6 +429,8 @@ final class RestorePurchasesTests: XCTestCase {
 
         XCTAssertEqual(envelope.data.restoredCount, 2)
         XCTAssertFalse(envelope.data.transferred)
+        XCTAssertEqual(envelope.data.items.map(\.transactionId), ["2000000001", "2000000002"])
+        XCTAssertTrue(envelope.data.items.allSatisfy(\.isRecorded))
         XCTAssertEqual(envelope.requestId, "req_abc")
         XCTAssertNotNil(envelope.data.user.entitlements?["premium"])
         XCTAssertEqual(envelope.data.user.entitlements?["premium"]?.isActive, true)
@@ -459,6 +469,7 @@ final class RestorePurchasesTests: XCTestCase {
                 customerInfo: expectedInfo,
                 restoredCount: 5,
                 transferred: true,
+                recordedTransactionIds: [],
                 requestId: "req_custom",
                 customerETag: "etag_custom",
                 signatureVerified: true

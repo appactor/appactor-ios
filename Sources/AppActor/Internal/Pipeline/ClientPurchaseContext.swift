@@ -115,6 +115,9 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
     private struct StoredEntry: Codable, Sendable, Equatable {
         let recordedAt: Date
         let appUserId: String?
+        /// The appAccountToken the purchase was made with. StoreKit returns it unchanged on
+        /// the resulting transaction, so only a transaction carrying it belongs to this attempt.
+        let appAccountToken: UUID
         let context: AppActorClientPurchaseContext
     }
 
@@ -127,18 +130,9 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
     private var contextsByProductId: [String: [StoredEntry]]
     private let storage: (any AppActorPaymentStorage)?
 
-    init(
-        storage: (any AppActorPaymentStorage)? = nil,
-        contextsByProductId: [String: [AppActorClientPurchaseContext]] = [:]
-    ) {
+    init(storage: (any AppActorPaymentStorage)? = nil) {
         self.storage = storage
-        if let storage {
-            self.contextsByProductId = Self.load(from: storage)
-        } else {
-            self.contextsByProductId = contextsByProductId.mapValues { contexts in
-                contexts.map { StoredEntry(recordedAt: $0.clientObservedAt, appUserId: nil, context: $0) }
-            }
-        }
+        self.contextsByProductId = storage.map(Self.load(from:)) ?? [:]
         pruneExpired(now: Date())
     }
 
@@ -146,6 +140,7 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
         _ context: AppActorClientPurchaseContext,
         productId: String,
         appUserId: String? = nil,
+        appAccountToken: UUID,
         recordedAt: Date = Date()
     ) {
         guard context.hasPurchaseAttempt, !productId.isEmpty else { return }
@@ -154,33 +149,38 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
         contextsByProductId[productId, default: []].append(StoredEntry(
             recordedAt: recordedAt,
             appUserId: normalizedAppUserId?.isEmpty == false ? normalizedAppUserId : nil,
+            appAccountToken: appAccountToken,
             context: context
         ))
         persist()
     }
 
+    /// Takes the oldest attempt for `productId` that was made with the transaction's
+    /// `appAccountToken`. A transaction without that token (an offer code, an App Store
+    /// purchase, another identity's purchase) matches nothing.
     mutating func consume(
         productId: String,
+        appAccountToken: UUID?,
         observedAt: Date = Date(),
         deliverySource: AppActorClientDeliverySource = .transactionUpdates,
         transactionPurchaseDate: Date? = nil,
         transactionReason: AppActorTransactionReason = .unknown
     ) -> AppActorPendingPurchaseContextMatch? {
         pruneExpired(now: observedAt)
-        guard var entries = contextsByProductId[productId], !entries.isEmpty else {
-            persist()
+        guard let appAccountToken,
+              var entries = contextsByProductId[productId],
+              let index = entries.firstIndex(where: { $0.appAccountToken == appAccountToken }) else {
             return nil
         }
-        let entry = entries[0]
+        let entry = entries[index]
         guard Self.shouldConsume(
             entry: entry,
             transactionPurchaseDate: transactionPurchaseDate,
             transactionReason: transactionReason
         ) else {
-            persist()
             return nil
         }
-        entries.removeFirst()
+        entries.remove(at: index)
         if entries.isEmpty {
             contextsByProductId.removeValue(forKey: productId)
         } else {

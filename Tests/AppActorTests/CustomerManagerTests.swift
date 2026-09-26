@@ -65,6 +65,7 @@ final class RetrySimulatingMockClient: AppActorPaymentClientProtocol, @unchecked
             customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
             restoredCount: 0,
             transferred: false,
+            recordedTransactionIds: [],
             requestId: nil,
             customerETag: nil,
             signatureVerified: false

@@ -443,6 +443,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 customerInfo: customerInfo,
                 restoredCount: envelope.data.restoredCount,
                 transferred: envelope.data.transferred,
+                recordedTransactionIds: Set(envelope.data.items.filter(\.isRecorded).map(\.transactionId)),
                 requestId: envelope.requestId ?? requestId,
                 customerETag: responseETag,
                 signatureVerified: signatureVerified
@@ -734,17 +735,13 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     Log.signing.warn("304 response was not signed for \(path); forcing fresh validation")
                     break
                 }
-                if sentNonce != nil {
-                    // Nonce-required endpoint: server didn't echo nonce
-                    if requireSignatures {
-                        Log.signing.error("Response signature required but server did not sign for \(path)")
-                        throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
-                    }
-                    Log.signing.debug("Response signing not active on server for \(path)")
-                } else {
-                    // Nonce-free endpoint: server doesn't support salt signing yet (transitional)
-                    Log.signing.debug("Salt-based signing not active on server for \(path)")
+                // The server signs every JSON response on both the nonce and the salt routes,
+                // so an unsigned 2xx means the signature headers were stripped on the way.
+                if requireSignatures {
+                    Log.signing.error("Response signature required but server did not sign for \(path)")
+                    throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
                 }
+                Log.signing.debug("Response signing not active on server for \(path)")
             case .signatureMissing:
                 if http.statusCode == 304 {
                     Log.signing.warn("304 response signature missing for \(path); forcing fresh validation")

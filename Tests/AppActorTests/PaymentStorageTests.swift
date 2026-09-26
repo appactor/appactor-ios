@@ -100,6 +100,27 @@ final class PaymentStorageTests: XCTestCase {
         XCTAssertNil(storage.string(forKey: AppActorPaymentStorageKey.legacyNeedsReidentify))
     }
 
+    // MARK: - appAccountToken per identity
+
+    func testResolvingADifferentExplicitIdRotatesTheAppAccountToken() {
+        storage.setAppUserId("user_a")
+        let tokenA = storage.ensureAppAccountToken()
+
+        storage.resolveAppUserId(explicit: "user_b")
+
+        XCTAssertNil(storage.appAccountToken)
+        XCTAssertNotEqual(storage.ensureAppAccountToken(), tokenA)
+    }
+
+    func testResolvingTheSameExplicitIdKeepsTheAppAccountToken() {
+        storage.setAppUserId("user_a")
+        let tokenA = storage.ensureAppAccountToken()
+
+        storage.resolveAppUserId(explicit: "user_a")
+
+        XCTAssertEqual(storage.appAccountToken, tokenA)
+    }
+
     // MARK: - Last Request ID
 
     func testLastRequestIdIsNilInitially() {

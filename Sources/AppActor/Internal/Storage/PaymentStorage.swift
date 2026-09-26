@@ -109,10 +109,15 @@ extension AppActorPaymentStorage {
 
     /// Resolves the canonical local app user ID for the session.
     /// Priority: explicit non-blank ID -> cached ID -> new anonymous ID.
+    /// A different explicit ID drops the stored `appAccountToken`, so the new identity gets
+    /// its own token, as it does after `logIn` or `logOut`.
     @discardableResult
     func resolveAppUserId(explicit explicitAppUserId: String?) -> String {
         if let explicitAppUserId,
            !explicitAppUserId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if currentAppUserId != explicitAppUserId {
+                clearAppAccountToken()
+            }
             setAppUserId(explicitAppUserId)
             return explicitAppUserId
         }

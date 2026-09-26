@@ -42,6 +42,10 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
         }
     }
 
+    var currentAppUserId: String? {
+        currentStorage().currentAppUserId
+    }
+
     @discardableResult
     func ensureAppUserId() -> String {
         currentStorage().ensureAppUserId()
@@ -160,53 +164,62 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
         }
     }
 
+    /// Delivers the user's queued mutations.
+    ///
+    /// A transient failure (network, 429, 5xx) stops the flush and keeps everything queued.
+    /// A payload the server rejects for good (400, 409, 413, 422) is dropped instead, so one
+    /// bad value can't hold back everything queued behind it. A rejected multi-key PATCH is
+    /// retried one key at a time first, because the server rejects the whole request for one
+    /// key. The first rejection is rethrown once the rest is delivered.
     func flush(appUserId: String) async throws {
         guard let client = currentClient() else { return }
+        var rejections: [Error] = []
 
         while let bucket = pendingBucket(appUserId: appUserId), !bucket.isEmpty {
             do {
                 if !bucket.attributes.isEmpty {
-                    _ = try await client.patchAttributes(
-                        appUserId: appUserId,
-                        request: AppActorSetAttributesRequest(attributes: bucket.attributes)
-                    )
-                    removeFlushedAttributes(appUserId: appUserId, attributes: bucket.attributes)
-                }
-
-                if !bucket.unsetAttributeKeys.isEmpty {
-                    for key in bucket.unsetAttributeKeys {
-                        _ = try await client.deleteAttribute(appUserId: appUserId, key: key)
-                        removeFlushedUnset(appUserId: appUserId, key: key)
+                    try await deliverIsolatingRejections(bucket.attributes, rejections: &rejections) { attributes in
+                        _ = try await client.patchAttributes(
+                            appUserId: appUserId,
+                            request: AppActorSetAttributesRequest(attributes: attributes)
+                        )
+                    } remove: { attributes in
+                        self.removeFlushedAttributes(appUserId: appUserId, attributes: attributes)
                     }
                 }
 
-                if !bucket.integrationIdentifiers.isEmpty {
-                    for identifiers in integrationIdentifierBatches(bucket.integrationIdentifiers) {
+                for key in bucket.unsetAttributeKeys {
+                    try await deliver(rejections: &rejections) {
+                        _ = try await client.deleteAttribute(appUserId: appUserId, key: key)
+                    }
+                    removeFlushedUnset(appUserId: appUserId, key: key)
+                }
+
+                for identifiers in integrationIdentifierBatches(bucket.integrationIdentifiers) {
+                    try await deliverIsolatingRejections(identifiers, rejections: &rejections) { identifiers in
                         _ = try await client.patchIntegrationIdentifiers(
                             appUserId: appUserId,
-                            request: AppActorSetIntegrationIdentifiersRequest(
-                                integrationIdentifiers: identifiers
-                            )
+                            request: AppActorSetIntegrationIdentifiersRequest(integrationIdentifiers: identifiers)
                         )
-                        removeFlushedIntegrationIdentifiers(
-                            appUserId: appUserId,
-                            identifiers: identifiers
-                        )
+                    } remove: { identifiers in
+                        self.removeFlushedIntegrationIdentifiers(appUserId: appUserId, identifiers: identifiers)
                     }
                 }
 
-                if !bucket.unsetIntegrationIdentifierKeys.isEmpty {
-                    for key in bucket.unsetIntegrationIdentifierKeys {
+                for key in bucket.unsetIntegrationIdentifierKeys {
+                    try await deliver(rejections: &rejections) {
                         _ = try await client.deleteIntegrationIdentifier(appUserId: appUserId, key: key)
-                        removeFlushedUnsetIntegrationIdentifier(appUserId: appUserId, key: key)
                     }
+                    removeFlushedUnsetIntegrationIdentifier(appUserId: appUserId, key: key)
                 }
 
                 if let attribution = bucket.attribution {
-                    _ = try await client.patchAttribution(
-                        appUserId: appUserId,
-                        request: AppActorUpdateAttributionRequest(attribution: attribution)
-                    )
+                    try await deliver(rejections: &rejections) {
+                        _ = try await client.patchAttribution(
+                            appUserId: appUserId,
+                            request: AppActorUpdateAttributionRequest(attribution: attribution)
+                        )
+                    }
                     removeFlushedAttribution(appUserId: appUserId, attribution: attribution)
                 }
             } catch is CancellationError {
@@ -214,9 +227,48 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             } catch let error as AppActorError where error.isTransient {
                 Log.customer.debug("Customer attribute flush deferred: \(error.localizedDescription)")
                 return
-            } catch {
-                throw error
             }
+        }
+
+        if let rejection = rejections.first {
+            throw rejection
+        }
+    }
+
+    /// Runs one request. Returns normally when it was delivered or when the server rejected
+    /// its payload for good (the rejection is recorded); anything else is rethrown.
+    private func deliver(
+        rejections: inout [Error],
+        _ send: () async throws -> Void
+    ) async throws {
+        do {
+            try await send()
+        } catch let error as AppActorError where error.isRejectedPayload {
+            Log.customer.warn("Customer attribute mutation rejected by the server; dropping it: \(error.localizedDescription)")
+            rejections.append(error)
+        }
+    }
+
+    /// Sends `values` in one request. If the server rejects that payload, each key is sent on
+    /// its own, so only the keys it rejects by themselves are dropped.
+    private func deliverIsolatingRejections<Value>(
+        _ values: [String: Value],
+        rejections: inout [Error],
+        send: ([String: Value]) async throws -> Void,
+        remove: ([String: Value]) -> Void
+    ) async throws {
+        if values.count > 1 {
+            do {
+                try await send(values)
+                remove(values)
+                return
+            } catch let error as AppActorError where error.isRejectedPayload {
+                Log.customer.debug("Customer attribute batch rejected; retrying \(values.count) keys one at a time")
+            }
+        }
+        for (key, value) in values.sorted(by: { $0.key < $1.key }) {
+            try await deliver(rejections: &rejections) { try await send([key: value]) }
+            remove([key: value])
         }
     }
 

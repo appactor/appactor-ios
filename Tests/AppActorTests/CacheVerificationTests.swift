@@ -103,4 +103,25 @@ final class CacheVerificationTests: XCTestCase {
         XCTAssertTrue(json.contains("verificationResult"))
         XCTAssertTrue(json.contains("verified"))
     }
+    func testBootstrapPurgeKeepsOnlyVerifiedEntries() async throws {
+        let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("appactor-purge-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: cacheDir) }
+        let etagManager = AppActorETagManager(
+            diskStore: AppActorCacheDiskStore(directory: cacheDir),
+            responseVerificationEnabled: true
+        )
+        await etagManager.storeFresh(["plan": "signed"], for: .customer(appUserId: "user_1"), eTag: nil, verified: true)
+        // Left by an SDK version that accepted unsigned salt-route responses.
+        await etagManager.storeFresh(["plan": "unsigned"], for: .offerings, eTag: "W/\"u\"", verified: false)
+        await etagManager.storeFresh(["plan": "unsigned"], for: .remoteConfigs(appUserId: "user_1"), eTag: nil, verified: false)
+
+        await etagManager.clearUnverifiedIfNeeded()
+
+        let customer = await etagManager.cached([String: String].self, for: .customer(appUserId: "user_1"))
+        let offerings = await etagManager.cached([String: String].self, for: .offerings)
+        let remoteConfigs = await etagManager.cached([String: String].self, for: .remoteConfigs(appUserId: "user_1"))
+        XCTAssertEqual(customer?.value["plan"], "signed")
+        XCTAssertNil(offerings)
+        XCTAssertNil(remoteConfigs)
+    }
 }

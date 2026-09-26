@@ -145,6 +145,14 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         }
     }
 
+    /// Whether the server rejected the request payload itself (400, 409, 413, 422), so the
+    /// same payload will never be accepted. Auth and routing errors (401, 403, 404) are not
+    /// payload rejections: they recover once the configuration is fixed.
+    var isRejectedPayload: Bool {
+        guard kind == .server, let status = httpStatus else { return false }
+        return [400, 409, 413, 422].contains(status)
+    }
+
     /// Whether this is a permanent client error (4xx excluding 429).
     /// These errors will never succeed on retry and should be treated as final.
     ///

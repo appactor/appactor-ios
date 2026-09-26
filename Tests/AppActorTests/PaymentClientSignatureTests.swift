@@ -66,7 +66,8 @@ final class PaymentClientSignatureTests: XCTestCase {
             return (response, next.2)
         }
 
-        let result = try await makeClient().getOfferings(eTag: "W/\"old\"")
+        // Signatures off: this test covers the retry mechanics, not the signature check.
+        let result = try await makeClient(requireSignatures: false).getOfferings(eTag: "W/\"old\"")
 
         guard case .fresh(_, let eTag, let requestId, let signatureVerified) = result else {
             XCTFail("Expected unsigned 304 to retry into a fresh response")
@@ -80,6 +81,54 @@ final class PaymentClientSignatureTests: XCTestCase {
         XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "If-None-Match"), "W/\"old\"")
         XCTAssertNil(requests[1].value(forHTTPHeaderField: "If-None-Match"))
+    }
+
+    func testUnsignedSaltRoute200IsRejectedWhenSignaturesAreRequired() async throws {
+        PaymentClientURLProtocol.handler = { request in
+            let body = request.url?.path == "/v1/remote-config"
+                ? #"{"data":[],"requestId":"req_unsigned"}"#
+                : #"{"data":{"currentOffering":null,"offerings":[],"productEntitlements":{}},"requestId":"req_unsigned"}"#
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+        let client = makeClient()
+
+        do {
+            _ = try await client.getOfferings(eTag: nil)
+            XCTFail("An unsigned offerings 200 must be rejected")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .signatureMissing)
+        }
+        do {
+            _ = try await client.getRemoteConfigs(appUserId: "user_123", appVersion: nil, country: nil, eTag: nil)
+            XCTFail("An unsigned remote-config 200 must be rejected")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .signatureMissing)
+        }
+    }
+
+    func testUnsigned304RetryStillRequiresASignedResponse() async throws {
+        var responses: [(Int, [String: String], Data)] = [
+            (304, ["ETag": "W/\"old\""], Data()),
+            (200, ["Content-Type": "application/json"], Data(#"{"data":{"currentOffering":null,"offerings":[],"productEntitlements":{}}}"#.utf8))
+        ]
+        PaymentClientURLProtocol.handler = { request in
+            let next = responses.removeFirst()
+            let response = HTTPURLResponse(url: request.url!, statusCode: next.0, httpVersion: "HTTP/1.1", headerFields: next.1)!
+            return (response, next.2)
+        }
+
+        do {
+            _ = try await makeClient().getOfferings(eTag: "W/\"old\"")
+            XCTFail("The fresh retry after an unsigned 304 must be signed too")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .signatureMissing)
+        }
     }
 
     func testInvalid304SignatureDoesNotRetry() async throws {
@@ -127,7 +176,7 @@ final class PaymentClientSignatureTests: XCTestCase {
             return (response, body)
         }
 
-        let result = try await makeClient().getRemoteConfigs(
+        let result = try await makeClient(requireSignatures: false).getRemoteConfigs(
             appUserId: "user_123",
             appVersion: "1.2.3",
             country: "TR",
@@ -177,6 +226,40 @@ final class PaymentClientSignatureTests: XCTestCase {
             "/v1/payment/users/user%2Fwith%2Fslash/attributes/$email"
         )
         XCTAssertEqual(requests[0].httpMethod, "DELETE")
+    }
+
+    func testRestoreReportsOnlyRecordedTransactions() async throws {
+        let body = Data("""
+        {"data":{"user":{"entitlements":{},"subscriptions":{},"nonSubscriptions":{}},"restoredCount":1,"transferred":false,"hasFailures":true,"items":[
+          {"transactionId":"1001","status":"restored","replayedCount":0,"didMutate":true,"userId":"u1"},
+          {"transactionId":"1002","status":"noop","replayedCount":0,"didMutate":false,"userId":"u1"},
+          {"transactionId":"1003","status":"conflict","replayedCount":0,"didMutate":false,"userId":"u1","errorCode":"OWNERSHIP_CONFLICT"},
+          {"transactionId":"1004","status":"skipped_invalid","replayedCount":0,"didMutate":false,"userId":null,"errorCode":"VALIDATION_FAILED"}
+        ]},"requestId":"req_restore"}
+        """.utf8)
+        PaymentClientURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, body)
+        }
+
+        let result = try await makeClient(requireSignatures: false).postRestore(
+            AppActorRestoreRequest(
+                appUserId: "user_restore",
+                sourceIntent: "restore",
+                transactions: ["1001", "1002", "1003", "1004"].map {
+                    AppActorRestoreTransactionItem(transactionId: $0, jwsRepresentation: "jws_\($0)")
+                },
+                signedAppTransactionInfo: nil
+            )
+        )
+
+        XCTAssertEqual(result.recordedTransactionIds, ["1001", "1002"])
+        XCTAssertEqual(result.restoredCount, 1)
     }
 
     private func makeClient(requireSignatures: Bool = true) -> AppActorPaymentClient {

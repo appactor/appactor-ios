@@ -63,7 +63,7 @@ private final class PluginAttributesTestClient: AppActorPaymentClientProtocol, @
     }
 
     func postRestore(_ request: AppActorRestoreRequest) async throws -> AppActorRestoreResult {
-        AppActorRestoreResult(customerInfo: AppActorCustomerInfo(appUserId: request.appUserId), restoredCount: 0, transferred: false, requestId: nil, customerETag: nil, signatureVerified: false)
+        AppActorRestoreResult(customerInfo: AppActorCustomerInfo(appUserId: request.appUserId), restoredCount: 0, transferred: false, recordedTransactionIds: [], requestId: nil, customerETag: nil, signatureVerified: false)
     }
 
     func patchAttributes(appUserId: String, request: AppActorSetAttributesRequest) async throws -> AppActorMutationResult {

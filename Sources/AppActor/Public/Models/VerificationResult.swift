@@ -20,7 +20,7 @@ public enum AppActorVerificationResult: String, Sendable, Codable, Equatable {
     }
 
     /// Maps a `signatureVerified` bool to the appropriate result.
-    /// `true` → `.verified`, `false` → `.notRequested` (transitional unsigned, NOT a failure).
+    /// `true` → `.verified`, `false` → `.notRequested` (signature not checked, NOT a failure).
     static func from(signatureVerified: Bool) -> AppActorVerificationResult {
         signatureVerified ? .verified : .notRequested
     }

@@ -295,6 +295,95 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(client.deleteAttributeCalls.last?.key, "legacy")
     }
 
+    func testRejectedKeyIsDroppedWithoutBlockingTheRestOfTheQueue() async throws {
+        let conflict = AppActorError.serverError(httpStatus: 409, code: "CONFLICT", message: "type mismatch", details: nil, requestId: nil)
+        let rejectingClient = MockPaymentClient()
+        rejectingClient.patchAttributesHandler = { _, request in
+            if request.attributes["favorite_ids"] != nil { throw conflict }
+            return AppActorMutationResult(requestId: nil)
+        }
+        let queueStorage = InMemoryPaymentStorage()
+        let manager = AppActorCustomerAttributesManager(storage: queueStorage, client: rejectingClient)
+        try manager.enqueueAttributes(
+            appUserId: "user_1",
+            attributes: ["favorite_ids": .array([.number(1)]), "plan": .string("pro")]
+        )
+        try manager.enqueueAttribution(appUserId: "user_1", attribution: AppActorAttribution(network: "meta"))
+
+        do {
+            try await manager.flush(appUserId: "user_1")
+            XCTFail("The rejection should reach the caller once")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.httpStatus, 409)
+        }
+
+        // The batch was retried key by key: "plan" was delivered, "favorite_ids" dropped,
+        // and the attribution behind them still went out.
+        XCTAssertNil(manager.pendingBucket(appUserId: "user_1"))
+        XCTAssertTrue(rejectingClient.patchAttributesCalls.contains { $0.request.attributes == ["plan": .string("pro")] })
+        XCTAssertEqual(rejectingClient.patchAttributionCalls.last?.request.attribution.network, "meta")
+
+        // Later writes no longer replay the old error.
+        try manager.enqueueAttributes(appUserId: "user_1", attributes: ["level": .number(2)])
+        try await manager.flush(appUserId: "user_1")
+        XCTAssertEqual(rejectingClient.patchAttributesCalls.last?.request.attributes, ["level": .number(2)])
+    }
+
+    func testAttributeWriteBeforeFirstUnlockDoesNotMintAnIdentity() async throws {
+        let isAvailable = AppActorProtectedData.isAvailable
+        defer { AppActorProtectedData.isAvailable = isAvailable }
+        // Before the first unlock the stored identity reads as missing.
+        storage.remove(forKey: AppActorPaymentStorageKey.appUserId)
+        AppActorProtectedData.isAvailable = { false }
+
+        do {
+            try await appactor.setAttribute("plan", value: "pro")
+            XCTFail("The write should be refused while protected data is unavailable")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .notAvailable)
+        }
+        XCTAssertNil(storage.currentAppUserId)
+
+        AppActorProtectedData.isAvailable = { true }
+        try await appactor.setAttribute("plan", value: "pro")
+        XCTAssertNotNil(storage.currentAppUserId)
+    }
+
+    func testSingleRejectedKeyIsDropped() async throws {
+        let invalid = AppActorError.serverError(httpStatus: 400, code: "VALIDATION_FAILED", message: nil, details: nil, requestId: nil)
+        let rejectingClient = MockPaymentClient()
+        rejectingClient.patchAttributesHandler = { _, _ in throw invalid }
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage(), client: rejectingClient)
+        try manager.enqueueAttributes(appUserId: "user_1", attributes: ["plan": .string("pro")])
+
+        do {
+            try await manager.flush(appUserId: "user_1")
+            XCTFail("The rejection should reach the caller once")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.httpStatus, 400)
+        }
+
+        XCTAssertNil(manager.pendingBucket(appUserId: "user_1"))
+        XCTAssertEqual(rejectingClient.patchAttributesCalls.count, 1)
+    }
+
+    func testAuthFailureKeepsTheQueue() async throws {
+        let unauthorized = AppActorError.serverError(httpStatus: 401, code: "UNAUTHORIZED", message: nil, details: nil, requestId: nil)
+        let rejectingClient = MockPaymentClient()
+        rejectingClient.patchAttributesHandler = { _, _ in throw unauthorized }
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage(), client: rejectingClient)
+        try manager.enqueueAttributes(appUserId: "user_1", attributes: ["plan": .string("pro")])
+
+        do {
+            try await manager.flush(appUserId: "user_1")
+            XCTFail("A 401 should be thrown")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.httpStatus, 401)
+        }
+
+        XCTAssertEqual(manager.pendingBucket(appUserId: "user_1")?.attributes["plan"], .string("pro"))
+    }
+
     func testOfflineQueuePreservesDateBoolAndListAttributeValues() async throws {
         let offline = AppActorError.networkError(URLError(.notConnectedToInternet))
         let createdAt = Date(timeIntervalSince1970: 1_700_000_000)

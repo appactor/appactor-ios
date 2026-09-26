@@ -17,6 +17,10 @@ extension AppActor {
     ///
     /// ASA attribution runs independently in the background and does **not** block this call.
     ///
+    /// If the app is launched before the first unlock after a reboot and no stored identity
+    /// can be read, this call waits until the device is unlocked: the stored app user ID
+    /// can't be read before then, and a new anonymous ID would split the user's purchases.
+    ///
     /// ```swift
     /// await AppActor.configure(apiKey: "pk_YOUR_PUBLIC_API_KEY")
     /// // Startup is complete here. A cached appUserId was reused or a new anonymous one was created.
@@ -33,6 +37,9 @@ extension AppActor {
             appUserId: appUserId,
             options: options
         )
+        if AppActorUserDefaultsPaymentStorage().currentAppUserId == nil {
+            await AppActorProtectedData.waitUntilAvailable()
+        }
         guard shared.configureInternal(config) else { return }
         await shared.runStartupSequence()
     }

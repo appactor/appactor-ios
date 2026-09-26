@@ -56,7 +56,8 @@ enum ResponseSignatureVerifier {
 		case success
 		/// Server echoed nonce but signature is missing — possible MITM header strip.
 		case signatureMissing
-		/// Server did not echo nonce — signing not enabled server-side (transitional).
+		/// The response carries no signature (no nonce echo, no salt header).
+		/// `AppActorPaymentClient` rejects it when signatures are required.
 		case signingNotSupported
 		case signatureInvalid
 		case timestampOutOfRange

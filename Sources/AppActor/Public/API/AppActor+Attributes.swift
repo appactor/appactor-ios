@@ -178,7 +178,7 @@ extension AppActor {
         }
         try validateAttributes(attributes, allowReserved: true)
 
-        let effectiveAppUserId = targetAppUserId ?? customerAttributesManager.ensureAppUserId()
+        let effectiveAppUserId = try targetAppUserId ?? attributesAppUserId()
         if requireCurrentIdentity, paymentStorage?.currentAppUserId != effectiveAppUserId {
             return
         }
@@ -241,7 +241,7 @@ extension AppActor {
             throw AppActorError.validationError("Integration identifier value must be at most 1024 bytes")
         }
 
-        let appUserId = customerAttributesManager.ensureAppUserId()
+        let appUserId = try attributesAppUserId()
         try customerAttributesManager.enqueueIntegrationIdentifier(
             appUserId: appUserId,
             key: key,
@@ -256,7 +256,7 @@ extension AppActor {
 
     public func unsetIntegrationIdentifier(_ key: String) async throws {
         try AppActorAttributeKey.validateIntegrationIdentifier(key)
-        let appUserId = customerAttributesManager.ensureAppUserId()
+        let appUserId = try attributesAppUserId()
         try customerAttributesManager.unsetIntegrationIdentifier(
             appUserId: appUserId,
             key: key
@@ -334,7 +334,7 @@ extension AppActor {
 
     public func updateAttribution(_ attribution: AppActorAttribution) async throws {
         try validateAttribution(attribution, requireProvider: true)
-        let appUserId = customerAttributesManager.ensureAppUserId()
+        let appUserId = try attributesAppUserId()
         try customerAttributesManager.enqueueAttribution(appUserId: appUserId, attribution: attribution)
         try await flushIfConfigured(appUserId: appUserId)
     }
@@ -494,13 +494,22 @@ extension AppActor {
         _ attributes: [String: AppActorAttributeValue],
         unsetKeys: [String] = []
     ) async throws {
-        let appUserId = customerAttributesManager.ensureAppUserId()
+        let appUserId = try attributesAppUserId()
         try customerAttributesManager.enqueueAttributes(
             appUserId: appUserId,
             attributes: attributes,
             unsetKeys: unsetKeys
         )
         try await flushIfConfigured(appUserId: appUserId)
+    }
+
+    /// The user attribute writes are queued for. Before the first unlock after a reboot the
+    /// stored identity reads as missing, so no anonymous ID is minted then.
+    private func attributesAppUserId() throws -> String {
+        if customerAttributesManager.currentAppUserId == nil, !AppActorProtectedData.isAvailable() {
+            throw AppActorError.notAvailable("Protected data is unavailable until the device is unlocked")
+        }
+        return customerAttributesManager.ensureAppUserId()
     }
 
     private func flushIfConfigured(appUserId: String) async throws {
@@ -595,7 +604,7 @@ extension AppActor {
         patch.ad = ad
         patch.creative = creative
 
-        let appUserId = customerAttributesManager.ensureAppUserId()
+        let appUserId = try attributesAppUserId()
         try validateAttribution(patch, requireProvider: false)
         let attribution = customerAttributesManager.mergeCustomAttribution(
             appUserId: appUserId,

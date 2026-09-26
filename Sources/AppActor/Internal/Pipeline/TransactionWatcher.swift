@@ -5,12 +5,14 @@ struct AppActorForegroundPurchaseScope {
     private let watcher: AppActorTransactionWatcher?
     private let productId: String
     private let appUserId: String
+    private let appAccountToken: UUID
     private let token: UUID?
 
     static func begin(
         watcher: AppActorTransactionWatcher?,
         productId: String,
         appUserId: String,
+        appAccountToken: UUID,
         clientPurchaseContext: AppActorClientPurchaseContext
     ) async -> AppActorForegroundPurchaseScope {
         let token = await watcher?.beginForegroundPurchase(
@@ -22,6 +24,7 @@ struct AppActorForegroundPurchaseScope {
             watcher: watcher,
             productId: productId,
             appUserId: appUserId,
+            appAccountToken: appAccountToken,
             token: token
         )
     }
@@ -30,6 +33,7 @@ struct AppActorForegroundPurchaseScope {
         await watcher?.endForegroundPurchase(
             productId: productId,
             appUserId: appUserId,
+            appAccountToken: appAccountToken,
             token: token,
             handledTransactionId: handledTransactionId,
             preserveContextForPending: preserveContextForPending
@@ -186,6 +190,7 @@ actor AppActorTransactionWatcher {
     func endForegroundPurchase(
         productId: String,
         appUserId: String,
+        appAccountToken: UUID,
         token: UUID?,
         handledTransactionId: String?,
         preserveContextForPending: Bool = false
@@ -199,7 +204,12 @@ actor AppActorTransactionWatcher {
         let capturedAppUserId = foregroundPurchaseAppUserIds.removeValue(forKey: token) ?? appUserId
         let buffered = foregroundPurchaseBuffer.removeValue(forKey: token) ?? []
         if preserveContextForPending, handledTransactionId == nil, buffered.isEmpty, let context {
-            pendingPurchaseContexts.append(context, productId: productId, appUserId: capturedAppUserId)
+            pendingPurchaseContexts.append(
+                context,
+                productId: productId,
+                appUserId: capturedAppUserId,
+                appAccountToken: appAccountToken
+            )
         }
         for item in buffered {
             let source: AppActorPaymentQueueItem.Source =
@@ -370,6 +380,7 @@ actor AppActorTransactionWatcher {
         }
         return pendingPurchaseContexts.consume(
             productId: transaction.productID,
+            appAccountToken: transaction.appAccountToken,
             observedAt: Date(),
             deliverySource: source.defaultClientDeliverySource,
             transactionPurchaseDate: transaction.purchaseDate,
