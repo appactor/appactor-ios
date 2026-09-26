@@ -62,7 +62,7 @@ public struct AppActorCustomerInfo: Sendable, Codable, Equatable {
     /// How this snapshot's data was verified.
     /// - `.verified`: server response signature passed Ed25519 verification.
     /// - `.verifiedOnDevice`: entitlements derived from StoreKit 2 verified transactions.
-    /// - `.notRequested`: verification was not performed (signing disabled or transitional).
+    /// - `.notRequested`: verification was not performed.
     /// - `.failed`: verification was attempted but failed.
     public let verification: AppActorVerificationResult
 

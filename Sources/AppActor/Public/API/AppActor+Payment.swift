@@ -43,11 +43,10 @@ extension AppActor {
             if Task.isCancelled { return }
         }
         AppActorProtectedData.recordFirstUnlockProbe()
-        // Once per install, before anything can read the cache: older SDKs accepted unsigned
-        // offerings and remote-config responses, so those entries may be forged.
-        if storage.string(forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged) == nil {
+        // Before anything can read the cache.
+        if !storage.unverifiedSaltRouteCachePurged {
             await AppActorCacheDiskStore().clearUnverifiedSaltRouteEntries()
-            storage.set("1", forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged)
+            storage.setUnverifiedSaltRouteCachePurged()
         }
         guard shared.configureInternal(config) else { return }
         await shared.runStartupSequence()

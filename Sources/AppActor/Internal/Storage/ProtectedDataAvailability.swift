@@ -12,50 +12,36 @@ import UIKit
 /// has been unlocked, the data stays readable while it is locked again.
 @MainActor
 enum AppActorProtectedData {
+    #if canImport(UIKit) && !os(watchOS)
     /// Replaced in tests.
     static var isAvailable: () -> Bool = {
-        #if canImport(UIKit) && !os(watchOS)
         // Before the probe has been written, only isProtectedDataAvailable can tell, and it
         // is also false on a device that is merely locked again.
         firstUnlockProbeIsReadable() ?? UIApplication.shared.isProtectedDataAvailable
-        #else
-        true
-        #endif
+    }
+
+    /// A small file with the same protection class as UserDefaults. Apple documents that a
+    /// `completeUntilFirstUserAuthentication` file can't be accessed until the user unlocks the
+    /// device for the first time after boot, and stays accessible while it is locked again.
+    static var probeURL: URL {
+        AppActorAtomicJSONQueueStore.defaultDirectory.appendingPathComponent("first-unlock-probe")
     }
 
     /// Writes the probe file if it is missing. Called once the stored identity is known to be
     /// readable, so the probe is in place before the next launch that comes before the first
     /// unlock after a reboot.
     static func recordFirstUnlockProbe() {
-        #if canImport(UIKit) && !os(watchOS)
         guard !FileManager.default.fileExists(atPath: probeURL.path) else { return }
         try? FileManager.default.createDirectory(
             at: probeURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         try? Data([1]).write(to: probeURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        #endif
     }
-
-    #if canImport(UIKit) && !os(watchOS)
-    /// A small file with the same protection class as UserDefaults. Apple documents that a
-    /// `completeUntilFirstUserAuthentication` file can't be accessed until the user unlocks the
-    /// device for the first time after boot, and stays accessible while it is locked again.
-    private static var probeURL: URL {
-        AppActorAtomicJSONQueueStore.defaultDirectory.appendingPathComponent("first-unlock-probe")
-    }
-
-    /// Whether the probe can be read, or nil when it hasn't been written yet.
-    private static func firstUnlockProbeIsReadable() -> Bool? {
-        guard FileManager.default.fileExists(atPath: probeURL.path) else { return nil }
-        return (try? Data(contentsOf: probeURL)) != nil
-    }
-    #endif
 
     /// Returns once protected data is available, right away if it already is.
     static func waitUntilAvailable() async {
         guard !isAvailable() else { return }
-        #if canImport(UIKit) && !os(watchOS)
         Log.sdk.warn("Device not unlocked since boot; waiting for the first unlock before reading the stored identity")
         let waiter = Waiter()
         await withTaskCancellationHandler {
@@ -65,10 +51,14 @@ enum AppActorProtectedData {
         } onCancel: {
             Task { @MainActor in waiter.finish() }
         }
-        #endif
     }
 
-    #if canImport(UIKit) && !os(watchOS)
+    /// Whether the probe can be read, or nil when it hasn't been written yet.
+    private static func firstUnlockProbeIsReadable() -> Bool? {
+        guard FileManager.default.fileExists(atPath: probeURL.path) else { return nil }
+        return (try? Data(contentsOf: probeURL)) != nil
+    }
+
     /// Resumes once, on the first of: protected data becoming available, or cancellation.
     @MainActor
     private final class Waiter {
@@ -102,5 +92,12 @@ enum AppActorProtectedData {
             continuation = nil
         }
     }
+    #else
+    /// Replaced in tests. Data protection doesn't hold back reads on this platform.
+    static var isAvailable: () -> Bool = { true }
+
+    static func recordFirstUnlockProbe() {}
+
+    static func waitUntilAvailable() async {}
     #endif
 }

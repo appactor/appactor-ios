@@ -699,7 +699,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     /// Executes a single HTTP request (no retry). Returns raw (Data, HTTPURLResponse, signatureVerified).
     /// Verifies Ed25519 response signature when enabled and the server provides one.
     /// The `signatureVerified` flag is `true` only when signature verification actually passed,
-    /// `false` if verification was skipped or server didn't support signing.
+    /// `false` if verification was skipped (signatures not required, or an unsigned 304).
     private func performRawRequest(
         _ urlRequest: URLRequest,
         path: String,
@@ -726,46 +726,33 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         // Verify response signature for successful responses, including 304 validators.
         var signatureVerified = false
         if verifySignatures && ((200..<300).contains(http.statusCode) || http.statusCode == 304) {
-            let requestTarget = Self.signatureRequestTarget(for: urlRequest, fallbackPath: path)
-            // Only nonce-signed responses are bound to the request.
-            let requestBinding = sentNonce == nil ? "" : ResponseSignatureVerifier.requestBinding(
-                method: urlRequest.httpMethod ?? "GET",
-                target: requestTarget,
-                body: urlRequest.httpBody
-            )
             let result = ResponseSignatureVerifier.verify(
                 response: http,
                 body: data,
                 sentNonce: sentNonce,
                 apiKey: apiKey,
-                requestPath: requestTarget,
-                requestBinding: requestBinding
+                requestPath: Self.signatureRequestTarget(for: urlRequest, fallbackPath: path),
+                method: urlRequest.httpMethod ?? "GET",
+                requestBody: urlRequest.httpBody
             )
 
             switch result {
             case .success:
                 signatureVerified = true
                 Log.signing.debug("Signature verified for \(path)")
-            case .signingNotSupported:
-                if http.statusCode == 304 {
-                    Log.signing.warn("304 response was not signed for \(path); forcing fresh validation")
-                    break
-                }
-                // The server signs every JSON response on both the nonce and the salt routes,
-                // so an unsigned 2xx means the signature headers were stripped on the way.
-                if requireSignatures {
-                    Log.signing.error("Response signature required but server did not sign for \(path)")
-                    throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
-                }
-                Log.signing.debug("Response signing not active on server for \(path)")
-            case .signatureMissing:
+            case .signingNotSupported, .signatureMissing:
                 if http.statusCode == 304 {
                     Log.signing.warn("304 response signature missing for \(path); forcing fresh validation")
                     break
                 }
-                // Server echoed nonce but signature is missing — possible MITM header strip
-                Log.signing.error("Response signature missing (nonce was echoed) for \(path)")
-                throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
+                // The server signs every JSON response on both the nonce and the salt routes, so
+                // a 2xx without its signature had the headers stripped on the way. Only a response
+                // with no signature at all passes, and only when signatures aren't required.
+                if result == .signatureMissing || requireSignatures {
+                    Log.signing.error("Response signature missing for \(path)")
+                    throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
+                }
+                Log.signing.debug("Unsigned response accepted for \(path) (signatures not required)")
             case .signatureInvalid:
                 Log.signing.error("Response signature INVALID for \(path)")
                 throw AppActorError.signatureError(.signatureVerificationFailed, requestId: requestId)

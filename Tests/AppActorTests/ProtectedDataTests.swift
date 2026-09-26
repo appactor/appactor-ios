@@ -17,7 +17,7 @@ final class ProtectedDataTests: XCTestCase {
 
     #if canImport(UIKit) && !os(watchOS)
     func testRecordedProbeReadsBackAsAvailable() {
-        let probe = AppActorAtomicJSONQueueStore.defaultDirectory.appendingPathComponent("first-unlock-probe")
+        let probe = AppActorProtectedData.probeURL
         defer { try? FileManager.default.removeItem(at: probe) }
         AppActorProtectedData.recordFirstUnlockProbe()
 

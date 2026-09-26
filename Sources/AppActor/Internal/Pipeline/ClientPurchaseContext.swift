@@ -115,9 +115,7 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
     private struct StoredEntry: Codable, Sendable, Equatable {
         let recordedAt: Date
         let appUserId: String?
-        /// The appAccountToken the purchase was made with. StoreKit returns it unchanged on
-        /// the resulting transaction. The token is per identity, so a transaction carrying it
-        /// belongs to this identity's attempts, never to another identity's.
+        /// The appAccountToken the purchase was made with (see `consume`).
         let appAccountToken: UUID
         let context: AppActorClientPurchaseContext
     }
@@ -157,8 +155,9 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
     }
 
     /// Takes the oldest attempt for `productId` that was made with the transaction's
-    /// `appAccountToken`, i.e. by the same identity. A transaction without that token (an
-    /// offer code, an App Store purchase, another identity's purchase) matches nothing.
+    /// `appAccountToken`. StoreKit returns the token a purchase was made with unchanged on its
+    /// transaction, and the token is per identity, so a transaction without it (an offer code,
+    /// an App Store purchase, another identity's purchase) matches nothing.
     mutating func consume(
         productId: String,
         appAccountToken: UUID?,

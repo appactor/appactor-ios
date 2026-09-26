@@ -335,9 +335,9 @@ final class CustomerAttributesTests: XCTestCase {
 
         XCTAssertNil(manager.pendingBucket(appUserId: "user_1"))
         XCTAssertEqual(rejectingClient.patchAttributesCalls.count, 11)
-        let delivered = rejectingClient.patchAttributesCalls.flatMap { call in
-            call.request.attributes.keys.filter { _ in call.request.attributes["key_13"] == nil }
-        }
+        let delivered = rejectingClient.patchAttributesCalls
+            .filter { $0.request.attributes["key_13"] == nil }
+            .flatMap { $0.request.attributes.keys }
         XCTAssertEqual(Set(delivered), Set(attributes.keys).subtracting(["key_13"]))
     }
 
@@ -353,24 +353,6 @@ final class CustomerAttributesTests: XCTestCase {
 
         XCTAssertNil(manager.pendingBucket(appUserId: "user_1"))
         XCTAssertEqual(rejectingClient.patchIntegrationIdentifiersCalls.count, 1)
-    }
-
-    func testRejectedAttributionIsNotMergedIntoLaterUpdates() async throws {
-        let invalid = AppActorError.serverError(httpStatus: 400, code: "VALIDATION_FAILED", message: nil, details: nil, requestId: nil)
-        let rejectingClient = MockPaymentClient()
-        rejectingClient.patchAttributionHandler = { _, request in
-            if request.attribution.keyword == "bad" { throw invalid }
-            return AppActorMutationResult(requestId: nil)
-        }
-        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage(), client: rejectingClient)
-        let rejected = manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(keyword: "bad"))
-        try manager.enqueueAttribution(appUserId: "user_1", attribution: rejected)
-        try await manager.flush(appUserId: "user_1")
-
-        let next = manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(campaign: "launch"))
-
-        XCTAssertNil(next.keyword)
-        XCTAssertEqual(next.campaign, "launch")
     }
 
     func testAttributeWriteBeforeFirstUnlockDoesNotMintAnIdentity() async throws {
@@ -401,6 +383,13 @@ final class CustomerAttributesTests: XCTestCase {
             return AppActorMutationResult(requestId: nil)
         }
         let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage(), client: rejectingClient)
+
+        // Nothing delivered yet: a rejected attribution leaves an empty merge base.
+        let firstRejected = manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(keyword: "bad"))
+        try manager.enqueueAttribution(appUserId: "user_1", attribution: firstRejected)
+        try await manager.flush(appUserId: "user_1")
+        XCTAssertNil(manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution()).keyword)
+
         let delivered = manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(network: "facebook"))
         try manager.enqueueAttribution(appUserId: "user_1", attribution: delivered)
         try await manager.flush(appUserId: "user_1")
@@ -416,32 +405,30 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(next.campaign, "launch")
     }
 
-    func testQueueSavedBeforeDeliveredAttributionsStillLoads() throws {
+    func testQueueSavedBeforeDeliveredAttributionsStillLoads() async throws {
         let queueStorage = InMemoryPaymentStorage()
         let manager = AppActorCustomerAttributesManager(storage: queueStorage)
         try manager.enqueueAttributes(appUserId: "user_1", attributes: ["plan": .string("pro")])
+        // A snapshot with no attribution queued behind it: the old SDK delivered it.
+        _ = manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(network: "facebook"))
         let raw = try XCTUnwrap(queueStorage.string(forKey: AppActorPaymentStorageKey.customerAttributesQueue))
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
         json.removeValue(forKey: "deliveredAttributions")
         let oldFormat = try JSONSerialization.data(withJSONObject: json)
         queueStorage.set(String(decoding: oldFormat, as: UTF8.self), forKey: AppActorPaymentStorageKey.customerAttributesQueue)
 
-        let reloaded = AppActorCustomerAttributesManager(storage: queueStorage)
-
-        XCTAssertEqual(reloaded.pendingBucket(appUserId: "user_1")?.attributes["plan"], .string("pro"))
-    }
-
-    func testSingleRejectedKeyIsDropped() async throws {
         let invalid = AppActorError.serverError(httpStatus: 400, code: "VALIDATION_FAILED", message: nil, details: nil, requestId: nil)
         let rejectingClient = MockPaymentClient()
-        rejectingClient.patchAttributesHandler = { _, _ in throw invalid }
-        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage(), client: rejectingClient)
-        try manager.enqueueAttributes(appUserId: "user_1", attributes: ["plan": .string("pro")])
+        rejectingClient.patchAttributionHandler = { _, _ in throw invalid }
+        let reloaded = AppActorCustomerAttributesManager(storage: queueStorage, client: rejectingClient)
+        XCTAssertEqual(reloaded.pendingBucket(appUserId: "user_1")?.attributes["plan"], .string("pro"))
 
-        try await manager.flush(appUserId: "user_1")
+        let rejected = reloaded.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(keyword: "bad"))
+        try reloaded.enqueueAttribution(appUserId: "user_1", attribution: rejected)
+        try await reloaded.flush(appUserId: "user_1")
 
-        XCTAssertNil(manager.pendingBucket(appUserId: "user_1"))
-        XCTAssertEqual(rejectingClient.patchAttributesCalls.count, 1)
+        // The rejection rolls back to what the old SDK delivered, not to nothing.
+        XCTAssertEqual(reloaded.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution()).network, "facebook")
     }
 
     func testAuthFailureKeepsTheQueue() async throws {

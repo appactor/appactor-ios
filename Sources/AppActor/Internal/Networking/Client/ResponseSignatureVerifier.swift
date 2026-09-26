@@ -77,7 +77,8 @@ enum ResponseSignatureVerifier {
 		sentNonce: String?,
 		apiKey: String,
 		requestPath: String,
-		requestBinding: String
+		method: String,
+		requestBody: Data?
 	) -> VerificationResult {
 		verify(
 			response: response,
@@ -85,7 +86,8 @@ enum ResponseSignatureVerifier {
 			sentNonce: sentNonce,
 			apiKey: apiKey,
 			requestPath: requestPath,
-			requestBinding: requestBinding,
+			method: method,
+			requestBody: requestBody,
 			v1Key: v1PublicKey,
 			rootKey: rootPublicKey,
 			now: Date().timeIntervalSince1970
@@ -97,25 +99,24 @@ enum ResponseSignatureVerifier {
 	/// Test-injectable overload. Production `verify()` delegates to this.
 	///
 	/// Mode selection:
-	///   - sentNonce != nil → nonce-based verification, bound to `requestBinding`
+	///   - sentNonce != nil → nonce-based verification, bound to the request (`requestBinding`)
 	///   - sentNonce == nil → salt-based verification (CDN-cacheable)
 	///
-	/// `requestBinding` is what the server signs next to the nonce for a client that sends
-	/// `X-AppActor-Signature-Binding: request`: method, path + query and the SHA-256 of the
-	/// request body. A response to a rewritten request (another user's path or body) fails.
+	/// `requestPath` is the signed request target (path + query) in both modes.
 	static func verify(
 		response: HTTPURLResponse,
 		body: Data,
 		sentNonce: String?,
 		apiKey: String,
 		requestPath: String,
-		requestBinding: String,
+		method: String = "GET",
+		requestBody: Data? = nil,
 		v1Key: Curve25519.Signing.PublicKey?,
 		rootKey: Curve25519.Signing.PublicKey?,
 		now: TimeInterval
 	) -> VerificationResult {
 
-		// ── Route 1: Nonce-based verification (existing logic) ──
+		// ── Route 1: Nonce-based verification, bound to the request ──
 		if let sentNonce {
 			let echoedNonce = response.value(forHTTPHeaderField: "X-AppActor-Request-Nonce")
 
@@ -146,7 +147,8 @@ enum ResponseSignatureVerifier {
 			}
 
 			let bodyString = String(data: body, encoding: .utf8) ?? ""
-			let payload = "\(sentNonce)\n\(timestampStr)\n\(requestBinding)\n\(bodyString)"
+			let binding = requestBinding(method: method, target: requestPath, body: requestBody)
+			let payload = "\(sentNonce)\n\(timestampStr)\n\(binding)\n\(bodyString)"
 			guard let payloadData = payload.data(using: .utf8) else {
 				return .signatureInvalid
 			}
@@ -154,7 +156,7 @@ enum ResponseSignatureVerifier {
 			return verifySignature(signatureData, payloadData: payloadData, v1Key: v1Key, rootKey: rootKey, now: now)
 		}
 
-		// ── Route 2: Salt-based verification (new, CDN-cacheable) ──
+		// ── Route 2: Salt-based verification (CDN-cacheable) ──
 		guard let saltBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature-Salt") else {
 			return .signingNotSupported
 		}
@@ -282,11 +284,12 @@ enum ResponseSignatureVerifier {
 		UUID().uuidString
 	}
 
-	/// The request binding for a nonce-signed response: method, path + query, and the
-	/// lowercase hex SHA-256 of the request body (of no bytes when there is none).
+	/// What the server signs next to the nonce for a client that sends
+	/// `X-AppActor-Signature-Binding: request`: method, path + query, and the lowercase hex
+	/// SHA-256 of the request body (of no bytes when there is none). A response to a rewritten
+	/// request (another user's path or body) then fails verification.
 	static func requestBinding(method: String, target: String, body: Data?) -> String {
-		let bodyHash = SHA256.hash(data: body ?? Data()).map { String(format: "%02x", $0) }.joined()
-		return "\(method)\n\(target)\n\(bodyHash)"
+		"\(method)\n\(target)\n\(Data(SHA256.hash(data: body ?? Data())).lowercaseHexString)"
 	}
 
 	static func readUInt64BE(_ data: Data, offset: Int) -> UInt64 {

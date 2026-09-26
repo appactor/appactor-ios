@@ -202,6 +202,17 @@ extension AppActorPaymentStorage {
         return token
     }
 
+    // MARK: - Cache Hygiene
+
+    /// Whether the one-time purge of unverified salt-route cache entries has run.
+    var unverifiedSaltRouteCachePurged: Bool {
+        string(forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged) == "true"
+    }
+
+    func setUnverifiedSaltRouteCachePurged() {
+        set("true", forKey: AppActorPaymentStorageKey.unverifiedSaltRouteCachePurged)
+    }
+
     // MARK: - ASA Helpers
 
     /// Whether ASA attribution has been completed for this install.

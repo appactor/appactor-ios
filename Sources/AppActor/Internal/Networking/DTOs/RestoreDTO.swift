@@ -64,6 +64,7 @@ struct AppActorRestoreItemDTO: Decodable, Sendable {
     let transactionId: String
     let status: String
 
+    /// Whether the restore settled this transaction (`recordedTransactionIds`).
     var isRecorded: Bool { status == "restored" || status == "noop" }
 }
 
@@ -74,7 +75,6 @@ struct AppActorRestoreResult: Sendable {
     let customerInfo: AppActorCustomerInfo
     let restoredCount: Int
     let transferred: Bool
-    /// Transaction IDs the server reported as `restored` or `noop`.
     let recordedTransactionIds: Set<String>
     let requestId: String?
     let customerETag: String?

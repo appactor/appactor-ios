@@ -223,10 +223,8 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
                             request: AppActorUpdateAttributionRequest(attribution: attribution)
                         )
                     }
-                    removeFlushedAttribution(appUserId: appUserId, attribution: attribution, rejected: !delivered)
+                    removeFlushedAttribution(appUserId: appUserId, attribution: attribution, delivered: delivered)
                 }
-            } catch is CancellationError {
-                throw CancellationError()
             } catch let error as AppActorError where error.isTransient {
                 Log.customer.debug("Customer attribute flush deferred: \(error.localizedDescription)")
                 return
@@ -352,7 +350,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     private func removeFlushedAttribution(
         appUserId: String,
         attribution: AppActorAttribution,
-        rejected: Bool
+        delivered: Bool
     ) {
         try? mutateState { state in
             if var bucket = state.buckets[appUserId] {
@@ -361,7 +359,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
                 }
                 state.update(bucket, for: appUserId)
             }
-            if !rejected {
+            if delivered {
                 state.deliveredAttributions[appUserId] = attribution
             } else if customAttributionSnapshots[appUserId] == attribution
                         || state.customAttributionSnapshots[appUserId] == attribution {
@@ -472,8 +470,13 @@ extension AppActorCustomerAttributesManager {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             buckets = try container.decode([String: PendingBucket].self, forKey: .buckets)
             customAttributionSnapshots = try container.decode([String: AppActorAttribution].self, forKey: .customAttributionSnapshots)
-            // Queues saved before this key existed don't have it.
-            deliveredAttributions = try container.decodeIfPresent([String: AppActorAttribution].self, forKey: .deliveredAttributions) ?? [:]
+            if let delivered = try container.decodeIfPresent([String: AppActorAttribution].self, forKey: .deliveredAttributions) {
+                deliveredAttributions = delivered
+            } else {
+                // A queue saved before this key existed: a snapshot with nothing queued behind
+                // it was delivered, so it is what the server last accepted.
+                deliveredAttributions = customAttributionSnapshots.filter { buckets[$0.key]?.attribution == nil }
+            }
         }
 
         var isEmpty: Bool {

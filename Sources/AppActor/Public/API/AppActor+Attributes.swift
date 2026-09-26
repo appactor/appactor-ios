@@ -82,7 +82,7 @@ extension AppActor {
     }
 
     public func setPushToken(_ pushToken: Data) async throws {
-        try await setPushToken(Self.hexString(from: pushToken))
+        try await setPushToken(pushToken.lowercaseHexString)
     }
 
     /// Collects system profile context plus optional device/customer identifiers
@@ -216,7 +216,7 @@ extension AppActor {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(attributes) else { return "" }
-        return Self.hexString(from: Data(SHA256.hash(data: data)))
+        return Data(SHA256.hash(data: data)).lowercaseHexString
     }
 
     public static func setIntegrationIdentifier(_ key: String, value: String?) async throws {
@@ -568,10 +568,6 @@ extension AppActor {
         for (field, value) in values {
             try AppActorAttributeKey.validateAttributionString(value, field: field)
         }
-    }
-
-    private static func hexString(from data: Data) -> String {
-        data.map { String(format: "%02x", $0) }.joined()
     }
 
     private func updateCustomAttribution(
