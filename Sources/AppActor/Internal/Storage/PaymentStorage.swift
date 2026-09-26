@@ -114,6 +114,8 @@ extension AppActorPaymentStorage {
     /// Priority: explicit non-blank ID -> cached ID -> new anonymous ID.
     /// A different explicit ID drops the stored `appAccountToken`, so the new identity gets
     /// its own token, as it does after `logIn` or `logOut`.
+    /// A cached ID the server rejects (stored by an older SDK) is replaced by a new anonymous
+    /// one: the server never had that user, and its purchases could never be recorded.
     @discardableResult
     func resolveAppUserId(explicit explicitAppUserId: String?) -> String {
         if let explicitAppUserId,
@@ -123,6 +125,11 @@ extension AppActorPaymentStorage {
             }
             setAppUserId(explicitAppUserId)
             return explicitAppUserId
+        }
+        if let cached = currentAppUserId,
+           (try? AppActorPaymentValidation.validateAppUserId(cached)) == nil {
+            clearAppAccountToken()
+            return generateAnonymousAppUserId()
         }
         return ensureAppUserId()
     }

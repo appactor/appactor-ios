@@ -198,13 +198,12 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     }
 
     func getCustomer(appUserId: String, eTag: String?) async throws -> AppActorCustomerFetchResult {
-        // Encode for a single path segment: exclude '/' so IDs containing slashes
-        // don't alter path structure (e.g. "foo/bar" → "foo%2Fbar").
-        var pathSegmentAllowed = CharacterSet.urlPathAllowed
-        pathSegmentAllowed.remove("/")
-        let encodedId = appUserId.addingPercentEncoding(withAllowedCharacters: pathSegmentAllowed) ?? appUserId
-        let path = "/v1/customers/\(encodedId)"
-        let url = baseURL.appendingPathComponent(path)
+        // Encoded once. appendingPathComponent would encode the '%' again ("auth0|x" would
+        // reach the server as "auth0%7Cx" and read as another user).
+        let path = "/v1/customers/\(encodedPathSegment(appUserId))"
+        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
+            throw AppActorError.networkError(URLError(.badURL))
+        }
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "GET"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")

@@ -232,6 +232,21 @@ final class PaymentClientSignatureTests: XCTestCase {
         XCTAssertEqual(requests[0].httpMethod, "DELETE")
     }
 
+    func testCustomerPathEncodesTheAppUserIdOnce() async throws {
+        PaymentClientURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: [:])!, Data())
+        }
+
+        _ = try? await makeClient().getCustomer(appUserId: "auth0|64f1 ç%", eTag: nil)
+
+        let requests = PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests }
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(
+            URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)?.percentEncodedPath,
+            "/v1/customers/auth0%7C64f1%20%C3%A7%25"
+        )
+    }
+
     func testRestoreReportsOnlyRecordedTransactions() async throws {
         let body = Data("""
         {"data":{"user":{"entitlements":{},"subscriptions":{},"nonSubscriptions":{}},"restoredCount":1,"transferred":false,"hasFailures":true,"items":[

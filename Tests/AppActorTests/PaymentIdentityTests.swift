@@ -1,5 +1,5 @@
 import XCTest
-@testable import AppActor
+@_spi(AppActorPluginSupport) @testable import AppActor
 
 // MARK: - Tests
 
@@ -821,6 +821,54 @@ final class PaymentIdentityTests: XCTestCase {
         XCTAssertNoThrow(try AppActorPaymentValidation.validateAppUserId("user_123"))
         XCTAssertNoThrow(try AppActorPaymentValidation.validateAppUserId("a"))
         XCTAssertNoThrow(try AppActorPaymentValidation.validateAppUserId(String(repeating: "x", count: 255)))
+    }
+
+    /// The server's rules (appactor-final-api publicAppUserIdSchema and lib/validation.ts).
+    func testValidationRejectsWhatTheServerRejects() {
+        let rejected = [
+            "guest", " GUEST ", "0", "-1", "null", "(null)", "Undefined", "nil", "none",
+            "no_user", "unknown", "unidentified", "anonymous", "[]", "{}", "[object Object]",
+            "\u{FEFF}guest", "guest\u{2028}", "\u{3000}nil",   // JavaScript's trim() removes these
+            "   ", "\u{FEFF}",
+            "a/b", "/", "/\u{301}",                             // '/' even inside a grapheme cluster
+            "a\n", "a\u{7F}", "a\u{0}b", "\tuser",
+            String(repeating: "😀", count: 128),                // 256 UTF-16 code units
+        ]
+        for id in rejected {
+            XCTAssertThrowsError(try AppActorPaymentValidation.validateAppUserId(id), "\(id.debugDescription)")
+        }
+    }
+
+    func testValidationAcceptsWhatTheServerAccepts() {
+        let accepted = [
+            "auth0|64f1c2", "user ", " user", "guest1", "0x1", "null_user", "user@example.com",
+            "Kullanıcı ğüşiöç", "guest\u{0085}",                // JavaScript's trim() keeps U+0085
+            String(repeating: "😀", count: 127),                // 254 UTF-16 code units
+        ]
+        for id in accepted {
+            XCTAssertNoThrow(try AppActorPaymentValidation.validateAppUserId(id), "\(id.debugDescription)")
+        }
+    }
+
+    func testConfigureRejectsAReservedAppUserId() {
+        XCTAssertNotNil(AppActorPaymentConfiguration.validationError(apiKey: "pk_test", appUserId: "guest"))
+        XCTAssertNotNil(AppActorPaymentConfiguration.validationError(apiKey: "pk_test", appUserId: "org/123"))
+        XCTAssertNil(AppActorPaymentConfiguration.validationError(apiKey: "pk_test", appUserId: "auth0|abc"))
+    }
+
+    func testLogInRejectsAReservedAppUserIdBeforeAnyRequest() async {
+        storage.setAppUserId("current")
+
+        do {
+            _ = try await appactor.logIn(newAppUserId: "guest")
+            XCTFail("logIn should reject a reserved ID")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .validation)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertTrue(mockClient.loginCalls.isEmpty)
+        XCTAssertEqual(storage.currentAppUserId, "current")
     }
 
     // MARK: - Identify → Customer Cache Integration

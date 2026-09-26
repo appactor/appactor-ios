@@ -147,10 +147,10 @@ enum ResponseSignatureVerifier {
 				return .signatureInvalid
 			}
 
-			let bodyString = String(data: body, encoding: .utf8) ?? ""
 			let binding = requestBinding(method: method, target: requestPath, body: requestBody)
-			let payload = "\(sentNonce)\n\(timestampStr)\n\(binding)\n\(bodyString)"
-			guard let payloadData = payload.data(using: .utf8) else {
+			guard let payloadData = signedPayload(
+				header: "\(sentNonce)\n\(timestampStr)\n\(binding)\n", response: response, body: body
+			) else {
 				return .signatureInvalid
 			}
 
@@ -181,13 +181,24 @@ enum ResponseSignatureVerifier {
 		}
 
 		let eTag = response.value(forHTTPHeaderField: "ETag") ?? ""
-		let bodyString = String(data: body, encoding: .utf8) ?? ""
-		let payload = "\(saltBase64)\n\(apiKey)\n\(requestPath)\n\(timestampStr)\n\(eTag)\n\(bodyString)"
-		guard let payloadData = payload.data(using: .utf8) else {
+		guard let payloadData = signedPayload(
+			header: "\(saltBase64)\n\(apiKey)\n\(requestPath)\n\(timestampStr)\n\(eTag)\n", response: response, body: body
+		) else {
 			return .signatureInvalid
 		}
 
 		return verifySignature(signatureData, payloadData: payloadData, v1Key: v1Key, rootKey: rootKey, now: now)
+	}
+
+	/// The signed bytes: `header`, then the body exactly as received. The server signs the UTF-8
+	/// of its JSON, so a body that isn't those same bytes (UTF-16, a BOM) can't verify.
+	///
+	/// The status isn't signed. The server signs a 304 over no body and every other response
+	/// over its JSON, so that pairing is required here: a signed 304 can't pass as a 200.
+	/// `nil` when the pairing doesn't hold.
+	private static func signedPayload(header: String, response: HTTPURLResponse, body: Data) -> Data? {
+		guard (response.statusCode == 304) == body.isEmpty else { return nil }
+		return Data(header.utf8) + body
 	}
 
 	/// Routes signature verification to v1 or v2 based on blob size.
