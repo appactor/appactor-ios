@@ -47,7 +47,7 @@ actor AppActorTransactionWatcher {
 
     /// When true, incoming transactions are buffered instead of enqueued.
     /// Set during logIn/logOut to prevent items from being tagged with the wrong appUserId.
-    private var isIdentityTransitioning = false
+    private(set) var isIdentityTransitioning = false
     private var identityTransitionAppUserId: String?
 
     private struct BufferedTransaction {

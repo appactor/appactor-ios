@@ -640,8 +640,22 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(item.ledgerKey, "apple:12345:revoked")
     }
 
+    func testRevokedRedeliveryOfAPostedTransactionIsNotAlreadyPosted() async {
+        store.markPosted(key: "apple:12345")
+
+        let isPurchasePosted = await processor.isAlreadyPosted(makeItem())
+        let isRevocationPosted = await processor.isAlreadyPosted(makeRevokedItem())
+        XCTAssertTrue(isPurchasePosted)
+        XCTAssertFalse(isRevocationPosted, "enqueue must let the revocation through to the server")
+
+        store.markPosted(key: "apple:12345:revoked")
+        let isRevocationPostedNow = await processor.isAlreadyPosted(makeRevokedItem())
+        XCTAssertTrue(isRevocationPostedNow)
+    }
+
     func testPostedTransactionRedeliveredRevokedIsPostedOnceThenSkipped() async {
         let refreshed = expectation(description: "customer refresh requested")
+        refreshed.assertForOverFulfill = false
         await processor.setRevokedTransactionHandler { refreshed.fulfill() }
         client.postReceiptHandler = { _ in Self.revokedResponse }
         // The purchase posted earlier; Apple then refunded it.

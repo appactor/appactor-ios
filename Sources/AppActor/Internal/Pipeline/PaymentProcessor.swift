@@ -167,12 +167,14 @@ actor AppActorPaymentProcessor {
     /// Enqueues a payment queue item (fire-and-forget). Used by background callers
     /// (Transaction.updates, restore, sweep).
     ///
-    /// Skips enqueue if the item's `ledgerKey` is already in the posted ledger (duplicate
-    /// prevention); a posted transaction re-delivered revoked is not a duplicate.
+    /// Skips enqueue if the item is already posted (duplicate prevention, see `isAlreadyPosted`).
     /// Finishes the transaction directly when skipping to prevent it from reappearing
     /// in `Transaction.unfinished` on subsequent boots.
     func enqueue(item: AppActorPaymentQueueItem, transaction: Transaction) async {
-        if store.isPosted(key: item.ledgerKey) {
+        // After stop() (reset, a cancelled startup) the store must not be written: it would put
+        // the pre-reset queue back on disk. The transaction stays unfinished for the next sweep.
+        guard !isStopped else { return }
+        if isAlreadyPosted(item) {
             Log.receipts.debug("[key=\(item.key)] Skipped enqueue — already in posted ledger")
             emitEvent(.duplicateSkipped(key: item.key), item: item)
             await transaction.finish()
@@ -193,7 +195,7 @@ actor AppActorPaymentProcessor {
     /// Also checks the posted ledger — the same transaction may have been enqueued
     /// and posted by `Transaction.updates` before the purchase flow runs.
     func enqueueAndAwait(item: AppActorPaymentQueueItem, transaction: Transaction) async -> AppActorReceiptPostResult {
-        if store.isPosted(key: item.ledgerKey) {
+        if isAlreadyPosted(item) {
             Log.receipts.debug("[key=\(item.key)] Skipped enqueueAndAwait — already in posted ledger")
             emitEvent(.duplicateSkipped(key: item.key), item: item)
             await transaction.finish()
@@ -226,6 +228,12 @@ actor AppActorPaymentProcessor {
                 await self?.timeoutContinuation(key: key)
             }
         }
+    }
+
+    /// Whether the server already has what posting `item` would tell it: the transaction, or, for
+    /// a JWS with a revocationDate, the revocation (see `AppActorPaymentQueueItem.ledgerKey`).
+    func isAlreadyPosted(_ item: AppActorPaymentQueueItem) -> Bool {
+        store.isPosted(key: item.ledgerKey)
     }
 
     /// Moves receipts an older SDK queued under an app user ID the server rejects, and never
@@ -446,7 +454,7 @@ actor AppActorPaymentProcessor {
             // Excludes .deadLettered items — those are intentionally kept in the store for diagnostics
             // even though they are also written to the posted ledger (to prevent re-enqueue on StoreKit re-delivery).
             let stalePosted = allItems.filter {
-                $0.phase != .needsFinish && $0.phase != .deadLettered && store.isPosted(key: $0.ledgerKey)
+                $0.phase != .needsFinish && $0.phase != .deadLettered && isAlreadyPosted($0)
             }
             for item in stalePosted {
                 hasWork = true
@@ -754,6 +762,12 @@ actor AppActorPaymentProcessor {
     /// so the map will be populated for any transaction that needs finishing.
     private func finishTransaction(_ item: AppActorPaymentQueueItem) async {
         if let transaction = transactionMap.removeValue(forKey: item.key) {
+            // StoreKit re-delivered it revoked while the unrevoked JWS was being posted (the
+            // stale copy then overwrote the merged one). Unfinished, the next sweep posts the revocation.
+            guard transaction.revocationDate == nil || item.ledgerKey != item.key else {
+                Log.receipts.info("[key=\(item.key)] Revoked while posting — left unfinished for the next sweep")
+                return
+            }
             await transaction.finish()
             Log.receipts.debug("[key=\(item.key)] Transaction \(item.transactionId) finished")
         } else {

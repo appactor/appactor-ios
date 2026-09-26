@@ -39,6 +39,7 @@ final class IdentitySessionTests: XCTestCase {
         appactor.transactionWatcher = nil
         appactor.paymentQueueStore = nil
         appactor.paymentRemoteConfigs = nil
+        appactor.onCustomerInfoChanged = nil
         appactor.customerInfo = .empty
         appactor.paymentLifecycle = .idle
         try? FileManager.default.removeItem(at: cacheDir)
@@ -120,6 +121,9 @@ final class IdentitySessionTests: XCTestCase {
         configure(storage: nextStorage)
         let nextUserId = nextStorage.currentAppUserId
         let nextToken = nextStorage.appAccountToken
+        // Another logIn of the new session is mid-transition; the late one must not end it.
+        let nextWatcher = try XCTUnwrap(appactor.transactionWatcher)
+        await nextWatcher.beginIdentityTransition(appUserId: nextUserId)
         await releaseLogin.signal()
 
         do {
@@ -134,6 +138,63 @@ final class IdentitySessionTests: XCTestCase {
         XCTAssertNotEqual(appactor.customerInfo.appUserId, "user_b")
         let seeded = await etagManager.cached(AppActorCustomerInfo.self, for: .customer(appUserId: "user_b"))
         XCTAssertNil(seeded, "the old session's answer is not seeded into the next session's cache")
+        let stillTransitioning = await nextWatcher.isIdentityTransitioning
+        XCTAssertTrue(stillTransitioning)
+        await nextWatcher.endIdentityTransition()
+    }
+
+    func testLogInThatResolvesAfterAReconfigureIsDropped() async throws {
+        let loginStarted = AsyncSignal()
+        let releaseLogin = AsyncSignal()
+        holdLogin(started: loginStarted, release: releaseLogin)
+
+        let login = Task { try await appactor.logIn(newAppUserId: "user_b") }
+        await loginStarted.wait()
+        // A cancelled startup reverts to idle without reset(); configure() then runs again.
+        appactor.paymentLifecycle = .idle
+        configure(storage: InMemoryPaymentStorage())
+        await releaseLogin.signal()
+
+        do {
+            _ = try await login.value
+            XCTFail("a logIn from the previous session must not succeed")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .notConfigured)
+        }
+        XCTAssertEqual(storage.currentAppUserId, "user_a")
+    }
+
+    func testResetDuringTheReceiptDrainKeepsLogInFromReachingTheServer() async throws {
+        let queueStore = InMemoryPaymentQueueStore()
+        configure(storage: storage, queueStore: queueStore)
+        let postStarted = AsyncSignal()
+        let releasePost = AsyncSignal()
+        mockClient.postReceiptHandler = { _ in
+            await postStarted.signal()
+            await releasePost.wait()
+            return AppActorReceiptPostResponse(status: "ok", requestId: nil)
+        }
+        let now = Date()
+        queueStore.upsert(AppActorPaymentQueueItem(
+            key: "apple:1", bundleId: "com.test", environment: "sandbox", transactionId: "1",
+            jws: "jws", signedAppTransactionInfo: nil, appUserId: "user_a", productId: "com.test.monthly",
+            originalTransactionId: "1", storefront: nil, offeringId: nil, packageId: nil,
+            phase: .needsPost, attemptCount: 0, nextRetryAt: now, firstSeenAt: now, lastSeenAt: now,
+            lastError: nil, sources: [.purchase], claimedAt: nil
+        ))
+
+        let login = Task { try await appactor.logIn(newAppUserId: "user_b") }
+        await postStarted.wait()
+        await appactor.reset()
+        await releasePost.signal()
+
+        do {
+            _ = try await login.value
+            XCTFail("a logIn that outlived reset() must not succeed")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .notConfigured)
+        }
+        XCTAssertTrue(mockClient.loginCalls.isEmpty, "the reset identity is never merged into user_b")
     }
 
     // MARK: - I-S6-2: caches go only once the login succeeded
@@ -218,6 +279,37 @@ final class IdentitySessionTests: XCTestCase {
         XCTAssertEqual(appactor.cachedRemoteConfigs?["tier"], .string("user_b"))
     }
 
+    func testRemoteConfigFetchCancelledByLogOutIsFetchedAgainNotThrown() async throws {
+        let fetchStarted = AsyncSignal()
+        let release = AsyncSignal()
+        mockClient.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            guard let appUserId else {
+                return .fresh([], eTag: nil, requestId: nil, signatureVerified: false, requiresUserContext: true)
+            }
+            if appUserId == "user_a" {
+                await fetchStarted.signal()
+                // Like URLSession, a cancelled request returns at once.
+                await withTaskCancellationHandler {
+                    await release.wait()
+                } onCancel: {
+                    Task { await release.signal() }
+                }
+                try Task.checkCancellation()
+            }
+            let tier = AppActorRemoteConfigItemDTO(key: "tier", value: .string(appUserId), valueType: "string")
+            return .fresh([tier], eTag: nil, requestId: nil, signatureVerified: false, requiresUserContext: true)
+        }
+
+        let fetch = Task { try await appactor.getRemoteConfigs() }
+        await fetchStarted.wait()
+        _ = try await appactor.logOut()
+        let configs = try await fetch.value
+
+        let anonymousId = try XCTUnwrap(storage.currentAppUserId)
+        XCTAssertTrue([.string("user_a"), .string(anonymousId)].contains(configs["tier"]))
+        XCTAssertNotEqual(appactor.cachedRemoteConfigs?["tier"], .string("user_a"), "never published once logOut switched")
+    }
+
     func testRemoteConfigFetchedBeforeResetIsNotPublishedIntoTheNextSession() async throws {
         let fetchStarted = AsyncSignal()
         let releaseFetch = AsyncSignal()
@@ -264,6 +356,8 @@ final class IdentitySessionTests: XCTestCase {
         await appactor.wireReceiptCustomerInfoUpdateHandler()
         mockClient.postReceiptHandler = { _ in PaymentProcessorTests.revokedResponse }
         let refreshed = expectation(description: "customer info fetched after the revocation")
+        let published = expectation(description: "the refreshed customer info published")
+        appactor.onCustomerInfoChanged = { _ in published.fulfill() }
         mockClient.getCustomerHandler = { appUserId, _ in
             refreshed.fulfill()
             return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
@@ -295,8 +389,31 @@ final class IdentitySessionTests: XCTestCase {
 
         await appactor.paymentProcessor?.drainAll()
 
-        await fulfillment(of: [refreshed], timeout: 2)
+        await fulfillment(of: [refreshed, published], timeout: 2)
         XCTAssertEqual(mockClient.postReceiptCalls.count, 1)
         XCTAssertEqual(mockClient.getCustomerCalls.first?.appUserId, "user_a")
+        XCTAssertEqual(appactor.customerInfo.appUserId, "user_a")
+    }
+
+    func testRevocationRefreshDoesNotJoinACustomerFetchAlreadyInFlight() async throws {
+        let client = try XCTUnwrap(mockClient)
+        let firstStarted = AsyncSignal()
+        let releaseFirst = AsyncSignal()
+        client.getCustomerHandler = { appUserId, _ in
+            if client.getCustomerCalls.count == 1 {
+                // The host's fetch, sent before the server committed the revocation.
+                await firstStarted.signal()
+                await releaseFirst.wait()
+            }
+            return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
+        }
+        let hostFetch = Task { try await appactor.getCustomerInfo() }
+        await firstStarted.wait()
+
+        await appactor.refreshCustomerInfoAfterRevocation()
+
+        XCTAssertEqual(client.getCustomerCalls.count, 2, "the refresh sends its own request")
+        await releaseFirst.signal()
+        _ = try await hostFetch.value
     }
 }

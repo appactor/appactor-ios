@@ -125,10 +125,20 @@ extension AppActor {
             }
             await processor.setRevokedTransactionHandler { [weak self] in
                 Task { @MainActor [weak self] in
-                    _ = try? await self?.getCustomerInfo()
+                    await self?.refreshCustomerInfoAfterRevocation()
                 }
             }
         }
+    }
+
+    /// The server processed a refund or revoke and answered without customer info. Forced, so
+    /// it doesn't join a customer fetch already in flight that may predate the revocation.
+    func refreshCustomerInfoAfterRevocation() async {
+        guard paymentLifecycle == .configured,
+              let manager = customerManager,
+              let appUserId = paymentStorage?.currentAppUserId,
+              let info = try? await manager.getCustomerInfo(appUserId: appUserId, forceRefresh: true) else { return }
+        await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: appUserId)
     }
 
     /// Handles an incoming PurchaseIntent.
@@ -184,7 +194,7 @@ extension AppActor {
     /// from running in the background after a cancelled bootstrap.
     private func revertLifecycleIfCancelled() async {
         guard paymentLifecycle == .configured else { return }
-        endSession()
+        advanceSessionGeneration()
         offeringsPrefetchTask?.cancel()
         await offeringsPrefetchTask?.value
         offeringsPrefetchTask = nil

@@ -31,7 +31,9 @@ extension AppActor {
         // A logIn, logOut or reset() can land while the fetch is in flight. The result is then
         // the previous user's, entitlement-targeted values included: it is neither published nor
         // returned, and the fetch runs again for whoever is current (or throws after a reset).
-        for _ in 0..<Self.remoteConfigAttemptsAcrossIdentityChanges {
+        // The same runs again when a cache clear cancelled the fetch (identity switches and
+        // entitlement changes do that), unless the caller itself was cancelled.
+        for _ in 0..<Self.remoteConfigFetchAttempts {
             guard paymentLifecycle == .configured else {
                 throw AppActorError.notConfigured
             }
@@ -54,8 +56,7 @@ extension AppActor {
                     appVersion: appVersion,
                     country: country
                 )
-            } catch is CancellationError where !Task.isCancelled && !identityIsCurrent() {
-                // The identity switch cleared this user's cache and cancelled the fetch with it.
+            } catch is CancellationError where !Task.isCancelled {
                 continue
             }
             guard identityIsCurrent() else { continue }
@@ -69,7 +70,9 @@ extension AppActor {
         throw CancellationError()
     }
 
-    private static let remoteConfigAttemptsAcrossIdentityChanges = 3
+    /// One logIn can cancel a fetch up to four times (its clears, the switch, the entitlement
+    /// change); the bound only stops a pathological loop.
+    private static let remoteConfigFetchAttempts = 5
 
     // MARK: - Typed Accessors (nonisolated — safe to call from any context)
 

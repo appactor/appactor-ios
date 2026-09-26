@@ -18,6 +18,7 @@ extension AppActor {
         silentSyncFetcher: (any AppActorStoreKitSilentSyncFetcherProtocol)? = nil
     ) {
         paymentLifecycle = .configured
+        advanceSessionGeneration()
         let etagManager = etagManager ?? AppActorETagManager()
         self.paymentETagManager = etagManager
 

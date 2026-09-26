@@ -34,7 +34,8 @@ extension AppActor {
     /// never reaches storage or the session configured after it.
     var sessionGeneration: UInt64 { paymentContext.sessionGeneration }
 
-    func endSession() {
+    /// Called when a configured session starts or ends.
+    func advanceSessionGeneration() {
         paymentContext.sessionGeneration &+= 1
     }
 

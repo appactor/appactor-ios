@@ -585,7 +585,7 @@ private final class AppActorLockedBox<Value>: @unchecked Sendable {
 @MainActor
 final class AppActorPaymentContext {
     var lifecycle: AppActorPaymentLifecycle = .idle
-    /// Bumped when a configured session ends (`reset()`, a cancelled startup).
+    /// Bumped when a configured session starts or ends (`configure()`, `reset()`, a cancelled startup).
     var sessionGeneration: UInt64 = 0
     var config: AppActorPaymentConfiguration?
     var storage: (any AppActorPaymentStorage)?

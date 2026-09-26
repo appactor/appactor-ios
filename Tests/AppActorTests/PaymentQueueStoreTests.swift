@@ -283,4 +283,22 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertTrue(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().isEmpty)
     }
 
+    // MARK: - I-G-1: a revocation's ledger key is not the item's key
+
+    func test_givenRevocationLedgerKey_whenMarkedPostedAndUpdated_thenItemStaysUnderItsOwnKey() {
+        store.upsert(makeItem(key: "apple:1"))
+        var finished = makeItem(key: "apple:1")
+        finished.phase = .needsFinish
+
+        store.markPostedAndUpdate(key: "apple:1:revoked", item: finished)
+
+        XCTAssertEqual(store.snapshot().map(\.key), ["apple:1"])
+        XCTAssertEqual(store.snapshot().first?.phase, .needsFinish)
+        XCTAssertTrue(store.isPosted(key: "apple:1:revoked"))
+        XCTAssertFalse(store.isPosted(key: "apple:1"))
+        store.remove(key: "apple:1")
+        XCTAssertTrue(store.snapshot().isEmpty)
+        XCTAssertTrue(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().isEmpty)
+    }
+
 }
