@@ -635,9 +635,16 @@ actor AppActorPaymentProcessor {
                 ), item: item)
                 resumeContinuation(key: item.key, result: .queued)
             } else {
-                // Unexpected non-AppActor errors — mark for retry with standard backoff
+                // A 2xx whose signature can't be verified (a device clock off by more than the
+                // allowed drift, a proxy rewriting responses) or an error outside AppActorError:
+                // never finished, and retried on its own curve, not every 3 s forever. A cancelled
+                // POST says nothing about the response and keeps the short schedule.
                 updated.phase = .needsPost
-                updated.nextRetryAt = Date().addingTimeInterval(Self.backoffDelay(attempt: updated.attemptCount))
+                updated.nextRetryAt = Date().addingTimeInterval(
+                    error is CancellationError
+                        ? Self.backoffDelay(attempt: updated.attemptCount)
+                        : Self.unverifiedResponseBackoffDelay(attempt: updated.attemptCount)
+                )
                 updated.lastError = error.localizedDescription
                 store.update(updated)
 
@@ -938,6 +945,15 @@ actor AppActorPaymentProcessor {
         case 1:  return 0.75    // 750ms
         default: return 3       // 3 seconds
         }
+    }
+
+    /// Backoff for a response that can't be verified or an unexpected error: 2^n s, capped at
+    /// 10 minutes. Transient failures (offline, 5xx) keep ``backoffDelay(attempt:)``. The cap stays
+    /// in minutes because the launch and foreground drains respect `nextRetryAt`: it bounds how
+    /// long a queued purchase waits once the cause is fixed, on the device clock (a clock that was
+    /// set ahead and put back also holds it back by the difference).
+    static func unverifiedResponseBackoffDelay(attempt: Int) -> TimeInterval {
+        min(pow(2, Double(attempt)), 10 * 60)
     }
 
     /// Computes retry delay, respecting server `retryAfterSeconds` if provided.

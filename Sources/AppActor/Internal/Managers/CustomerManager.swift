@@ -19,9 +19,11 @@ actor AppActorCustomerManager {
     /// The app user ID this manager is currently caching for.
     private var currentAppUserId: String?
 
-    /// In-flight dedup: only one fetch at a time, keyed by userId to prevent cross-user coalescing.
-    private var inflight: (userId: String, task: Task<AppActorCustomerInfo, Error>)?
-    /// Generation counter for safe inflight bookkeeping (avoids `===` on Task).
+    /// Every fetch still running, keyed by generation. The newest is the one callers coalesce on
+    /// (keyed by userId to prevent cross-user coalescing); older ones, replaced by a force refresh
+    /// or another user's fetch, keep running for the callers already waiting on them.
+    private var runningFetches: [UInt64: (userId: String, task: Task<AppActorCustomerInfo, Error>)] = [:]
+    /// Generation of the newest fetch (avoids `===` on Task).
     private var inflightGeneration: UInt64 = 0
 
     /// Last `request_id` from the server, for debugging.
@@ -70,14 +72,25 @@ actor AppActorCustomerManager {
     /// Preserves cached data and ETag for conditional requests (304 optimization).
     /// Cancels any in-flight fetch to prevent stale writes after the reset.
     func clearCache(appUserId: String) async {
-        inflight?.task.cancel()
-        inflight = nil
+        cancelInFlight()
+        await resetFreshness(appUserId: appUserId)
+    }
+
+    /// Marks the cache stale so the next foreground or staleness check fetches, without touching
+    /// fetches that are running.
+    func resetFreshness(appUserId: String) async {
         await etagManager.resetFreshness(for: .customer(appUserId: appUserId))
     }
 
-    func clearCache() async {
-        guard let userId = currentAppUserId else { return }
-        await clearCache(appUserId: userId)
+    /// Cancels every fetch still running, whoever started it. The fetches are unstructured tasks
+    /// shared by every caller for the user, so a caller's own cancellation never reaches them, and
+    /// one a cancelled caller started would run to the end of its retry cycle with nobody to
+    /// cancel it. Called when an identity or a session ends (logOut(), reset(), a cancelled
+    /// startup); waiters get a `CancellationError`, unless the fetch had its answer already and
+    /// is writing it.
+    func cancelInFlight() {
+        runningFetches.values.forEach { $0.task.cancel() }
+        runningFetches.removeAll()
     }
 
     // MARK: - Public API
@@ -94,10 +107,12 @@ actor AppActorCustomerManager {
     func getCustomerInfo(appUserId: String, forceRefresh: Bool = false) async throws -> AppActorCustomerInfo {
         currentAppUserId = appUserId
         let resource = AppActorCacheResource.customer(appUserId: appUserId)
+        // A cancelled caller neither starts nor waits on a fetch (see cancelInFlight()).
+        try Task.checkCancellation()
 
         // Coalesce only if same userId and not a force refresh.
-        if !forceRefresh, let inflight, inflight.userId == appUserId {
-            return try await inflight.task.value
+        if !forceRefresh, let newest = runningFetches[inflightGeneration], newest.userId == appUserId {
+            return try await newest.task.value
         }
 
         let client = self.client
@@ -110,6 +125,8 @@ actor AppActorCustomerManager {
 
             do {
                 let result = try await client.getCustomer(appUserId: appUserId, eTag: lastETag)
+                // Cancelled while the response was on its way: the teardown is deleting this cache.
+                try Task.checkCancellation()
 
                 switch result {
                 case .fresh(let info, let eTag, let requestId, let signatureVerified):
@@ -127,6 +144,7 @@ actor AppActorCustomerManager {
                     }
                     // 304 but cache is missing/corrupt — force a fresh fetch (no eTag)
                     let retry = try await client.getCustomer(appUserId: appUserId, eTag: nil)
+                    try Task.checkCancellation()
                     guard case .fresh(let info, let retryETag, _, let retryVerified) = retry else {
                         throw AppActorError.serverError(
                             httpStatus: 304,
@@ -155,17 +173,9 @@ actor AppActorCustomerManager {
 
         inflightGeneration &+= 1
         let generation = inflightGeneration
-        inflight = (userId: appUserId, task: task)
-
-        do {
-            let info = try await task.value
-            // Only clear if still our task (forceRefresh may have replaced it)
-            if inflightGeneration == generation { inflight = nil }
-            return info
-        } catch {
-            if inflightGeneration == generation { inflight = nil }
-            throw error
-        }
+        runningFetches[generation] = (userId: appUserId, task: task)
+        defer { runningFetches[generation] = nil }
+        return try await task.value
     }
 
     /// Derives active entitlement keys offline from StoreKit 2 transactions and
@@ -181,17 +191,12 @@ actor AppActorCustomerManager {
     ///   (e.g., server-side revocations, promotional entitlements, grace periods). Always prefer
     ///   ``getCustomerInfo(appUserId:forceRefresh:)`` for authoritative entitlement checks.
     ///
-    /// - Returns: Set of entitlement keys that are active offline.
-    func activeEntitlementKeysOffline() async -> Set<String> {
-        let appUserId = currentAppUserId
-        return await activeEntitlementKeysOffline(appUserId: appUserId)
-    }
-
-    /// Derives active entitlement keys offline for a specific identity.
-    ///
     /// The StoreKit derivation remains global, but the cached-customer fallback is
-    /// explicitly bound to the provided `appUserId` so callers can avoid cross-user
-    /// offline snapshots during login/logout races.
+    /// explicitly bound to the provided `appUserId` (the caller's identity, never the user
+    /// this manager last fetched for) so callers can avoid cross-user offline snapshots
+    /// during login/logout races.
+    ///
+    /// - Returns: Set of entitlement keys that are active offline.
     func activeEntitlementKeysOffline(appUserId: String?) async -> Set<String> {
         // 1. SK2 product IDs + offerings mapping → derive entitlement keys
         let derivedKeys = await derivedEntitlementKeysFromStoreKit()

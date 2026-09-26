@@ -145,6 +145,12 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         }
     }
 
+    /// Whether the request never reached the server or it failed (network, 5xx): the cases the
+    /// managers answer from their disk cache. Unlike ``isTransient``, excludes 429.
+    var isNetworkOrServerError: Bool {
+        kind == .network || (kind == .server && (httpStatus ?? 0) >= 500)
+    }
+
     /// Whether the server rejected the request payload itself (400, 409, 413, 422), so the
     /// same payload will never be accepted. Auth and routing errors (401, 403, 404) are not
     /// payload rejections: they recover once the configuration is fixed.

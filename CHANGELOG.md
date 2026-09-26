@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Fixed: a remote-config value no longer fails to load offline after the app is relaunched. The SDK probed without the user context, fell back to a good document on disk, then discarded it before a user-context refetch that could not reach the network — so the copy it already had was thrown away. It is now kept until an answer exists to replace it. A failed refetch also no longer records "this project needs the user context", which had pinned every later call to a context it could not fetch.
+- Fixed: a remote-config value no longer fails to load offline after the app is relaunched. The SDK probed without the user context, fell back to a good document on disk, then discarded it before a user-context refetch that could not reach the network — so the copy it already had was thrown away. It is now kept until an answer exists to replace it. A failed refetch also no longer records "this project needs the user context", which had pinned every later call to a context it could not fetch. In projects whose remote config needs the user context, the SDK discards the public copy once a user-context fetch succeeds, so an offline or 5xx call that probed without the user (after a relaunch, or once the remembered decision expired after 5 minutes) found nothing and threw; it now falls back to the user's own cached copy.
 - Added: `scripts/test_ios.sh` runs the suite on a simulator. `swift test` targets macOS, where anything fenced on `canImport(UIKit)` is compiled out.
 
 ## 0.1.13

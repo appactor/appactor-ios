@@ -309,6 +309,10 @@ public final class AppActor: ObservableObject {
             await setCustomerInfoIfIdentityMatches(finalInfo, expectedAppUserId: appUserId)
             Log.sdk.info("✅ Purchases restored (bulk: \(result.restoredCount) restored, transferred=\(result.transferred))")
             return finalInfo
+        } catch is CancellationError {
+            // A logOut(), reset() or cancelled startup ended the session: not a bulk failure, and the
+            // fallback's fresh fetch would write back the cache that teardown is deleting.
+            throw CancellationError()
         } catch {
             // Fallback: Bulk failed — fall back to single-receipt pipeline
             Log.sdk.warn("Bulk restore failed (\(error.localizedDescription)), falling back to single-receipt pipeline")
@@ -608,6 +612,10 @@ final class AppActorPaymentContext {
     /// Set to `true` when `runBootstrap()` completes. Guards PurchaseIntent
     /// processing and foreground observer from firing before bootstrap finishes.
     var isBootstrapComplete: Bool = false
+    /// configure() calls waiting for the startup in flight to settle (see `configureAndStart`).
+    var startupWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    /// Advances each time reset() starts, so a configure() that waited across one can tell.
+    var resetCount: UInt64 = 0
     var pipelineEventHandler: (@Sendable (AppActorReceiptPipelineEventDetail) -> Void)?
     /// Product IDs for purchases that returned `.pending` (Ask to Buy / SCA).
     /// Keyed by product ID, value is the count of pending purchases for that SKU.

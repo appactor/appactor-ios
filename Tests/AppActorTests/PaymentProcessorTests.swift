@@ -730,6 +730,36 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(AppActorPaymentProcessor.retryDelay(attempt: 1, serverRetryAfter: 60), 60)
     }
 
+    // MARK: - E9a: a 2xx the SDK can't verify
+
+    func testUnverifiableResponseBacksOffWithoutFinishing() async {
+        // A device clock off by more than the allowed drift fails every signature check.
+        client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
+            throw AppActorError.signatureError(.signatureTimestampOutOfRange)
+        }
+        let item = makeItem(attemptCount: 4)
+        store.upsert(item)
+
+        let before = Date()
+        await processor.drainAll()
+        await processor.stop()
+
+        let queued = store.allItems().first
+        XCTAssertEqual(queued?.phase, .needsPost, "An answer the SDK can't verify never finishes the item")
+        XCTAssertEqual(queued?.attemptCount, 5)
+        XCTAssertFalse(store.isPosted(key: item.ledgerKey))
+        XCTAssertEqual(client.postReceiptCalls.count, 1)
+        // 2^5 s, not the flat 3 s it used to re-post on forever.
+        XCTAssertGreaterThanOrEqual(queued?.nextRetryAt.timeIntervalSince(before) ?? 0, 32)
+    }
+
+    func testUnverifiedResponseBackoffGrowsAndIsCappedInMinutes() {
+        XCTAssertEqual(AppActorPaymentProcessor.unverifiedResponseBackoffDelay(attempt: 1), 2)
+        XCTAssertEqual(AppActorPaymentProcessor.unverifiedResponseBackoffDelay(attempt: 5), 32)
+        XCTAssertEqual(AppActorPaymentProcessor.unverifiedResponseBackoffDelay(attempt: 10), 600)
+        XCTAssertEqual(AppActorPaymentProcessor.unverifiedResponseBackoffDelay(attempt: 10_000), 600)
+    }
+
     func testRetryableRespectsRetryAfterSeconds() async {
         client.postReceiptHandler = { (_: AppActorReceiptPostRequest) in
             AppActorReceiptPostResponse(

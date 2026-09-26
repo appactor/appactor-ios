@@ -246,7 +246,7 @@ final class CustomerManagerTests: XCTestCase {
         await etagManager.storeFresh(dto, for: .offerings, eTag: nil)
 
         let manager = makeManager()
-        let keys = await manager.activeEntitlementKeysOffline()
+        let keys = await manager.activeEntitlementKeysOffline(appUserId: nil)
 
         XCTAssertEqual(keys, ["premium", "ad_free"])
     }
@@ -258,10 +258,8 @@ final class CustomerManagerTests: XCTestCase {
         await etagManager.storeFresh(premiumInfo, for: .customer(appUserId: "user_123"), eTag: nil)
 
         let manager = makeManager(cacheTTL: 3600)
-        // Seed the manager's currentAppUserId by fetching once
-        // or by calling seedCache
         await manager.seedCache(info: premiumInfo, eTag: nil, appUserId: "user_123")
-        let keys = await manager.activeEntitlementKeysOffline()
+        let keys = await manager.activeEntitlementKeysOffline(appUserId: "user_123")
 
         XCTAssertEqual(keys, ["premium"])
     }
@@ -299,7 +297,7 @@ final class CustomerManagerTests: XCTestCase {
         // Give a tiny delay so cachedAt is definitely in the past
         try await Task.sleep(nanoseconds: 10_000_000) // 10ms
 
-        let keys = await manager.activeEntitlementKeysOffline()
+        let keys = await manager.activeEntitlementKeysOffline(appUserId: "user_123")
 
         XCTAssertTrue(keys.isEmpty, "Stale cache beyond TTL should return empty set")
     }
@@ -653,14 +651,14 @@ final class CustomerManagerTests: XCTestCase {
         await etagManager.storeFresh(dto, for: .offerings, eTag: nil)
 
         let manager = makeManager()
-        let keys = await manager.activeEntitlementKeysOffline()
+        let keys = await manager.activeEntitlementKeysOffline(appUserId: nil)
 
         XCTAssertEqual(keys, ["premium"], "Offline keys should derive from SK2 + mapping even when server is down")
     }
 
     func testOfflineKeysEmptyWithoutSK2OrCache() async throws {
         let manager = makeManager()
-        let keys = await manager.activeEntitlementKeysOffline()
+        let keys = await manager.activeEntitlementKeysOffline(appUserId: nil)
 
         XCTAssertTrue(keys.isEmpty, "No SK2 products + no cache = empty set")
     }
@@ -797,7 +795,7 @@ final class CustomerManagerTests: XCTestCase {
 
         // --- Assert Phase 4: offline entitlement keys from cache ---
 
-        let offlineKeys = await manager.activeEntitlementKeysOffline()
+        let offlineKeys = await manager.activeEntitlementKeysOffline(appUserId: appUserId)
         XCTAssertEqual(offlineKeys, ["premium"], "Cached customer info has 'premium' entitlement")
         XCTAssertEqual(callCount, 3, "Offline keys use cache, no extra network call")
     }
@@ -814,7 +812,7 @@ final class CustomerManagerTests: XCTestCase {
 
         try await Task.sleep(nanoseconds: 10_000_000) // 10ms
 
-        let expiredKeys = await manager.activeEntitlementKeysOffline()
+        let expiredKeys = await manager.activeEntitlementKeysOffline(appUserId: "user_123")
         XCTAssertTrue(expiredKeys.isEmpty, "Stale cache -> empty offline keys")
     }
 
@@ -895,7 +893,7 @@ final class CustomerManagerTests: XCTestCase {
         await etagManager.storeFresh(dto, for: .offerings, eTag: nil)
 
         let manager = makeManager()
-        let keys = await manager.activeEntitlementKeysOffline()
+        let keys = await manager.activeEntitlementKeysOffline(appUserId: nil)
 
         XCTAssertEqual(keys, ["premium"], "SK2 product mapped to 'premium' should derive that key")
     }
@@ -911,7 +909,7 @@ final class CustomerManagerTests: XCTestCase {
         await etagManager.storeFresh(dto, for: .offerings, eTag: nil)
 
         let manager = makeManager()
-        let keys = await manager.activeEntitlementKeysOffline()
+        let keys = await manager.activeEntitlementKeysOffline(appUserId: nil)
 
         XCTAssertEqual(keys, ["extras", "vip"], "SK2 product should derive all mapped entitlement keys")
     }
@@ -926,7 +924,7 @@ final class CustomerManagerTests: XCTestCase {
         // No offerings cache -> mapping path skipped, falls to cached customer info
         let manager = makeManager(cacheTTL: 3600)
         await manager.seedCache(info: premiumInfo, eTag: nil, appUserId: "user_123")
-        let keys = await manager.activeEntitlementKeysOffline()
+        let keys = await manager.activeEntitlementKeysOffline(appUserId: "user_123")
 
         XCTAssertEqual(keys, ["premium"], "No offerings cache -> falls to cached customer info keys")
     }

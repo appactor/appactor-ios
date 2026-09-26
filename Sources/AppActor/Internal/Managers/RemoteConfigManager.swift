@@ -48,6 +48,8 @@ actor AppActorRemoteConfigManager {
     private var inFlightGenerations: [CacheContext: UInt64] = [:]
     private var nextInFlightGeneration: UInt64 = 0
     private var lastCacheContext: CacheContext?
+    /// Advances on every `clearCache(appUserId:)`, for a disk read that no fetch in flight guards.
+    private var clearCount: UInt64 = 0
 
     // MARK: - TTL
 
@@ -77,6 +79,8 @@ actor AppActorRemoteConfigManager {
         appVersion: String?,
         country: String?
     ) async throws -> AppActorRemoteConfigs {
+        // Before any await: a clear anywhere in this call voids the disk fallback below.
+        let clears = clearCount
         let userContext = normalizedContext(appUserId: appUserId, appVersion: appVersion, country: country)
         let publicContext = normalizedContext(appUserId: nil, appVersion: appVersion, country: country)
         let modeContext = ModeContext(appVersion: publicContext.appVersion, country: publicContext.country)
@@ -99,7 +103,23 @@ actor AppActorRemoteConfigManager {
             return cached
         }
 
-        let configs = try await fetchCoalesced(context: preferredContext)
+        let configs: AppActorRemoteConfigs
+        do {
+            configs = try await fetchCoalesced(context: preferredContext)
+        } catch let error as AppActorError where error.isNetworkOrServerError
+            && freshModeDecision(for: modeContext) != .publicOnly
+            && shouldRefetchPublicResultWithUser(publicContext: preferredContext, userContext: userContext) {
+            // The probe reached neither the server nor a public copy on disk. A project that
+            // needs the user context keeps none: each user-context fetch discards it, and the
+            // decision that skips the probe expires after cacheTTL and dies with the process.
+            // The user's own copy is the one to fall back to. It is read from disk, not fetched:
+            // a user-context request would only repeat the retry cycle that just failed.
+            guard let cached = try await loadUserCopyAfterFailedProbe(context: userContext, clearsAtStart: clears) else {
+                throw error
+            }
+            Log.sdk.debug("Network/5xx error — returning the user's disk-cached remote configs")
+            return cached
+        }
         if preferredContext.appUserId == nil {
             guard shouldRefetchPublicResultWithUser(publicContext: preferredContext, userContext: userContext) else {
                 updateModeDecision(modeContext: modeContext, requiresUserContext: requiresUserContextByContext[preferredContext])
@@ -130,6 +150,7 @@ actor AppActorRemoteConfigManager {
     /// Clears both in-memory and disk caches.
     /// Cancels any in-flight fetch to prevent actor-reentrancy stale writes.
     func clearCache(appUserId: String?) async {
+        clearCount &+= 1
         let normalized = normalizedUserId(appUserId)
         let appUserIdsToClear = appUserIdsToClear(for: normalized)
         let taskContexts = inFlightTasks.keys.filter { appUserIdsToClear.contains($0.appUserId) }
@@ -168,7 +189,7 @@ actor AppActorRemoteConfigManager {
             guard let self else { throw AppActorError.notConfigured }
             do {
                 return try await self.executePipeline(context: context, generation: generation)
-            } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
+            } catch let error as AppActorError where error.isNetworkOrServerError {
                 // Network / 5xx fallback: return disk-cached configs if available
                 try await self.ensureFetchStillCurrent(context: context, generation: generation)
                 if let cached = try await self.loadFromDiskCache(context: context, generation: generation) {
@@ -345,6 +366,25 @@ actor AppActorRemoteConfigManager {
         return configs
     }
 
+    /// Reads `context`'s copy from disk outside any fetch, so no in-flight generation guards it:
+    /// a clear since the call began throws `CancellationError`, which the caller fetches again
+    /// after (see `AppActor.getRemoteConfigs()`), rather than serving what was just cleared.
+    private func loadUserCopyAfterFailedProbe(
+        context: CacheContext,
+        clearsAtStart: UInt64
+    ) async throws -> AppActorRemoteConfigs? {
+        guard clearCount == clearsAtStart else { throw CancellationError() }
+        guard let entry = await etagManager.cached([AppActorRemoteConfigItemDTO].self, for: resource(for: context)) else {
+            return nil
+        }
+        guard clearCount == clearsAtStart else { throw CancellationError() }
+        let configs = buildPublicModel(from: entry.value)
+        cachedConfigs[context] = configs
+        cachedAt[context] = entry.cachedAt
+        lastCacheContext = context
+        return configs
+    }
+
     private func preferredContext(
         userContext: CacheContext,
         publicContext: CacheContext,
@@ -434,7 +474,7 @@ actor AppActorRemoteConfigManager {
             updateModeDecision(modeContext: modeContext, requiresUserContext: true)
             if !publicBodyIsUnsafe { await discardPublicProbeCache(context: publicContext) }
             return configs
-        } catch let error as AppActorError where error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500) {
+        } catch let error as AppActorError where error.isNetworkOrServerError {
             guard !publicBodyIsUnsafe, let publicResult else { throw error }
             // The mode decision stays unrecorded on this path. Writing
             // "needs the user context" from a refetch that never reached the
