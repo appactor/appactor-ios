@@ -227,4 +227,60 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertEqual(context?.sdkVersion, "9.9.9")
     }
 
+    // MARK: - I-S3-2: a claim left by an earlier process
+
+    private func makeItem(key: String, appUserId: String = "user_123") -> AppActorPaymentQueueItem {
+        let now = Date()
+        return AppActorPaymentQueueItem(
+            key: key,
+            bundleId: "com.test",
+            environment: "sandbox",
+            transactionId: key,
+            jws: "jws_payload",
+            signedAppTransactionInfo: nil,
+            appUserId: appUserId,
+            productId: "com.test.monthly",
+            originalTransactionId: key,
+            storefront: "USA",
+            offeringId: nil,
+            packageId: nil,
+            phase: .needsPost,
+            attemptCount: 0,
+            nextRetryAt: now,
+            firstSeenAt: now,
+            lastSeenAt: now,
+            lastError: nil,
+            sources: [.purchase],
+            claimedAt: nil
+        )
+    }
+
+    func test_givenClaimFromAnEarlierProcess_whenLoaded_thenDueAgainAtOnce() {
+        store.upsert(makeItem(key: "apple:claimed"))
+        XCTAssertEqual(store.claimReady(limit: 10, now: Date()).map(\.key), ["apple:claimed"])
+        XCTAssertTrue(store.claimReady(limit: 10, now: Date()).isEmpty, "a live claim in this store is not claimed twice")
+
+        // The process dies mid-POST and is relaunched well within the 2-minute stale window.
+        let relaunched = AppActorAtomicJSONQueueStore(directory: tempDir)
+        let item = relaunched.snapshot().first
+        XCTAssertEqual(item?.phase, .needsPost)
+        XCTAssertNil(item?.claimedAt)
+        XCTAssertEqual(relaunched.claimReady(limit: 10, now: Date()).map(\.key), ["apple:claimed"])
+    }
+
+    func test_givenClaimFromAnEarlierProcess_whenTheLaunchDrainRuns_thenPosted() async {
+        store.upsert(makeItem(key: "apple:claimed", appUserId: "guest"))
+        _ = store.claimReady(limit: 10, now: Date())
+
+        let client = MockPaymentClient()
+        let processor = AppActorPaymentProcessor(store: AppActorAtomicJSONQueueStore(directory: tempDir), client: client)
+        // The startup order: the rejected-ID migration first, then the bootstrap drain.
+        await processor.reassignUnpostedItemsWithRejectedAppUserId(to: "appactor-anon-new")
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.map(\.transactionId), ["apple:claimed"])
+        XCTAssertEqual(client.postReceiptCalls.first?.appUserId, "appactor-anon-new")
+        XCTAssertTrue(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().isEmpty)
+    }
+
 }

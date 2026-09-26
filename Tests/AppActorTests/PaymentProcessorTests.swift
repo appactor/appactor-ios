@@ -615,6 +615,91 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(store.allItems().count, 0, "Should be removed after permanent_error")
     }
 
+    // MARK: - 8b. Revocation of an already-posted transaction (I-G-1)
+
+    private func makeRevokedItem() -> AppActorPaymentQueueItem {
+        var item = makeItem(source: .transactionUpdates)
+        item.jws = StoreKitJWSFixture.transaction(revoked: true)
+        return item
+    }
+
+    /// The server's answer to a revoked receipt (`permanentErrorResult('REVOKED_TRANSACTION', …)`).
+    static let revokedResponse = AppActorReceiptPostResponse(
+        status: "permanent_error",
+        error: AppActorReceiptErrorInfo(code: "REVOKED_TRANSACTION", message: "Transaction has been revoked by Apple"),
+        requestId: "req_revoked",
+        finishTransaction: true
+    )
+
+    func testLedgerKeySeparatesTheRevocationFromThePurchase() {
+        var item = makeItem()
+        XCTAssertEqual(item.ledgerKey, "apple:12345", "an undecodable JWS is the purchase")
+        item.jws = StoreKitJWSFixture.transaction(revoked: false)
+        XCTAssertEqual(item.ledgerKey, "apple:12345")
+        item.jws = StoreKitJWSFixture.transaction(revoked: true)
+        XCTAssertEqual(item.ledgerKey, "apple:12345:revoked")
+    }
+
+    func testPostedTransactionRedeliveredRevokedIsPostedOnceThenSkipped() async {
+        let refreshed = expectation(description: "customer refresh requested")
+        await processor.setRevokedTransactionHandler { refreshed.fulfill() }
+        client.postReceiptHandler = { _ in Self.revokedResponse }
+        // The purchase posted earlier; Apple then refunded it.
+        store.markPosted(key: "apple:12345")
+
+        let revoked = makeRevokedItem()
+        store.upsert(revoked)
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1, "the revocation reaches the server")
+        XCTAssertEqual(client.postReceiptCalls.first?.signedTransactionInfo, revoked.jws)
+        XCTAssertEqual(client.postReceiptCalls.first?.idempotencyKey, "apple:12345", "same body shape and key as any receipt")
+        XCTAssertTrue(store.allItems().isEmpty, "terminal: finished and removed, not dead-lettered")
+        XCTAssertTrue(store.isPosted(key: "apple:12345:revoked"))
+        await fulfillment(of: [refreshed], timeout: 1)
+
+        // StoreKit delivers the same revocation again (another update, the next launch's sweep).
+        store.upsert(revoked)
+        await processor.drainAll()
+        // And the purchase itself, which stays a duplicate.
+        store.upsert(makeItem())
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1, "neither is posted again")
+        XCTAssertTrue(store.allItems().isEmpty)
+    }
+
+    func testRevokedTransactionNeverPostedIsLedgeredAsARevocation() async {
+        client.postReceiptHandler = { _ in Self.revokedResponse }
+
+        store.upsert(makeRevokedItem())
+        await processor.drainAll()
+        store.upsert(makeRevokedItem())
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1)
+        XCTAssertTrue(store.isPosted(key: "apple:12345:revoked"))
+    }
+
+    func testDeadLetteredRevocationIsNotRepostedOnRedelivery() async {
+        client.postReceiptHandler = { _ in
+            throw AppActorError.serverError(httpStatus: 400, code: "VALIDATION_ERROR", message: nil, details: nil, requestId: nil)
+        }
+        store.markPosted(key: "apple:12345")
+
+        store.upsert(makeRevokedItem())
+        await processor.drainAll()
+        XCTAssertEqual(store.allItems().first?.phase, .deadLettered)
+        XCTAssertTrue(store.isPosted(key: "apple:12345:revoked"))
+
+        // A re-delivery resets the dead letter to .needsPost; the ledger keeps it from posting.
+        store.upsert(makeRevokedItem())
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1)
+        XCTAssertTrue(store.allItems().isEmpty)
+    }
+
     // MARK: - 9. Backoff + retryAfterSeconds
 
     func testBackoffSchedule() {

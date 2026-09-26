@@ -28,28 +28,48 @@ extension AppActor {
     /// - Throws: `AppActorError` if payment is not configured or network fails.
     @discardableResult
     public func getRemoteConfigs() async throws -> AppActorRemoteConfigs {
-        guard paymentLifecycle == .configured else {
-            throw AppActorError.notConfigured
-        }
-        guard let manager = remoteConfigManager else {
-            throw AppActorError.notConfigured
-        }
+        // A logIn, logOut or reset() can land while the fetch is in flight. The result is then
+        // the previous user's, entitlement-targeted values included: it is neither published nor
+        // returned, and the fetch runs again for whoever is current (or throws after a reset).
+        for _ in 0..<Self.remoteConfigAttemptsAcrossIdentityChanges {
+            guard paymentLifecycle == .configured else {
+                throw AppActorError.notConfigured
+            }
+            guard let manager = remoteConfigManager else {
+                throw AppActorError.notConfigured
+            }
 
-        let appUserId = paymentStorage?.currentAppUserId
-        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let country = Self.deviceCountryCode
+            let session = sessionGeneration
+            let appUserId = paymentStorage?.currentAppUserId
+            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            let country = Self.deviceCountryCode
+            func identityIsCurrent() -> Bool {
+                isSessionCurrent(session) && paymentStorage?.currentAppUserId == appUserId
+            }
 
-        let result = try await manager.getRemoteConfigs(
-            appUserId: appUserId,
-            appVersion: appVersion,
-            country: country
-        )
-        self.paymentRemoteConfigs = result
-        if let rid = await manager.requestId {
-            paymentStorage?.setLastRequestId(rid)
+            let result: AppActorRemoteConfigs
+            do {
+                result = try await manager.getRemoteConfigs(
+                    appUserId: appUserId,
+                    appVersion: appVersion,
+                    country: country
+                )
+            } catch is CancellationError where !Task.isCancelled && !identityIsCurrent() {
+                // The identity switch cleared this user's cache and cancelled the fetch with it.
+                continue
+            }
+            guard identityIsCurrent() else { continue }
+
+            self.paymentRemoteConfigs = result
+            if let rid = await manager.requestId {
+                paymentStorage?.setLastRequestId(rid)
+            }
+            return result
         }
-        return result
+        throw CancellationError()
     }
+
+    private static let remoteConfigAttemptsAcrossIdentityChanges = 3
 
     // MARK: - Typed Accessors (nonisolated — safe to call from any context)
 

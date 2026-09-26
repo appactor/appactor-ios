@@ -123,6 +123,11 @@ extension AppActor {
                     await self?.handleReceiptCustomerInfoUpdate(info, receiptContext: receiptContext)
                 }
             }
+            await processor.setRevokedTransactionHandler { [weak self] in
+                Task { @MainActor [weak self] in
+                    _ = try? await self?.getCustomerInfo()
+                }
+            }
         }
     }
 
@@ -179,6 +184,7 @@ extension AppActor {
     /// from running in the background after a cancelled bootstrap.
     private func revertLifecycleIfCancelled() async {
         guard paymentLifecycle == .configured else { return }
+        endSession()
         offeringsPrefetchTask?.cancel()
         await offeringsPrefetchTask?.value
         offeringsPrefetchTask = nil

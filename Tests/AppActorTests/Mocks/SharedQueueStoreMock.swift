@@ -142,7 +142,7 @@ final class InMemoryPaymentQueueStore: AppActorPaymentQueueStoreProtocol, @unche
     func markPostedAndUpdate(key: String, item: AppActorPaymentQueueItem) {
         withLock {
             postedKeys.insert(key)
-            items[key] = item
+            items[item.key] = item
         }
     }
 

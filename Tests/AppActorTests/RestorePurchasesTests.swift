@@ -399,7 +399,7 @@ final class RestorePurchasesTests: XCTestCase {
         let json = """
         {
             "data": {
-                "user": {
+                "customer": {
                     "entitlements": {
                         "premium": {
                             "isActive": true,
@@ -432,8 +432,8 @@ final class RestorePurchasesTests: XCTestCase {
         XCTAssertEqual(envelope.data.items.map(\.transactionId), ["2000000001", "2000000002"])
         XCTAssertTrue(envelope.data.items.allSatisfy(\.isRecorded))
         XCTAssertEqual(envelope.requestId, "req_abc")
-        XCTAssertNotNil(envelope.data.user.entitlements?["premium"])
-        XCTAssertEqual(envelope.data.user.entitlements?["premium"]?.isActive, true)
+        XCTAssertNotNil(envelope.data.customer.entitlements?["premium"])
+        XCTAssertEqual(envelope.data.customer.entitlements?["premium"]?.isActive, true)
     }
 
     // MARK: - Mock Default Behavior

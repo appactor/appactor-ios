@@ -324,7 +324,8 @@ extension AppActor {
     ///
     /// - Parameter newAppUserId: The new user identifier (e.g. your backend user ID).
     /// - Returns: The server-authoritative `AppActorCustomerInfo` with entitlements and subscriptions.
-    /// - Throws: `AppActorError` with `.server` kind and 409 status if the ID belongs to another user.
+    /// - Throws: `AppActorError` with `.server` kind and 409 status if the ID belongs to another user,
+    ///   or `.notConfigured` if ``reset()`` runs before the login completes (the result is dropped).
     @discardableResult
     public func logIn(newAppUserId: String) async throws -> AppActorCustomerInfo {
         guard paymentLifecycle == .configured else {
@@ -337,6 +338,8 @@ extension AppActor {
         try AppActorPaymentValidation.validateAppUserId(newAppUserId)
 
         let currentId = storage.ensureAppUserId()
+        let session = sessionGeneration
+        let watcher = transactionWatcher
 
         let request = AppActorLoginRequest(
             currentAppUserId: currentId,
@@ -344,9 +347,7 @@ extension AppActor {
         )
 
         // Buffer incoming transactions during identity transition to prevent wrong-user attribution.
-        if let watcher = transactionWatcher {
-            await watcher.beginIdentityTransition(appUserId: currentId)
-        }
+        await watcher?.beginIdentityTransition(appUserId: currentId)
 
         // Guarantee endIdentityTransition is called on ALL exit paths (success, error, cancellation).
         let loginResult: AppActorLoginResult
@@ -357,25 +358,18 @@ extension AppActor {
             }
             try await flushCustomerAttributesBestEffortBeforeIdentityTransition(appUserId: currentId)
 
-            // Clear user-specific caches before switching identity.
-            if let etagMgr = paymentETagManager {
-                await etagMgr.clear(.customer(appUserId: currentId))
-            }
-            if let rcManager = remoteConfigManager {
-                await rcManager.clearCache(appUserId: currentId)
-            }
-            if let expManager = experimentManager {
-                await expManager.clearCache(appUserId: currentId)
-            }
-            self.paymentRemoteConfigs = nil
-
             loginResult = try await client.login(request)
         } catch {
             // Flush buffered transactions with their captured (old) appUserId before rethrowing
-            if let watcher = transactionWatcher {
-                await watcher.endIdentityTransition()
-            }
+            await endIdentityTransition(of: watcher)
             throw error
+        }
+
+        // reset() ran while /login was in flight. The answer belongs to the session it ended:
+        // writing it back would sign that user in again on the next configure().
+        guard isSessionCurrent(session) else {
+            await endIdentityTransition(of: watcher)
+            throw AppActorError.notConfigured
         }
 
         // Track request_id
@@ -391,26 +385,42 @@ extension AppActor {
         let loginVerification = AppActorVerificationResult.from(signatureVerified: loginResult.signatureVerified)
         let verifiedLoginInfo = loginResult.customerInfo.withVerification(loginVerification)
 
+        // The previous user's caches go only now: a login that fails leaves the identity, and
+        // so its caches, as they were. Cleared before the seed below, which a logIn to the ID
+        // already in use would otherwise lose.
+        if let etagMgr = paymentETagManager {
+            await etagMgr.clear(.customer(appUserId: currentId))
+        }
+        for appUserId in Set([currentId, loginResult.appUserId]) {
+            if let rcManager = remoteConfigManager {
+                await rcManager.clearCache(appUserId: appUserId)
+            }
+            if let expManager = experimentManager {
+                await expManager.clearCache(appUserId: appUserId)
+            }
+        }
+        self.paymentRemoteConfigs = nil
+
+        // Every await above is a point where reset() could run, and after a new configure()
+        // these managers belong to the next session.
+        guard isSessionCurrent(session) else {
+            await endIdentityTransition(of: watcher)
+            throw AppActorError.notConfigured
+        }
+
         // Seed customer cache with the snapshot from login
         if let manager = customerManager {
             await manager.seedCache(info: verifiedLoginInfo, eTag: loginResult.customerETag, appUserId: loginResult.appUserId, verified: loginResult.signatureVerified)
         }
 
-        if let rcManager = remoteConfigManager {
-            await rcManager.clearCache(appUserId: loginResult.appUserId)
-        }
-        if let expManager = experimentManager {
-            await expManager.clearCache(appUserId: loginResult.appUserId)
-        }
-        self.paymentRemoteConfigs = nil
-
         await setCustomerInfoIfIdentityMatches(verifiedLoginInfo, expectedAppUserId: loginResult.appUserId)
 
         // End identity transition — flush buffered transactions with their captured appUserId
-        if let watcher = transactionWatcher {
-            await watcher.endIdentityTransition()
-        }
+        await endIdentityTransition(of: watcher)
 
+        guard isSessionCurrent(session) else {
+            throw AppActorError.notConfigured
+        }
         scheduleAutomaticProfileContextSyncAfterIdentityTransition(appUserId: loginResult.appUserId)
 
         Log.identity.debug("Logged in as \(String(loginResult.appUserId.prefix(8)))…")
@@ -525,6 +535,7 @@ extension AppActor {
     public func reset() async {
         // ── Phase 0: State transition ──
         paymentLifecycle = .resetting
+        endSession()
 
         // ── Phase 1: Synchronous — runs before any suspension point ──
         // Remove lifecycle observers FIRST to close the race window where
@@ -645,6 +656,15 @@ extension AppActor {
 }
 
 private extension AppActor {
+    /// Ends the identity transition begun on `watcher`, unless reset() has replaced it since.
+    /// The next session's watcher may be in another logIn's transition; the stopped one would
+    /// flush into a stopped processor whose store writes the pre-reset queue back to disk. Its
+    /// buffered transactions are unfinished, so the next configure()'s sweep posts them.
+    func endIdentityTransition(of watcher: AppActorTransactionWatcher?) async {
+        guard let watcher, watcher === transactionWatcher else { return }
+        await watcher.endIdentityTransition()
+    }
+
     func flushCustomerAttributesBestEffortBeforeIdentityTransition(appUserId: String) async throws {
         do {
             try await customerAttributesManager.flush(appUserId: appUserId)
