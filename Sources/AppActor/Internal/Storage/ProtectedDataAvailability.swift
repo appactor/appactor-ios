@@ -64,11 +64,10 @@ enum AppActorProtectedData {
     private final class Waiter {
         private var continuation: CheckedContinuation<Void, Never>?
         private var observer: NSObjectProtocol?
-        private var finished = false
 
         func start(_ continuation: CheckedContinuation<Void, Never>) {
             // Cancelled already, or unlocked between the first check and now.
-            guard !finished, !Task.isCancelled, !isAvailable() else {
+            guard !Task.isCancelled, !isAvailable() else {
                 continuation.resume()
                 return
             }
@@ -83,7 +82,6 @@ enum AppActorProtectedData {
         }
 
         func finish() {
-            finished = true
             if let observer {
                 NotificationCenter.default.removeObserver(observer)
             }

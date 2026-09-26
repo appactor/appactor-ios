@@ -153,7 +153,7 @@ final class MockPaymentClient: AppActorPaymentClientProtocol, @unchecked Sendabl
             customerInfo: AppActorCustomerInfo(appUserId: request.appUserId),
             restoredCount: request.transactions.count,
             transferred: false,
-            recordedTransactionIds: [],
+            recordedTransactionIds: Set(request.transactions.map(\.transactionId)),
             requestId: "req_mock_restore",
             customerETag: "mock_etag",
             signatureVerified: false

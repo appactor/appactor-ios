@@ -295,30 +295,6 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertEqual(client.deleteAttributeCalls.last?.key, "legacy")
     }
 
-    func testRejectedKeyIsDroppedWithoutBlockingTheRestOfTheQueue() async throws {
-        let conflict = AppActorError.serverError(httpStatus: 409, code: "CONFLICT", message: "type mismatch", details: nil, requestId: nil)
-        let rejectingClient = MockPaymentClient()
-        rejectingClient.patchAttributesHandler = { _, request in
-            if request.attributes["favorite_ids"] != nil { throw conflict }
-            return AppActorMutationResult(requestId: nil)
-        }
-        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage(), client: rejectingClient)
-        try manager.enqueueAttributes(
-            appUserId: "user_1",
-            attributes: ["favorite_ids": .array([.number(1)]), "plan": .string("pro")]
-        )
-        try manager.enqueueAttribution(appUserId: "user_1", attribution: AppActorAttribution(network: "meta"))
-
-        try await manager.flush(appUserId: "user_1")
-
-        // The rejected batch was split: "plan" was delivered, "favorite_ids" dropped, and the
-        // attribution behind them still went out.
-        XCTAssertNil(manager.pendingBucket(appUserId: "user_1"))
-        XCTAssertEqual(rejectingClient.patchAttributesCalls.count, 3)
-        XCTAssertTrue(rejectingClient.patchAttributesCalls.contains { $0.request.attributes == ["plan": .string("pro")] })
-        XCTAssertEqual(rejectingClient.patchAttributionCalls.last?.request.attribution.network, "meta")
-    }
-
     func testOneBadKeyAmongManyIsIsolatedByHalving() async throws {
         let conflict = AppActorError.serverError(httpStatus: 409, code: "CONFLICT", message: nil, details: nil, requestId: nil)
         let rejectingClient = MockPaymentClient()
@@ -330,11 +306,14 @@ final class CustomerAttributesTests: XCTestCase {
         var attributes: [String: AppActorAttributeValue] = [:]
         for index in 0..<32 { attributes["key_\(index)"] = .number(Double(index)) }
         try manager.enqueueAttributes(appUserId: "user_1", attributes: attributes)
+        try manager.enqueueAttribution(appUserId: "user_1", attribution: AppActorAttribution(network: "meta"))
 
         try await manager.flush(appUserId: "user_1")
 
+        // Only key_13 is dropped, and the attribution queued behind the batch still goes out.
         XCTAssertNil(manager.pendingBucket(appUserId: "user_1"))
         XCTAssertEqual(rejectingClient.patchAttributesCalls.count, 11)
+        XCTAssertEqual(rejectingClient.patchAttributionCalls.last?.request.attribution.network, "meta")
         let delivered = rejectingClient.patchAttributesCalls
             .filter { $0.request.attributes["key_13"] == nil }
             .flatMap { $0.request.attributes.keys }

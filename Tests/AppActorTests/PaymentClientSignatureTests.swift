@@ -129,6 +129,9 @@ final class PaymentClientSignatureTests: XCTestCase {
         } catch let error as AppActorError {
             XCTAssertEqual(error.kind, .signatureMissing)
         }
+        // The 304 was retried; it is the unsigned retry that was rejected.
+        let requests = PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests }
+        XCTAssertEqual(requests.count, 2)
     }
 
     func testInvalid304SignatureDoesNotRetry() async throws {

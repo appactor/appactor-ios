@@ -54,11 +54,12 @@ enum ResponseSignatureVerifier {
 
 	enum VerificationResult {
 		case success
-		/// Server echoed nonce but signature is missing — possible MITM header strip.
+		/// The response is marked as signed (nonce echo or salt header) but the signature or its
+		/// timestamp is missing — possible MITM header strip.
 		case signatureMissing
 		/// The response carries no signature (no nonce echo, no salt header).
 		/// `AppActorPaymentClient` rejects it when signatures are required.
-		case signingNotSupported
+		case unsigned
 		case signatureInvalid
 		case timestampOutOfRange
 		case nonceMismatch
@@ -121,7 +122,7 @@ enum ResponseSignatureVerifier {
 			let echoedNonce = response.value(forHTTPHeaderField: "X-AppActor-Request-Nonce")
 
 			guard let echoedNonce else {
-				return .signingNotSupported
+				return .unsigned
 			}
 
 			guard let signatureBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature") else {
@@ -158,7 +159,7 @@ enum ResponseSignatureVerifier {
 
 		// ── Route 2: Salt-based verification (CDN-cacheable) ──
 		guard let saltBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature-Salt") else {
-			return .signingNotSupported
+			return .unsigned
 		}
 
 		guard let signatureBase64 = response.value(forHTTPHeaderField: "X-AppActor-Signature") else {

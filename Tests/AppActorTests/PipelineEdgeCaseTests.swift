@@ -487,6 +487,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
     }
 
     func testForegroundPurchaseBuffersUpgradeStylePurchaseUpdate() {
+        let token = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let context = AppActorClientPurchaseContext(
             clientPurchaseAttemptStartedAt: startedAt,
@@ -502,14 +503,45 @@ final class PipelineEdgeCaseTests: XCTestCase {
             originalTransactionId: "100",
             purchaseDate: startedAt.addingTimeInterval(30),
             transactionReason: .purchase,
+            transactionAppAccountToken: token,
             foregroundProductId: "com.test.yearly",
+            foregroundAppAccountToken: token,
             foregroundContext: context
         )
 
         XCTAssertTrue(shouldBuffer)
     }
 
+    func testForegroundPurchaseOnlyBuffersTransactionsWithItsAppAccountToken() {
+        let token = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let context = AppActorClientPurchaseContext(
+            clientPurchaseAttemptStartedAt: startedAt,
+            clientObservedAt: startedAt,
+            clientDeliverySource: .purchaseFlow,
+            clientPurchaseAttemptId: "attempt-ios-token"
+        )
+
+        // Another identity's approved Ask to Buy (other token) and an offer code (no token)
+        // for the product being bought are not this purchase's result.
+        for otherToken in [UUID(), nil] {
+            XCTAssertFalse(AppActorTransactionWatcher.shouldBufferForegroundTransaction(
+                source: .transactionUpdates,
+                transactionProductId: "com.test.yearly",
+                transactionId: "300",
+                originalTransactionId: "300",
+                purchaseDate: startedAt.addingTimeInterval(30),
+                transactionReason: .purchase,
+                transactionAppAccountToken: otherToken,
+                foregroundProductId: "com.test.yearly",
+                foregroundAppAccountToken: token,
+                foregroundContext: context
+            ))
+        }
+    }
+
     func testForegroundPurchaseDoesNotBufferPassiveRenewalUpdate() {
+        let token = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let context = AppActorClientPurchaseContext(
             clientPurchaseAttemptStartedAt: startedAt,
@@ -525,7 +557,9 @@ final class PipelineEdgeCaseTests: XCTestCase {
             originalTransactionId: "100",
             purchaseDate: startedAt.addingTimeInterval(30),
             transactionReason: .renewal,
+            transactionAppAccountToken: token,
             foregroundProductId: "com.test.yearly",
+            foregroundAppAccountToken: token,
             foregroundContext: context
         )
 

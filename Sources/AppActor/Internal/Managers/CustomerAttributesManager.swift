@@ -363,9 +363,9 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
                 state.deliveredAttributions[appUserId] = attribution
             } else if customAttributionSnapshots[appUserId] == attribution
                         || state.customAttributionSnapshots[appUserId] == attribution {
-                let delivered = state.deliveredAttributions[appUserId]
-                customAttributionSnapshots[appUserId] = delivered
-                state.customAttributionSnapshots[appUserId] = delivered
+                let lastDelivered = state.deliveredAttributions[appUserId]
+                customAttributionSnapshots[appUserId] = lastDelivered
+                state.customAttributionSnapshots[appUserId] = lastDelivered
             }
         }
     }

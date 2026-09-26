@@ -290,7 +290,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             apiKey: "", requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
-        XCTAssertEqual(result, .signingNotSupported)
+        XCTAssertEqual(result, .unsigned)
     }
 
     func testNonceEchoedButNoSignature() {
@@ -587,7 +587,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             apiKey: testApiKey, requestPath: testPath,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
-        XCTAssertEqual(result, .signingNotSupported)
+        XCTAssertEqual(result, .unsigned)
     }
 
     func testSaltBasedMissingSignatureHeader() {

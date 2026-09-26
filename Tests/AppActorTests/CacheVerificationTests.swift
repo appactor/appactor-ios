@@ -103,6 +103,7 @@ final class CacheVerificationTests: XCTestCase {
         XCTAssertTrue(json.contains("verificationResult"))
         XCTAssertTrue(json.contains("verified"))
     }
+
     func testSaltRoutePurgeRemovesOnlyUnverifiedSaltRouteEntries() async throws {
         let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("appactor-purge-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: cacheDir) }

@@ -697,7 +697,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     }
 
     /// Executes a single HTTP request (no retry). Returns raw (Data, HTTPURLResponse, signatureVerified).
-    /// Verifies Ed25519 response signature when enabled and the server provides one.
+    /// Verifies the Ed25519 response signature when enabled.
     /// The `signatureVerified` flag is `true` only when signature verification actually passed,
     /// `false` if verification was skipped (signatures not required, or an unsigned 304).
     private func performRawRequest(
@@ -740,7 +740,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             case .success:
                 signatureVerified = true
                 Log.signing.debug("Signature verified for \(path)")
-            case .signingNotSupported, .signatureMissing:
+            case .unsigned, .signatureMissing:
                 if http.statusCode == 304 {
                     Log.signing.warn("304 response signature missing for \(path); forcing fresh validation")
                     break
