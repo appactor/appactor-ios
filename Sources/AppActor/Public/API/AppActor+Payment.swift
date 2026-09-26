@@ -48,8 +48,28 @@ extension AppActor {
             await AppActorCacheDiskStore().clearUnverifiedSaltRouteEntries()
             storage.setUnverifiedSaltRouteCachePurged()
         }
-        guard shared.configureInternal(config) else { return }
-        await shared.runStartupSequence()
+        await shared.configureAndStart(config)
+    }
+
+    /// Configures and runs the startup sequence, after waiting out a startup still in flight.
+    ///
+    /// A cancelled configure() keeps `.configured` until its startup sees the cancellation and
+    /// reverts to `.idle`. A configure() in that window used to be ignored as "already
+    /// configured", and the revert then left the SDK unconfigured although that call returned
+    /// normally. A SwiftUI `.task(id:)` whose id changes during startup does this, and SwiftUI
+    /// doesn't document whether the old task is cancelled before the new one starts. So a
+    /// configure() that finds a startup in flight waits for it to settle and then decides:
+    /// after a revert it configures, otherwise it is ignored as before.
+    func configureAndStart(
+        _ config: AppActorPaymentConfiguration,
+        testClient: (any AppActorPaymentClientProtocol)? = nil
+    ) async {
+        if paymentLifecycle == .configured, !isBootstrapComplete {
+            await waitForStartupToSettle()
+            if Task.isCancelled { return }
+        }
+        guard configureInternal(config, testClient: testClient) else { return }
+        await runStartupSequence()
     }
 
     /// Returns `true` if configuration succeeded, `false` if guards rejected it.
@@ -194,29 +214,32 @@ extension AppActor {
                 await self.runForegroundMaintenance()
             }
             Log.sdk.debug("App entering foreground — offerings TTL set to 5m, draining receipts")
-
-            // Start periodic staleness timer for long foreground sessions.
-            // Ensures customer info doesn't stay stale indefinitely when the app
-            // remains in foreground without backgrounding.
-            self.stalenessTimerTask?.cancel()
-            self.stalenessTimerTask = Task { [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 5 * 60 * 1_000_000_000) // 5 min
-                    guard let self, !Task.isCancelled,
-                          self.paymentLifecycle == .configured,
-                          self.isBootstrapComplete else { break }
-                    guard let manager = self.customerManager,
-                          let userId = self.paymentStorage?.currentAppUserId else { continue }
-                    if !(await manager.isCustomerCacheFresh(appUserId: userId)) {
-                        _ = try? await self.getCustomerInfo()
-                        Log.sdk.debug("Staleness timer: customer cache refreshed")
-                    }
-                }
-            }
+            self.startStalenessTimer()
         }
 
         lifecycleObservers = [bgObserver, fgObserver]
         #endif
+    }
+
+    /// Starts (or restarts) the periodic staleness timer for long foreground sessions.
+    /// Ensures customer info doesn't stay stale indefinitely when the app
+    /// remains in foreground without backgrounding. The background observer stops it.
+    func startStalenessTimer() {
+        stalenessTimerTask?.cancel()
+        stalenessTimerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5 * 60 * 1_000_000_000) // 5 min
+                guard let self, !Task.isCancelled,
+                      self.paymentLifecycle == .configured,
+                      self.isBootstrapComplete else { break }
+                guard let manager = self.customerManager,
+                      let userId = self.paymentStorage?.currentAppUserId else { continue }
+                if !(await manager.isCustomerCacheFresh(appUserId: userId)) {
+                    _ = try? await self.getCustomerInfo()
+                    Log.sdk.debug("Staleness timer: customer cache refreshed")
+                }
+            }
+        }
     }
 
     /// Runs the foreground maintenance sequence shared by lifecycle notifications
@@ -472,6 +495,9 @@ extension AppActor {
         // Clear user-specific caches on identity switch.
         // Offerings are project-level and preserved across identity changes.
         let currentId = storage.currentAppUserId ?? ""
+        // A customer fetch still in flight for this user would write their cache back after the
+        // delete below, fresh for another 24 h.
+        await customerManager?.clearCache(appUserId: currentId)
         if let etagMgr = paymentETagManager {
             await etagMgr.clear(.customer(appUserId: currentId))
         }
@@ -541,14 +567,17 @@ extension AppActor {
         // ── Phase 2: Cancel + await all tracked tasks ──
         // The ASA task runs independently after configure completes.
         // The foreground task runs ASA flush + sync + customer refresh.
-        // Cancelling propagates to all children automatically (structured concurrency).
-        // URLSession and Task.sleep respect cooperative cancellation, so
-        // the await resolves quickly after cancel().
+        // Cancelling a tracked task reaches only its own structured work. The customer and
+        // offerings fetches it may be waiting on are unstructured tasks the managers share
+        // between callers, so reset() cancels those itself; otherwise the awaits below last
+        // until their whole retry cycle ends (about 96 s on a stalled network).
         asaTask?.cancel()
         foregroundTask?.cancel()
         stalenessTimerTask?.cancel()
         offeringsPrefetchTask?.cancel()
         profileContextSyncTask?.cancel()
+        await customerManager?.cancelInFlight()
+        await offeringsManager?.cancelInFlight()
         await asaTask?.value
         await foregroundTask?.value
         await stalenessTimerTask?.value

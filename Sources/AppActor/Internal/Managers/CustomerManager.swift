@@ -70,9 +70,17 @@ actor AppActorCustomerManager {
     /// Preserves cached data and ETag for conditional requests (304 optimization).
     /// Cancels any in-flight fetch to prevent stale writes after the reset.
     func clearCache(appUserId: String) async {
+        cancelInFlight()
+        await etagManager.resetFreshness(for: .customer(appUserId: appUserId))
+    }
+
+    /// Cancels the fetch in flight, whoever started it. The fetch is an unstructured task shared
+    /// by every caller for the user, so a caller's own cancellation never reaches it; only the
+    /// owner of a teardown (reset(), a cancelled startup) calls this, and every waiter gets a
+    /// `CancellationError`.
+    func cancelInFlight() {
         inflight?.task.cancel()
         inflight = nil
-        await etagManager.resetFreshness(for: .customer(appUserId: appUserId))
     }
 
     func clearCache() async {

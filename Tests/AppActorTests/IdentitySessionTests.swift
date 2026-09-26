@@ -419,4 +419,44 @@ final class IdentitySessionTests: XCTestCase {
         await refresh.value
         _ = try await hostFetch.value
     }
+
+    // MARK: - E7a: offline entitlement keys follow the SDK's identity
+
+    func testOfflineEntitlementKeysAfterLogOutAreNotThePreviousUsers() async throws {
+        let manager = try XCTUnwrap(appactor.customerManager)
+        let premium = AppActorCustomerInfo(
+            entitlements: ["premium": AppActorEntitlementInfo(id: "premium", isActive: true)],
+            appUserId: "user_a"
+        )
+        await manager.seedCache(info: premium, eTag: nil, appUserId: "user_a")
+        _ = try await appactor.logOut()
+        // A restore or quiet sync started as user_a lands after the logout: it writes their
+        // cache back, fresh, and binds the manager to user_a again.
+        await manager.seedCache(info: premium, eTag: nil, appUserId: "user_a")
+
+        let keys = await appactor.activeEntitlementKeysOffline()
+        XCTAssertEqual(keys, [], "The new anonymous user must not read user_a's entitlements")
+    }
+
+    func testLogOutCancelsTheOutgoingUsersCustomerFetch() async throws {
+        let started = calledExpectation("user_a's customer fetch sent")
+        mockClient.getCustomerHandler = { appUserId, _ in
+            started.fulfill()
+            try await Task.sleep(nanoseconds: 10_000_000_000)
+            return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
+        }
+        let fetch = Task { try await appactor.getCustomerInfo() }
+        await fulfillment(of: [started], timeout: 2)
+
+        _ = try await appactor.logOut()
+
+        do {
+            _ = try await fetch.value
+            XCTFail("The outgoing user's fetch must be cancelled, not finish and rewrite their cache")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "unexpected \(error)")
+        }
+        let cached = await appactor.customerManager?.cachedInfo(appUserId: "user_a")
+        XCTAssertNil(cached)
+    }
 }

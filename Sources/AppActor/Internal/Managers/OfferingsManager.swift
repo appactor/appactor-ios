@@ -213,6 +213,19 @@ actor AppActorOfferingsManager {
     /// Clears both in-memory and disk caches.
     /// Cancels any in-flight fetch to prevent actor-reentrancy stale writes.
     func clearCache() async {
+        cancelInFlight()
+        cachedOfferings = nil
+        cachedAt = nil
+        cachedLocales = []
+        await etagManager.clear(.offerings)
+        await etagManager.clear(.offlineProductCatalog)
+    }
+
+    /// Cancels every fetch in flight, whoever started it, and moves the generation on so none of
+    /// them writes its result. The fetches are unstructured tasks shared by every caller, so a
+    /// caller's own cancellation never reaches them; only the owner of a teardown (reset(), a
+    /// cancelled startup) calls this, and every waiter gets a `CancellationError`.
+    func cancelInFlight() {
         cacheGeneration &+= 1
         inFlightTask?.cancel()
         networkStageTask?.cancel()
@@ -222,11 +235,6 @@ actor AppActorOfferingsManager {
         networkStageTask = nil
         enrichmentTask = nil
         revalidationTask = nil
-        cachedOfferings = nil
-        cachedAt = nil
-        cachedLocales = []
-        await etagManager.clear(.offerings)
-        await etagManager.clear(.offlineProductCatalog)
     }
 
     func currentProductEntitlements() async -> [String: [String]] {

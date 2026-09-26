@@ -99,7 +99,22 @@ actor AppActorRemoteConfigManager {
             return cached
         }
 
-        let configs = try await fetchCoalesced(context: preferredContext)
+        let configs: AppActorRemoteConfigs
+        do {
+            configs = try await fetchCoalesced(context: preferredContext)
+        } catch let error as AppActorError where (error.kind == .network || (error.kind == .server && (error.httpStatus ?? 0) >= 500))
+            && shouldRefetchPublicResultWithUser(publicContext: preferredContext, userContext: userContext) {
+            // The probe reached neither the server nor a public copy on disk. A project that
+            // needs the user context keeps none: each user-context fetch discards it, and the
+            // decision that skips the probe expires after cacheTTL and dies with the process.
+            // The user's own copy is on disk, and the user-context fetch falls back to it.
+            return try await refetchWithUserContext(
+                userContext: userContext,
+                publicContext: preferredContext,
+                modeContext: modeContext,
+                publicResult: nil
+            )
+        }
         if preferredContext.appUserId == nil {
             guard shouldRefetchPublicResultWithUser(publicContext: preferredContext, userContext: userContext) else {
                 updateModeDecision(modeContext: modeContext, requiresUserContext: requiresUserContextByContext[preferredContext])

@@ -182,6 +182,79 @@ final class BootstrapLifecycleTests: XCTestCase {
                        "Bootstrap completion flag must reset after cancelled startup")
     }
 
+    // MARK: - E8a: a configure() while a cancelled startup is still in flight
+
+    /// A SwiftUI `.task(id:)` restarted by an id change: the new configure() may arrive before
+    /// the old task is cancelled (SwiftUI doesn't document the order). It must not be dropped as
+    /// "already configured" and then lost when the old startup reverts to idle.
+    func testConfigureDuringACancelledStartupConfiguresOnceTheStartupReverts() async throws {
+        let firstClient = MockPaymentClient()
+        let customerFetchStarted = AsyncSignal()
+        firstClient.getCustomerHandler = { appUserId, _ in
+            await customerFetchStarted.signal()
+            try await Task.sleep(nanoseconds: 20_000_000_000) // a stalled network
+            return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
+        }
+        let baseURL = URL(string: "https://api.test.appactor.com")!
+        let first = AppActorPaymentConfiguration(apiKey: "pk_test_e8a_first", baseURL: baseURL)
+        let second = AppActorPaymentConfiguration(apiKey: "pk_test_e8a_second", baseURL: baseURL)
+
+        let firstStartup = Task { await self.appactor.configureAndStart(first, testClient: firstClient) }
+        await customerFetchStarted.wait()
+        let secondStartup = Task { await self.appactor.configureAndStart(second, testClient: self.mockClient) }
+        var yields = 0
+        while appactor.paymentContext.startupWaiters.isEmpty, yields < 1_000 {
+            await Task.yield()
+            yields += 1
+        }
+        XCTAssertFalse(appactor.paymentContext.startupWaiters.isEmpty, "The second configure() waits for the first startup")
+
+        let start = Date()
+        firstStartup.cancel()
+        await firstStartup.value
+        await secondStartup.value
+
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "The cancelled startup doesn't wait out its stalled fetch")
+        XCTAssertEqual(appactor.paymentLifecycle, .configured)
+        XCTAssertTrue(appactor.isBootstrapComplete)
+        XCTAssertEqual(appactor.paymentConfig?.apiKey, "pk_test_e8a_second")
+        await appactor.reset()
+    }
+
+    // MARK: - E8b: reset() doesn't wait out a stalled fetch
+
+    func testResetCancelsStalledManagerFetchesInsteadOfWaitingForThem() async throws {
+        let customerFetchStarted = AsyncSignal()
+        let offeringsFetchStarted = AsyncSignal()
+        mockClient.getCustomerHandler = { appUserId, _ in
+            await customerFetchStarted.signal()
+            try await Task.sleep(nanoseconds: 20_000_000_000)
+            return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
+        }
+        mockClient.getOfferingsHandler = { _ in
+            await offeringsFetchStarted.signal()
+            try await Task.sleep(nanoseconds: 20_000_000_000)
+            return .fresh(AppActorOfferingsResponseDTO(currentOffering: nil, offerings: []), eTag: nil, requestId: nil, signatureVerified: false)
+        }
+        appactor.configureForTesting(
+            config: AppActorPaymentConfiguration(apiKey: "pk_test_e8b", baseURL: URL(string: "https://api.test.appactor.com")!),
+            client: mockClient,
+            storage: storage
+        )
+        // What a foreground refresh and the launch prefetch leave in flight.
+        appactor.foregroundTask = Task { _ = try? await self.appactor.getCustomerInfo() }
+        let offeringsManager = try XCTUnwrap(appactor.offeringsManager)
+        appactor.offeringsPrefetchTask = Task { await offeringsManager.prefetchForBootstrap() }
+        await customerFetchStarted.wait()
+        await offeringsFetchStarted.wait()
+
+        let start = Date()
+        await appactor.reset()
+
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "reset() must not wait out the fetches' network cycle")
+        XCTAssertEqual(appactor.paymentLifecycle, .idle)
+    }
+
     // MARK: - BOOT-04: logIn() drains receipt queue before cache clear
 
     /// Verifies that logIn() completes successfully when a processor exists.

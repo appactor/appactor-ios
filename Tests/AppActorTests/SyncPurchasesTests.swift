@@ -1,4 +1,5 @@
 import XCTest
+import StoreKit
 @testable import AppActor
 
 @MainActor
@@ -494,5 +495,40 @@ final class SyncPurchasesTests: XCTestCase {
 
         await fulfillment(of: [expectation], timeout: 2.0)
         XCTAssertEqual(mockClient.postReceiptCalls.count, 1)
+    }
+
+    // MARK: - iR2C-3: a refunded transaction is no quiet-sync candidate
+
+    private struct CandidateTransaction: AppActorRevocableTransaction {
+        let id: Int
+        let revocationDate: Date?
+    }
+
+    private func entries(
+        _ results: [VerificationResult<CandidateTransaction>]
+    ) -> AsyncStream<VerificationResult<CandidateTransaction>> {
+        AsyncStream { continuation in
+            results.forEach { continuation.yield($0) }
+            continuation.finish()
+        }
+    }
+
+    func testQuietSyncCandidateSkipsRefundedAndUnverifiedTransactions() async {
+        // The server answers a refunded one with REVOKED_TRANSACTION and links no owner.
+        let refunded = CandidateTransaction(id: 1, revocationDate: Date())
+        let picked = await AppActorStoreKitSilentSyncFetcher.firstSyncCandidate(in: entries([
+            .verified(refunded),
+            .unverified(CandidateTransaction(id: 2, revocationDate: nil), .invalidSignature),
+            .verified(CandidateTransaction(id: 3, revocationDate: nil)),
+        ]))
+        guard case .verified(let candidate)? = picked else {
+            return XCTFail("Expected the first verified, unrefunded transaction")
+        }
+        XCTAssertEqual(candidate.id, 3)
+
+        // A consumables-only app whose one purchase was refunded: no candidate, so syncPurchases()
+        // goes on to the AppTransaction post (see testSyncPurchasesFallsBackToAppTransaction...).
+        let none = await AppActorStoreKitSilentSyncFetcher.firstSyncCandidate(in: entries([.verified(refunded)]))
+        XCTAssertNil(none)
     }
 }

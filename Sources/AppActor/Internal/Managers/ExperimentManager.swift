@@ -275,41 +275,26 @@ actor AppActorExperimentManager {
                 assignedAt: assignedAt
             )
 
-            var assignments = cachedAssignmentsByContext[context] ?? [:]
-            assignments[experimentKey] = CachedAssignment(
-                assignment: CodableAssignment.from(assignment),
-                cachedAt: dateProvider()
-            )
-
-            // Persist before publishing to memory. If invalidation wins while
-            // persistence is in progress, remove the just-written context entry.
-            try await persistAssignmentsIfCurrent(
-                assignments,
+            try await storeAssignment(
+                CachedAssignment(assignment: CodableAssignment.from(assignment), cachedAt: dateProvider()),
+                forKey: experimentKey,
                 context: context,
                 verified: signatureVerified,
                 cacheKey: cacheKey,
                 generation: generation
             )
-            cachedAssignmentsByContext[context] = assignments
-            lastCacheContext = context
 
             Log.sdk.info("Experiment '\(experimentKey)' → variant '\(variant.key)'")
             return assignment
         } else {
             // User not in experiment — cache the nil result to avoid re-fetching
-            var assignments = cachedAssignmentsByContext[context] ?? [:]
-            assignments[experimentKey] = CachedAssignment(
-                assignment: nil,
-                cachedAt: dateProvider()
-            )
-            try await persistAssignmentsIfCurrent(
-                assignments,
+            try await storeAssignment(
+                CachedAssignment(assignment: nil, cachedAt: dateProvider()),
+                forKey: experimentKey,
                 context: context,
                 cacheKey: cacheKey,
                 generation: generation
             )
-            cachedAssignmentsByContext[context] = assignments
-            lastCacheContext = context
 
             let reason = dto.reason ?? "unknown"
             Log.sdk.info("Experiment '\(experimentKey)' → not in experiment (reason: \(reason))")
@@ -318,6 +303,39 @@ actor AppActorExperimentManager {
     }
 
     // MARK: - Disk Persistence
+
+    /// Adds one assignment to the context's blob, in memory and on disk.
+    ///
+    /// The blob is written whole, so the context's map starts from the one on disk: a map never
+    /// loaded from it would erase what earlier sessions saved. The key goes into the map as it is
+    /// after every await, never into a copy taken before one, which would drop a key a
+    /// concurrent fetch added meanwhile. It is published to memory before the write so that a
+    /// concurrent write carries it too; a clear that wins during the write removes it from memory
+    /// as well, and `persistAssignmentsIfCurrent` removes the file.
+    private func storeAssignment(
+        _ entry: CachedAssignment,
+        forKey experimentKey: String,
+        context: CacheContext,
+        verified: Bool = false,
+        cacheKey: AssignmentCacheKey,
+        generation: UInt64
+    ) async throws {
+        if cachedAssignmentsByContext[context] == nil,
+           let persisted = await loadAllFromDisk(context: context) {
+            try ensureFetchStillCurrent(cacheKey: cacheKey, generation: generation)
+            cachedAssignmentsByContext[context] = persisted.merging(cachedAssignmentsByContext[context] ?? [:]) { _, inMemory in inMemory }
+        }
+        try ensureFetchStillCurrent(cacheKey: cacheKey, generation: generation)
+        cachedAssignmentsByContext[context, default: [:]][experimentKey] = entry
+        try await persistAssignmentsIfCurrent(
+            cachedAssignmentsByContext[context] ?? [:],
+            context: context,
+            verified: verified,
+            cacheKey: cacheKey,
+            generation: generation
+        )
+        lastCacheContext = context
+    }
 
     /// Persists all cached assignments to disk as a single JSON blob.
     private func persistToDisk(context: CacheContext, verified: Bool = false) async {
@@ -380,18 +398,6 @@ actor AppActorExperimentManager {
             return nil
         }
         return entry.value
-    }
-
-    /// Attempts to load all experiment assignments from disk cache on cold start.
-    /// Populates in-memory cache. Returns silently if no disk cache exists.
-    func loadFromDiskCache(appUserId: String, appVersion: String? = nil, country: String? = nil) async {
-        let context = normalizedContext(appUserId: appUserId, appVersion: appVersion, country: country)
-        guard let allCached = await loadAllFromDisk(context: context) else { return }
-        // Only populate entries that aren't already in memory
-        for (key, cached) in allCached where cachedAssignmentsByContext[context]?[key] == nil {
-            cachedAssignmentsByContext[context, default: [:]][key] = cached
-        }
-        Log.sdk.debug("Loaded \(allCached.count) experiment assignment(s) from disk cache")
     }
 
     private func normalizedContext(appUserId: String, appVersion: String?, country: String?) -> CacheContext {

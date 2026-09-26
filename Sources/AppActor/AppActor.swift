@@ -608,6 +608,8 @@ final class AppActorPaymentContext {
     /// Set to `true` when `runBootstrap()` completes. Guards PurchaseIntent
     /// processing and foreground observer from firing before bootstrap finishes.
     var isBootstrapComplete: Bool = false
+    /// configure() calls waiting for the startup in flight to settle (see `configureAndStart`).
+    var startupWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     var pipelineEventHandler: (@Sendable (AppActorReceiptPipelineEventDetail) -> Void)?
     /// Product IDs for purchases that returned `.pending` (Ask to Buy / SCA).
     /// Keyed by product ID, value is the count of pending purchases for that SKU.

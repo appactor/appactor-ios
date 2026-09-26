@@ -506,6 +506,8 @@ public final class AppActorBridge {
     private var currentCustomerInfoListener: ((AppActorCustomerInfo) -> Void)?
     private var currentReceiptPipelineListener: ((AppActorBridgeReceiptEvent) -> Void)?
     private var currentDeferredPurchaseListener: ((_ productId: String, _ customerInfo: AppActorCustomerInfo) -> Void)?
+    /// Feeds receipt pipeline events to the current listener on the main thread, in order.
+    private var receiptEventDelivery: AsyncStream<AppActorReceiptPipelineEventDetail>.Continuation?
 
     /// The currently set customer info listener, or `nil` if none.
     public var customerInfoListener: ((AppActorCustomerInfo) -> Void)? {
@@ -544,9 +546,21 @@ public final class AppActorBridge {
         _ listener: ((AppActorBridgeReceiptEvent) -> Void)?
     ) {
         currentReceiptPipelineListener = listener
+        receiptEventDelivery?.finish()
+        receiptEventDelivery = nil
         if let listener {
+            // The processor emits events on its own executor. They reach the listener on the
+            // main thread, in the order emitted: one stream, drained by one MainActor task (a
+            // Task per event would not keep the order).
+            let (events, delivery) = AsyncStream<AppActorReceiptPipelineEventDetail>.makeStream()
+            receiptEventDelivery = delivery
+            Task { @MainActor in
+                for await detail in events {
+                    listener(AppActorBridgeReceiptEvent(from: detail))
+                }
+            }
             AppActor.shared.onReceiptPipelineEvent = { detail in
-                listener(AppActorBridgeReceiptEvent(from: detail))
+                delivery.yield(detail)
             }
         } else {
             AppActor.shared.onReceiptPipelineEvent = nil
@@ -568,6 +582,8 @@ public final class AppActorBridge {
     public func clearListeners() {
         currentCustomerInfoListener = nil
         currentReceiptPipelineListener = nil
+        receiptEventDelivery?.finish()
+        receiptEventDelivery = nil
         currentDeferredPurchaseListener = nil
         AppActor.shared.onCustomerInfoChanged = nil
         AppActor.shared.onReceiptPipelineEvent = nil

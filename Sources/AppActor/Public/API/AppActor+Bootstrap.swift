@@ -10,6 +10,8 @@ extension AppActor {
     /// Called from `configure()` and awaited directly. When this returns,
     /// the SDK is fully initialized (watcher running, bootstrap complete).
     func runStartupSequence() async {
+        // Every exit settles it: a completed bootstrap, a revert, or a reset() that took over.
+        defer { settleStartup() }
         let sequenceStart = CFAbsoluteTimeGetCurrent()
         let verboseBootstrap = (paymentConfig?.options.logLevel ?? AppActorLogger.level) >= .verbose
         let watcher = transactionWatcher
@@ -54,7 +56,17 @@ extension AppActor {
         }
 
         // ── Phase 2: Bootstrap (sequential: offerings(api) → sweep → drain+refresh) ──
-        await self.runBootstrap(verboseBootstrap: verboseBootstrap)
+        // Cancelled, the startup reverts the session to idle (below), and a configure() may be
+        // waiting for that. The customer fetch bootstrap waits on is an unstructured task the
+        // manager shares between callers, which this cancellation doesn't reach. The startup
+        // owns the session's teardown, so it cancels that fetch instead of waiting out its retry
+        // cycle (about 96 s on a stalled network).
+        let customerManager = self.customerManager
+        await withTaskCancellationHandler {
+            await self.runBootstrap(verboseBootstrap: verboseBootstrap)
+        } onCancel: {
+            Task { await customerManager?.cancelInFlight() }
+        }
 
         // If bootstrap was cancelled mid-way, revert lifecycle so configure() can be retried.
         guard !Task.isCancelled else {
@@ -63,6 +75,14 @@ extension AppActor {
         }
 
         self.isBootstrapComplete = true
+        settleStartup()
+        #if canImport(UIKit) && !os(watchOS)
+        // The foreground observer starts it too, but at a cold launch into the foreground its
+        // notification comes before bootstrap completes (or before configure() registered it).
+        if paymentLifecycle == .configured, stalenessTimerTask == nil {
+            startStalenessTimer()
+        }
+        #endif
 
         do {
             try await collectAutomaticProfileContext()
@@ -175,6 +195,32 @@ extension AppActor {
         }
     }
 
+    /// Suspends until the startup in flight settles (bootstrap completes or the startup reverts
+    /// to `.idle`), or the caller is cancelled.
+    func waitForStartupToSettle() async {
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                guard !Task.isCancelled, paymentLifecycle == .configured, !isBootstrapComplete else {
+                    continuation.resume()
+                    return
+                }
+                paymentContext.startupWaiters[id] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.paymentContext.startupWaiters.removeValue(forKey: id)?.resume()
+            }
+        }
+    }
+
+    /// Resumes every configure() waiting in `waitForStartupToSettle()`.
+    private func settleStartup() {
+        let waiters = paymentContext.startupWaiters.values
+        paymentContext.startupWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
     /// Milliseconds elapsed since the given `CFAbsoluteTime` reference point.
     private func ms(since start: CFAbsoluteTime) -> Int {
         Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
@@ -195,6 +241,8 @@ extension AppActor {
     private func revertLifecycleIfCancelled() async {
         guard paymentLifecycle == .configured else { return }
         offeringsPrefetchTask?.cancel()
+        // The prefetch waits on the manager's shared network task, which its cancel doesn't reach.
+        await offeringsManager?.cancelInFlight()
         await offeringsPrefetchTask?.value
         offeringsPrefetchTask = nil
         await transactionWatcher?.stop()

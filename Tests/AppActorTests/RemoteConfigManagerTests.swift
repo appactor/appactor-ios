@@ -551,6 +551,38 @@ final class RemoteConfigManagerTests: XCTestCase {
         }
     }
 
+    func testUserContextProjectOfflineFallsBackToTheUsersCopy() async throws {
+        // The project needs the user context: the user fetch succeeds, and the public probe's
+        // copy is discarded, so the user's copy is the only one on disk.
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
+            .fresh(
+                makeDTOs([("audience", .string(appUserId == nil ? "public" : "premium"), "string")]),
+                eTag: appUserId == nil ? "etag_public" : "etag_user",
+                requestId: "req",
+                signatureVerified: false,
+                requiresUserContext: true
+            )
+        }
+        _ = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+        client.getRemoteConfigsHandler = { _, _, _, _ in
+            throw AppActorError.networkError(URLError(.notConnectedToInternet))
+        }
+
+        // Relaunched offline: nothing remembers that the project needs the user context.
+        let relaunched = AppActorRemoteConfigManager(
+            client: client,
+            etagManager: etagManager,
+            dateProvider: { [unowned self] in self.currentDate }
+        )
+        let afterRelaunch = try await relaunched.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+        XCTAssertEqual(afterRelaunch["audience"]?.stringValue, "premium")
+
+        // Offline in the same session, once the remembered decision has expired.
+        currentDate = currentDate.addingTimeInterval(360)
+        let afterExpiry = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
+        XCTAssertEqual(afterExpiry["audience"]?.stringValue, "premium")
+    }
+
     func testPublicModeDoesNotFetchUserSpecificRemoteConfig() async throws {
         client.getRemoteConfigsHandler = { appUserId, _, _, _ in
             XCTAssertNil(appUserId)
