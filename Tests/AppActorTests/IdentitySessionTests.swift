@@ -47,6 +47,18 @@ final class IdentitySessionTests: XCTestCase {
         try await super.tearDown()
     }
 
+    /// Awaits `task` and asserts it failed with `.notConfigured`: a result from a session that ended.
+    private func assertNotConfigured<T>(_ task: Task<T, Error>, _ message: String, line: UInt = #line) async {
+        do {
+            _ = try await task.value
+            XCTFail(message, line: line)
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .notConfigured, line: line)
+        } catch {
+            XCTFail("unexpected \(error)", line: line)
+        }
+    }
+
     /// Fulfilled by a mocked call the code under test is expected to make. Waited on with a
     /// timeout, so a regression that skips the call fails instead of hanging.
     private func calledExpectation(_ description: String) -> XCTestExpectation {
@@ -107,12 +119,7 @@ final class IdentitySessionTests: XCTestCase {
         await appactor.reset()
         await releaseLogin.signal()
 
-        do {
-            _ = try await login.value
-            XCTFail("a logIn that outlived reset() must not succeed")
-        } catch let error as AppActorError {
-            XCTAssertEqual(error.kind, .notConfigured)
-        }
+        await assertNotConfigured(login, "a logIn that outlived reset() must not succeed")
         XCTAssertNil(storage.currentAppUserId, "reset() wiped the identity; the late answer must not restore it")
         XCTAssertNil(storage.appAccountToken)
         XCTAssertNil(storage.lastRequestId)
@@ -135,12 +142,7 @@ final class IdentitySessionTests: XCTestCase {
         await nextWatcher.beginIdentityTransition(appUserId: nextUserId)
         await releaseLogin.signal()
 
-        do {
-            _ = try await login.value
-            XCTFail("a logIn that outlived reset() must not succeed")
-        } catch let error as AppActorError {
-            XCTAssertEqual(error.kind, .notConfigured)
-        }
+        await assertNotConfigured(login, "a logIn that outlived reset() must not succeed")
         XCTAssertEqual(nextStorage.currentAppUserId, nextUserId)
         XCTAssertEqual(nextStorage.appAccountToken, nextToken)
         XCTAssertNil(storage.currentAppUserId)
@@ -164,12 +166,7 @@ final class IdentitySessionTests: XCTestCase {
         configure(storage: InMemoryPaymentStorage())
         await releaseLogin.signal()
 
-        do {
-            _ = try await login.value
-            XCTFail("a logIn from the previous session must not succeed")
-        } catch let error as AppActorError {
-            XCTAssertEqual(error.kind, .notConfigured)
-        }
+        await assertNotConfigured(login, "a logIn from the previous session must not succeed")
         XCTAssertEqual(storage.currentAppUserId, "user_a")
     }
 
@@ -183,26 +180,14 @@ final class IdentitySessionTests: XCTestCase {
             await releasePost.wait()
             return AppActorReceiptPostResponse(status: "ok", requestId: nil)
         }
-        let now = Date()
-        queueStore.upsert(AppActorPaymentQueueItem(
-            key: "apple:1", bundleId: "com.test", environment: "sandbox", transactionId: "1",
-            jws: "jws", signedAppTransactionInfo: nil, appUserId: "user_a", productId: "com.test.monthly",
-            originalTransactionId: "1", storefront: nil, offeringId: nil, packageId: nil,
-            phase: .needsPost, attemptCount: 0, nextRetryAt: now, firstSeenAt: now, lastSeenAt: now,
-            lastError: nil, sources: [.purchase], claimedAt: nil
-        ))
+        queueStore.upsert(.fixture(key: "apple:1", transactionId: "1", appUserId: "user_a"))
 
         let login = Task { try await appactor.logIn(newAppUserId: "user_b") }
         await fulfillment(of: [postStarted], timeout: 2)
         await appactor.reset()
         await releasePost.signal()
 
-        do {
-            _ = try await login.value
-            XCTFail("a logIn that outlived reset() must not succeed")
-        } catch let error as AppActorError {
-            XCTAssertEqual(error.kind, .notConfigured)
-        }
+        await assertNotConfigured(login, "a logIn that outlived reset() must not succeed")
         XCTAssertTrue(mockClient.loginCalls.isEmpty, "the reset identity is never merged into user_b")
     }
 
@@ -374,12 +359,7 @@ final class IdentitySessionTests: XCTestCase {
         await appactor.reset()
         await releaseFetch.signal()
 
-        do {
-            _ = try await fetch.value
-            XCTFail("a fetch that outlived reset() must not return the old user's values")
-        } catch let error as AppActorError {
-            XCTAssertEqual(error.kind, .notConfigured)
-        }
+        await assertNotConfigured(fetch, "a fetch that outlived reset() must not return the old user's values")
         XCTAssertNil(appactor.cachedRemoteConfigs)
     }
 
@@ -389,7 +369,7 @@ final class IdentitySessionTests: XCTestCase {
         let queueStore = InMemoryPaymentQueueStore()
         configure(storage: storage, queueStore: queueStore)
         await appactor.wireReceiptCustomerInfoUpdateHandler()
-        mockClient.postReceiptHandler = { _ in PaymentProcessorTests.revokedResponse }
+        mockClient.postReceiptHandler = { _ in .revokedTransaction }
         let refreshed = calledExpectation("customer info fetched after the revocation")
         let published = calledExpectation("the refreshed customer info published")
         appactor.onCustomerInfoChanged = { _ in published.fulfill() }
@@ -398,28 +378,11 @@ final class IdentitySessionTests: XCTestCase {
             return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
         }
         queueStore.markPosted(key: "apple:12345")
-        let now = Date()
-        queueStore.upsert(AppActorPaymentQueueItem(
-            key: "apple:12345",
-            bundleId: "com.test",
-            environment: "sandbox",
+        queueStore.upsert(.fixture(
             transactionId: "12345",
             jws: StoreKitJWSFixture.transaction(revoked: true),
-            signedAppTransactionInfo: nil,
             appUserId: "user_a",
-            productId: "com.test.monthly",
-            originalTransactionId: "12345",
-            storefront: "USA",
-            offeringId: nil,
-            packageId: nil,
-            phase: .needsPost,
-            attemptCount: 0,
-            nextRetryAt: now,
-            firstSeenAt: now,
-            lastSeenAt: now,
-            lastError: nil,
-            sources: [.transactionUpdates],
-            claimedAt: nil
+            source: .transactionUpdates
         ))
 
         await appactor.paymentProcessor?.drainAll()

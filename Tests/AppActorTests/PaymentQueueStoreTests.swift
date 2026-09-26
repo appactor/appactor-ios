@@ -229,34 +229,8 @@ final class PaymentQueueStoreTests: XCTestCase {
 
     // MARK: - I-S3-2: a claim left by an earlier process
 
-    private func makeItem(key: String, appUserId: String = "user_123") -> AppActorPaymentQueueItem {
-        let now = Date()
-        return AppActorPaymentQueueItem(
-            key: key,
-            bundleId: "com.test",
-            environment: "sandbox",
-            transactionId: key,
-            jws: "jws_payload",
-            signedAppTransactionInfo: nil,
-            appUserId: appUserId,
-            productId: "com.test.monthly",
-            originalTransactionId: key,
-            storefront: "USA",
-            offeringId: nil,
-            packageId: nil,
-            phase: .needsPost,
-            attemptCount: 0,
-            nextRetryAt: now,
-            firstSeenAt: now,
-            lastSeenAt: now,
-            lastError: nil,
-            sources: [.purchase],
-            claimedAt: nil
-        )
-    }
-
     func test_givenClaimFromAnEarlierProcess_whenLoaded_thenDueAgainAtOnce() {
-        store.upsert(makeItem(key: "apple:claimed"))
+        store.upsert(.fixture(key: "apple:claimed"))
         XCTAssertEqual(store.claimReady(limit: 10, now: Date()).map(\.key), ["apple:claimed"])
         XCTAssertTrue(store.claimReady(limit: 10, now: Date()).isEmpty, "a live claim in this store is not claimed twice")
 
@@ -269,7 +243,7 @@ final class PaymentQueueStoreTests: XCTestCase {
     }
 
     func test_givenClaimFromAnEarlierProcess_whenTheLaunchDrainRuns_thenPosted() async {
-        store.upsert(makeItem(key: "apple:claimed", appUserId: "guest"))
+        store.upsert(.fixture(key: "apple:claimed", appUserId: "guest"))
         _ = store.claimReady(limit: 10, now: Date())
 
         let client = MockPaymentClient()
@@ -286,8 +260,8 @@ final class PaymentQueueStoreTests: XCTestCase {
     // MARK: - I-G-1: a revocation's ledger key is not the item's key
 
     func test_givenRevocationLedgerKey_whenMarkedPostedAndUpdated_thenItemStaysUnderItsOwnKey() {
-        store.upsert(makeItem(key: "apple:1"))
-        var finished = makeItem(key: "apple:1")
+        store.upsert(.fixture(key: "apple:1"))
+        var finished = AppActorPaymentQueueItem.fixture(key: "apple:1")
         finished.phase = .needsFinish
 
         store.markPostedAndUpdate(key: "apple:1:revoked", item: finished)

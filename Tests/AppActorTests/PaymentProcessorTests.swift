@@ -623,14 +623,6 @@ final class PaymentProcessorTests: XCTestCase {
         return item
     }
 
-    /// The server's answer to a revoked receipt (`permanentErrorResult('REVOKED_TRANSACTION', …)`).
-    static let revokedResponse = AppActorReceiptPostResponse(
-        status: "permanent_error",
-        error: AppActorReceiptErrorInfo(code: "REVOKED_TRANSACTION", message: "Transaction has been revoked by Apple"),
-        requestId: "req_revoked",
-        finishTransaction: true
-    )
-
     func testLedgerKeySeparatesTheRevocationFromThePurchase() {
         var item = makeItem()
         XCTAssertEqual(item.ledgerKey, "apple:12345", "an undecodable JWS is the purchase")
@@ -657,7 +649,7 @@ final class PaymentProcessorTests: XCTestCase {
         let refreshed = expectation(description: "customer refresh requested")
         refreshed.assertForOverFulfill = false
         await processor.setRevokedTransactionHandler { refreshed.fulfill() }
-        client.postReceiptHandler = { _ in Self.revokedResponse }
+        client.postReceiptHandler = { _ in .revokedTransaction }
         // The purchase posted earlier; Apple then refunded it.
         store.markPosted(key: "apple:12345")
 
@@ -684,7 +676,7 @@ final class PaymentProcessorTests: XCTestCase {
     }
 
     func testRevokedTransactionNeverPostedIsLedgeredAsARevocation() async {
-        client.postReceiptHandler = { _ in Self.revokedResponse }
+        client.postReceiptHandler = { _ in .revokedTransaction }
 
         store.upsert(makeRevokedItem())
         await processor.drainAll()

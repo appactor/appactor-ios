@@ -34,10 +34,7 @@ extension AppActor {
         // The same runs again when a cache clear cancelled the fetch (identity switches and
         // entitlement changes do that), unless the caller itself was cancelled.
         for _ in 0..<Self.remoteConfigFetchAttempts {
-            guard paymentLifecycle == .configured else {
-                throw AppActorError.notConfigured
-            }
-            guard let manager = remoteConfigManager else {
+            guard paymentLifecycle == .configured, let manager = remoteConfigManager else {
                 throw AppActorError.notConfigured
             }
 
@@ -45,9 +42,6 @@ extension AppActor {
             let appUserId = paymentStorage?.currentAppUserId
             let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
             let country = Self.deviceCountryCode
-            func identityIsCurrent() -> Bool {
-                isSessionCurrent(session) && paymentStorage?.currentAppUserId == appUserId
-            }
 
             let result: AppActorRemoteConfigs
             do {
@@ -60,7 +54,7 @@ extension AppActor {
                 continue
             }
             let requestId = await manager.requestId
-            guard identityIsCurrent() else { continue }
+            guard isSessionCurrent(session), paymentStorage?.currentAppUserId == appUserId else { continue }
 
             self.paymentRemoteConfigs = result
             if let requestId {

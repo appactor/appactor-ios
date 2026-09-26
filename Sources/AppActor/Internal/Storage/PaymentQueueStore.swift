@@ -398,20 +398,16 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         }
         if purgedCount > 0 {
             Log.storage.info("Purged \(purgedCount) dead-lettered payment queue item(s) older than 30 days")
+            writeToDisk(map)
         }
 
         // A claim on disk was made by an earlier store, in practice an earlier process that died
         // mid-POST: nothing will finish that POST, so the receipt is due now rather than once
         // the claim goes stale, and the launch drain posts it. After reset() and configure() in
         // one process the old POST may still be running; the server dedups by transaction.
-        let interruptedKeys = map.compactMap { key, item in item.phase == .posting ? key : nil }
-        for key in interruptedKeys {
+        for (key, item) in map where item.phase == .posting {
             map[key]?.phase = .needsPost
             map[key]?.claimedAt = nil
-        }
-
-        if purgedCount > 0 || !interruptedKeys.isEmpty {
-            writeToDisk(map)
         }
 
         items = map

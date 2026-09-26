@@ -75,7 +75,6 @@ extension AppActor {
         }
 
         paymentLifecycle = .configured
-        advanceSessionGeneration()
 
         // If payment options specify a log level, escalate (never downgrade).
         if let paymentLevel = config.options.logLevel, paymentLevel > AppActorLogger.level {

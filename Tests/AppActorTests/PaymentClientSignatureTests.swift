@@ -340,8 +340,7 @@ final class PaymentClientSignatureTests: XCTestCase {
     /// What the server reads for `name`: Hono splits on '&' and '=', turns '+' into a space,
     /// then percent-decodes.
     private func serverDecodedQueryValue(_ name: String, in request: URLRequest) -> String? {
-        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.percentEncodedQuery ?? ""
-        for pair in query.split(separator: "&") {
+        for pair in (sentQuery(request) ?? "").split(separator: "&") {
             let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
             guard parts.first == name else { continue }
             return (parts.count > 1 ? parts[1] : "").replacingOccurrences(of: "+", with: " ").removingPercentEncoding
@@ -349,14 +348,15 @@ final class PaymentClientSignatureTests: XCTestCase {
         return nil
     }
 
-    private static let queryEdgeCaseAppUserIds = ["ana+ios@x.com", "+905551234567", "a&b=c", "100%", "two words", "a+b&c=d%e f"]
+    /// Ends with "ana+ios@x.com": the remote-config test checks the exact bytes of the last request.
+    private static let queryEdgeCaseAppUserIds = ["+905551234567", "a&b=c", "100%", "two words", "a+b&c=d%e f", "ana+ios@x.com"]
 
     private func sentQuery(_ request: URLRequest) -> String? {
         URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.percentEncodedQuery
     }
 
     func testRemoteConfigQuerySendsPlusSoTheServerReadsTheSameAppUserId() async throws {
-        for appUserId in Self.queryEdgeCaseAppUserIds + ["ana+ios@x.com"] {
+        for appUserId in Self.queryEdgeCaseAppUserIds {
             PaymentClientURLProtocol.reset()
             PaymentClientURLProtocol.handler = { request in
                 let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!

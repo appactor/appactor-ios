@@ -26,19 +26,17 @@ extension AppActor {
         set {
             paymentContext.lifecycle = newValue
             AppActorPaymentContext._lifecycle = newValue
+            if newValue == .configured {
+                paymentContext.sessionGeneration &+= 1
+            }
         }
     }
 
-    /// Identifies the configured session. Work that awaits captures it and checks
-    /// ``isSessionCurrent(_:)`` before it writes, so a result that lands after `reset()` (or a
-    /// cancelled startup) never reaches storage or the session configured after it.
+    /// Identifies the configured session; it advances each time the lifecycle becomes
+    /// `.configured`. Work that awaits captures it and checks ``isSessionCurrent(_:)`` before it
+    /// writes, so a result that lands after `reset()` (or a cancelled startup) never reaches
+    /// storage or the session configured after it.
     var sessionGeneration: UInt64 { paymentContext.sessionGeneration }
-
-    /// Called when configure() starts a session. Leaving `.configured` needs no call:
-    /// ``isSessionCurrent(_:)`` checks the lifecycle too.
-    func advanceSessionGeneration() {
-        paymentContext.sessionGeneration &+= 1
-    }
 
     func isSessionCurrent(_ generation: UInt64) -> Bool {
         paymentLifecycle == .configured && paymentContext.sessionGeneration == generation
