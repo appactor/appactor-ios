@@ -28,7 +28,7 @@ extension AppActor {
             return info
         } catch let appError as AppActorError where appError.isTransient {
             // Clear cache timestamp so staleness timer/foreground handler retries immediately
-            await manager.clearCache(appUserId: appUserId)
+            await manager.resetFreshness(appUserId: appUserId)
             let offlineKeys = await manager.activeEntitlementKeysOffline(appUserId: appUserId)
             if let offlineInfo = await offlineCustomerInfoIfIdentityMatches(
                 expectedAppUserId: appUserId,
@@ -116,21 +116,23 @@ extension AppActor {
             return
         }
 
-        // 2. Cache miss (e.g. reinstall) → derive from StoreKit so premium still shows.
+        // 2. Cache miss (e.g. reinstall) → derive from StoreKit so premium still shows. No
+        // snapshot the caches were fetched under exists, so this one counts as a change.
         let offlineKeys = await manager.activeEntitlementKeysOffline(appUserId: appUserId)
         if let offlineInfo = await offlineCustomerInfoIfIdentityMatches(
             expectedAppUserId: appUserId,
             offlineKeys: offlineKeys
-        ) {
-            publishLaunchSeed(offlineInfo, expectedAppUserId: appUserId)
+        ), customerInfo.appUserId == nil {
+            await setCustomerInfoIfIdentityMatches(offlineInfo, expectedAppUserId: appUserId)
         }
     }
 
-    /// Publishes the launch seed, unless something was published during the awaits above or the
-    /// identity moved on. Not through `setCustomerInfoIfIdentityMatches`: `.empty` → the seed is
-    /// not an entitlement change but the state the remote-config and experiment caches on disk
-    /// were fetched under, and counting it as one deleted those caches at every launch of a
-    /// paying user. The next snapshot is compared against the seed, so a real change still clears.
+    /// Publishes the persisted snapshot as the launch seed, unless something was published during
+    /// the await above or the identity moved on. Not through `setCustomerInfoIfIdentityMatches`:
+    /// `.empty` → this snapshot is not an entitlement change but the state the remote-config and
+    /// experiment caches on disk were fetched under, and counting it as one deleted those caches
+    /// at every launch of a paying user. The next snapshot is compared against it, so a real
+    /// change still clears them.
     private func publishLaunchSeed(_ info: AppActorCustomerInfo, expectedAppUserId: String) {
         guard customerInfo.appUserId == nil,
               paymentStorage?.currentAppUserId == expectedAppUserId else { return }

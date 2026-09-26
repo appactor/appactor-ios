@@ -23,6 +23,9 @@ actor AppActorCustomerManager {
     private var inflight: (userId: String, task: Task<AppActorCustomerInfo, Error>)?
     /// Generation counter for safe inflight bookkeeping (avoids `===` on Task).
     private var inflightGeneration: UInt64 = 0
+    /// Every fetch still running, keyed by generation: the one in `inflight`, and any that a force
+    /// refresh or another user's fetch replaced there while callers still wait on it.
+    private var runningFetches: [UInt64: Task<AppActorCustomerInfo, Error>] = [:]
 
     /// Last `request_id` from the server, for debugging.
     private(set) var lastRequestId: String?
@@ -71,15 +74,22 @@ actor AppActorCustomerManager {
     /// Cancels any in-flight fetch to prevent stale writes after the reset.
     func clearCache(appUserId: String) async {
         cancelInFlight()
+        await resetFreshness(appUserId: appUserId)
+    }
+
+    /// Marks the cache stale so the next foreground or staleness check fetches, without touching
+    /// fetches that are running.
+    func resetFreshness(appUserId: String) async {
         await etagManager.resetFreshness(for: .customer(appUserId: appUserId))
     }
 
-    /// Cancels the fetch in flight, whoever started it. The fetch is an unstructured task shared
-    /// by every caller for the user, so a caller's own cancellation never reaches it; only the
-    /// owner of a teardown (reset(), a cancelled startup) calls this, and every waiter gets a
-    /// `CancellationError`.
+    /// Cancels every fetch still running, whoever started it. The fetches are unstructured tasks
+    /// shared by every caller for the user, so a caller's own cancellation never reaches them.
+    /// Called when an identity or a session ends (logOut() through `clearCache(appUserId:)`,
+    /// reset(), a cancelled startup); every waiter gets a `CancellationError`.
     func cancelInFlight() {
-        inflight?.task.cancel()
+        runningFetches.values.forEach { $0.cancel() }
+        runningFetches.removeAll()
         inflight = nil
     }
 
@@ -171,14 +181,17 @@ actor AppActorCustomerManager {
         inflightGeneration &+= 1
         let generation = inflightGeneration
         inflight = (userId: appUserId, task: task)
+        runningFetches[generation] = task
 
         do {
             let info = try await task.value
             // Only clear if still our task (forceRefresh may have replaced it)
             if inflightGeneration == generation { inflight = nil }
+            runningFetches[generation] = nil
             return info
         } catch {
             if inflightGeneration == generation { inflight = nil }
+            runningFetches[generation] = nil
             throw error
         }
     }
@@ -196,17 +209,12 @@ actor AppActorCustomerManager {
     ///   (e.g., server-side revocations, promotional entitlements, grace periods). Always prefer
     ///   ``getCustomerInfo(appUserId:forceRefresh:)`` for authoritative entitlement checks.
     ///
-    /// - Returns: Set of entitlement keys that are active offline.
-    func activeEntitlementKeysOffline() async -> Set<String> {
-        let appUserId = currentAppUserId
-        return await activeEntitlementKeysOffline(appUserId: appUserId)
-    }
-
-    /// Derives active entitlement keys offline for a specific identity.
-    ///
     /// The StoreKit derivation remains global, but the cached-customer fallback is
-    /// explicitly bound to the provided `appUserId` so callers can avoid cross-user
-    /// offline snapshots during login/logout races.
+    /// explicitly bound to the provided `appUserId` (the caller's identity, never the user
+    /// this manager last fetched for) so callers can avoid cross-user offline snapshots
+    /// during login/logout races.
+    ///
+    /// - Returns: Set of entitlement keys that are active offline.
     func activeEntitlementKeysOffline(appUserId: String?) async -> Set<String> {
         // 1. SK2 product IDs + offerings mapping → derive entitlement keys
         let derivedKeys = await derivedEntitlementKeysFromStoreKit()

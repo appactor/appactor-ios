@@ -16,7 +16,8 @@ extension AppActor {
         // Every exit settles it: a completed bootstrap, a revert, or a reset() that took over.
         defer { settleStartup() }
         // reset(), and a configure() after it, can run while this awaits. The startup of a session
-        // that ended then leaves the next one alone: it neither reverts it nor completes it.
+        // that ended stops at its next check instead of reverting, starting or completing the
+        // next session.
         let session = sessionGeneration
         let sequenceStart = CFAbsoluteTimeGetCurrent()
         let verboseBootstrap = (paymentConfig?.options.logLevel ?? AppActorLogger.level) >= .verbose
@@ -36,13 +37,14 @@ extension AppActor {
         // ── Phase 1: Watcher setup (must complete before transactions arrive) ──
         if let watcher {
             let t0 = CFAbsoluteTimeGetCurrent()
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, isSessionCurrent(session) else {
                 await revertLifecycleIfCancelled(session: session)
                 return
             }
             await watcher.start()
             Log.sdk.info("  ⏱ watcher: \(ms(since: t0)) ms")
         }
+        guard isSessionCurrent(session) else { return }
 
         // Start PurchaseIntent listener (iOS 16.4+) — independent from Transaction.updates
         if #available(iOS 16.4, macOS 14.4, tvOS 16.4, watchOS 9.4, *) {
@@ -56,7 +58,7 @@ extension AppActor {
             await intentWatcher.start()
         }
 
-        guard !Task.isCancelled else {
+        guard !Task.isCancelled, isSessionCurrent(session) else {
             await revertLifecycleIfCancelled(session: session)
             return
         }
@@ -69,7 +71,7 @@ extension AppActor {
         // cycle (about 96 s on a stalled network).
         let customerManager = self.customerManager
         await withTaskCancellationHandler {
-            await self.runBootstrap(verboseBootstrap: verboseBootstrap)
+            await self.runBootstrap(verboseBootstrap: verboseBootstrap, session: session)
         } onCancel: {
             Task { await customerManager?.cancelInFlight() }
         }
@@ -273,10 +275,6 @@ extension AppActor {
         self.paymentProcessor = nil
         purchaseIntentWatcher = nil
         pendingPurchaseIntents.removeAll()
-        // The session ends here, as after reset(): the next configure() may be another user's,
-        // and must not find this one's customer info or remote config published.
-        customerInfo = .empty
-        paymentRemoteConfigs = nil
         isBootstrapComplete = false
         paymentLifecycle = .idle
         Log.sdk.warn("Startup cancelled before bootstrap completed — reverted to idle.")
@@ -284,7 +282,7 @@ extension AppActor {
 
     /// The bootstrap sequence extracted into a standalone method for use inside
     /// the supervisor TaskGroup. Errors are logged, never thrown.
-    private func runBootstrap(verboseBootstrap: Bool) async {
+    private func runBootstrap(verboseBootstrap: Bool, session: UInt64) async {
         let start = CFAbsoluteTimeGetCurrent()
         var stepStart = start
 
@@ -306,18 +304,19 @@ extension AppActor {
 
         // 1. Fire-and-forget: warm offerings cache in the background.
         // getOfferings() will coalesce with this in-flight request if called early.
+        guard isSessionCurrent(session) else { return }
         if let manager = self.offeringsManager {
             self.offeringsPrefetchTask = Task { await manager.prefetchForBootstrap() }
         }
         logStep("offerings/api")
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, isSessionCurrent(session) else { return }
 
         // 2. Sweep unfinished transactions from previous sessions.
         if let watcher = self.transactionWatcher {
             await watcher.sweepUnfinished()
         }
         logStep("sweepUnfinished")
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, isSessionCurrent(session) else { return }
 
         // 3+4. Drain pending receipts and refresh customer info in one step.
         // drainReceiptQueueAndRefreshCustomer() preserves the previous preload

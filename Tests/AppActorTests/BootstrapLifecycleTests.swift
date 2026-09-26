@@ -189,9 +189,10 @@ final class BootstrapLifecycleTests: XCTestCase {
     /// "already configured" and then lost when the old startup reverts to idle.
     func testConfigureDuringACancelledStartupConfiguresOnceTheStartupReverts() async throws {
         let firstClient = MockPaymentClient()
-        let customerFetchStarted = AsyncSignal()
+        let customerFetchStarted = expectation(description: "the first startup's customer fetch sent")
+        customerFetchStarted.assertForOverFulfill = false
         firstClient.getCustomerHandler = { appUserId, _ in
-            await customerFetchStarted.signal()
+            customerFetchStarted.fulfill()
             try await Task.sleep(nanoseconds: 20_000_000_000) // a stalled network
             return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
         }
@@ -200,7 +201,7 @@ final class BootstrapLifecycleTests: XCTestCase {
         let second = AppActorPaymentConfiguration(apiKey: "pk_test_e8a_second", baseURL: baseURL)
 
         let firstStartup = Task { await self.appactor.configureAndStart(first, testClient: firstClient) }
-        await customerFetchStarted.wait()
+        await fulfillment(of: [customerFetchStarted], timeout: 5)
         let secondStartup = Task { await self.appactor.configureAndStart(second, testClient: self.mockClient) }
         var yields = 0
         while appactor.paymentContext.startupWaiters.isEmpty, yields < 1_000 {
@@ -209,12 +210,16 @@ final class BootstrapLifecycleTests: XCTestCase {
         }
         XCTAssertFalse(appactor.paymentContext.startupWaiters.isEmpty, "The second configure() waits for the first startup")
 
-        let start = Date()
+        // Timed, so a regression fails the test instead of hanging the suite.
+        let bothReturned = expectation(description: "both configure() calls returned")
+        Task {
+            await firstStartup.value
+            await secondStartup.value
+            bothReturned.fulfill()
+        }
         firstStartup.cancel()
-        await firstStartup.value
-        await secondStartup.value
+        await fulfillment(of: [bothReturned], timeout: 5)
 
-        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "The cancelled startup doesn't wait out its stalled fetch")
         XCTAssertEqual(appactor.paymentLifecycle, .configured)
         XCTAssertTrue(appactor.isBootstrapComplete)
         XCTAssertEqual(appactor.paymentConfig?.apiKey, "pk_test_e8a_second")
@@ -224,15 +229,17 @@ final class BootstrapLifecycleTests: XCTestCase {
     // MARK: - E8b: reset() doesn't wait out a stalled fetch
 
     func testResetCancelsStalledManagerFetchesInsteadOfWaitingForThem() async throws {
-        let customerFetchStarted = AsyncSignal()
-        let offeringsFetchStarted = AsyncSignal()
+        let customerFetchStarted = expectation(description: "customer fetch sent")
+        customerFetchStarted.assertForOverFulfill = false
+        let offeringsFetchStarted = expectation(description: "offerings fetch sent")
+        offeringsFetchStarted.assertForOverFulfill = false
         mockClient.getCustomerHandler = { appUserId, _ in
-            await customerFetchStarted.signal()
+            customerFetchStarted.fulfill()
             try await Task.sleep(nanoseconds: 20_000_000_000)
             return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
         }
         mockClient.getOfferingsHandler = { _ in
-            await offeringsFetchStarted.signal()
+            offeringsFetchStarted.fulfill()
             try await Task.sleep(nanoseconds: 20_000_000_000)
             return .fresh(AppActorOfferingsResponseDTO(currentOffering: nil, offerings: []), eTag: nil, requestId: nil, signatureVerified: false)
         }
@@ -245,8 +252,7 @@ final class BootstrapLifecycleTests: XCTestCase {
         appactor.foregroundTask = Task { _ = try? await self.appactor.getCustomerInfo() }
         let offeringsManager = try XCTUnwrap(appactor.offeringsManager)
         appactor.offeringsPrefetchTask = Task { await offeringsManager.prefetchForBootstrap() }
-        await customerFetchStarted.wait()
-        await offeringsFetchStarted.wait()
+        await fulfillment(of: [customerFetchStarted, offeringsFetchStarted], timeout: 5)
 
         let start = Date()
         await appactor.reset()

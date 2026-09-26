@@ -79,6 +79,8 @@ actor AppActorRemoteConfigManager {
         appVersion: String?,
         country: String?
     ) async throws -> AppActorRemoteConfigs {
+        // Before any await: a clear anywhere in this call voids the disk fallback below.
+        let clears = clearCount
         let userContext = normalizedContext(appUserId: appUserId, appVersion: appVersion, country: country)
         let publicContext = normalizedContext(appUserId: nil, appVersion: appVersion, country: country)
         let modeContext = ModeContext(appVersion: publicContext.appVersion, country: publicContext.country)
@@ -112,7 +114,9 @@ actor AppActorRemoteConfigManager {
             // decision that skips the probe expires after cacheTTL and dies with the process.
             // The user's own copy is the one to fall back to. It is read from disk, not fetched:
             // a user-context request would only repeat the retry cycle that just failed.
-            guard let cached = try await loadUserCopyAfterFailedProbe(context: userContext) else { throw error }
+            guard let cached = try await loadUserCopyAfterFailedProbe(context: userContext, clearsAtStart: clears) else {
+                throw error
+            }
             Log.sdk.debug("Network/5xx error — returning the user's disk-cached remote configs")
             return cached
         }
@@ -363,14 +367,17 @@ actor AppActorRemoteConfigManager {
     }
 
     /// Reads `context`'s copy from disk outside any fetch, so no in-flight generation guards it:
-    /// a clear that lands during the read throws `CancellationError`, which the caller fetches
-    /// again after (see `AppActor.getRemoteConfigs()`), rather than serving what was just cleared.
-    private func loadUserCopyAfterFailedProbe(context: CacheContext) async throws -> AppActorRemoteConfigs? {
-        let clears = clearCount
+    /// a clear since the call began throws `CancellationError`, which the caller fetches again
+    /// after (see `AppActor.getRemoteConfigs()`), rather than serving what was just cleared.
+    private func loadUserCopyAfterFailedProbe(
+        context: CacheContext,
+        clearsAtStart: UInt64
+    ) async throws -> AppActorRemoteConfigs? {
+        guard clearCount == clearsAtStart else { throw CancellationError() }
         guard let entry = await etagManager.cached([AppActorRemoteConfigItemDTO].self, for: resource(for: context)) else {
             return nil
         }
-        guard clearCount == clears else { throw CancellationError() }
+        guard clearCount == clearsAtStart else { throw CancellationError() }
         let configs = buildPublicModel(from: entry.value)
         cachedConfigs[context] = configs
         cachedAt[context] = entry.cachedAt

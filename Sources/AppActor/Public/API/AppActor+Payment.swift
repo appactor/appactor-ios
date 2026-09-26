@@ -159,7 +159,15 @@ extension AppActor {
 
         // Establish the canonical local identity synchronously so configure()
         // returns with appUserId/isAnonymous immediately usable.
+        let previousAppUserId = storage.currentAppUserId
         storage.resolveAppUserId(explicit: config.appUserId)
+        // A cancelled startup reverts without clearing what its session published, which a retry
+        // for the same user keeps. Another user must not see it, nor have their launch seed
+        // skipped or their caches cleared against the previous user's entitlements.
+        if storage.currentAppUserId != previousAppUserId {
+            customerInfo = .empty
+            paymentRemoteConfigs = nil
+        }
         storage.ensureAppAccountToken()
         storage.clearLegacyIdentityState()
 
