@@ -59,11 +59,12 @@ extension AppActor {
             } catch is CancellationError where !Task.isCancelled {
                 continue
             }
+            let requestId = await manager.requestId
             guard identityIsCurrent() else { continue }
 
             self.paymentRemoteConfigs = result
-            if let rid = await manager.requestId {
-                paymentStorage?.setLastRequestId(rid)
+            if let requestId {
+                paymentStorage?.setLastRequestId(requestId)
             }
             return result
         }

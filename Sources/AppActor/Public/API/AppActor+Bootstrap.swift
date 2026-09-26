@@ -194,7 +194,6 @@ extension AppActor {
     /// from running in the background after a cancelled bootstrap.
     private func revertLifecycleIfCancelled() async {
         guard paymentLifecycle == .configured else { return }
-        advanceSessionGeneration()
         offeringsPrefetchTask?.cancel()
         await offeringsPrefetchTask?.value
         offeringsPrefetchTask = nil

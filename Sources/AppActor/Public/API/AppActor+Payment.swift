@@ -408,9 +408,9 @@ extension AppActor {
         if let manager = customerManager {
             await manager.seedCache(info: verifiedLoginInfo, eTag: loginResult.customerETag, appUserId: loginResult.appUserId, verified: loginResult.signatureVerified)
         }
+        guard isSessionCurrent(session) else { throw await sessionEnded() }
 
         await setCustomerInfoIfIdentityMatches(verifiedLoginInfo, expectedAppUserId: loginResult.appUserId)
-        guard isSessionCurrent(session) else { throw await sessionEnded() }
 
         // End identity transition — flush buffered transactions with their captured appUserId
         await endIdentityTransition(of: watcher)
@@ -529,7 +529,6 @@ extension AppActor {
     public func reset() async {
         // ── Phase 0: State transition ──
         paymentLifecycle = .resetting
-        advanceSessionGeneration()
 
         // ── Phase 1: Synchronous — runs before any suspension point ──
         // Remove lifecycle observers FIRST to close the race window where
@@ -650,9 +649,8 @@ extension AppActor {
 }
 
 private extension AppActor {
-    /// Ends the identity transition begun on `watcher`, unless reset() has replaced it since.
-    /// The next session's watcher may be in another logIn's transition; the stopped one would
-    /// flush into a stopped processor whose store writes the pre-reset queue back to disk. Its
+    /// Ends the identity transition begun on `watcher`, unless reset() has replaced it since:
+    /// the next session's watcher may be in another logIn's transition. The replaced watcher's
     /// buffered transactions are unfinished, so the next configure()'s sweep posts them.
     func endIdentityTransition(of watcher: AppActorTransactionWatcher?) async {
         guard let watcher, watcher === transactionWatcher else { return }

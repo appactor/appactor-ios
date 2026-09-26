@@ -171,9 +171,6 @@ actor AppActorPaymentProcessor {
     /// Finishes the transaction directly when skipping to prevent it from reappearing
     /// in `Transaction.unfinished` on subsequent boots.
     func enqueue(item: AppActorPaymentQueueItem, transaction: Transaction) async {
-        // After stop() (reset, a cancelled startup) the store must not be written: it would put
-        // the pre-reset queue back on disk. The transaction stays unfinished for the next sweep.
-        guard !isStopped else { return }
         if isAlreadyPosted(item) {
             Log.receipts.debug("[key=\(item.key)] Skipped enqueue — already in posted ledger")
             emitEvent(.duplicateSkipped(key: item.key), item: item)
@@ -762,10 +759,11 @@ actor AppActorPaymentProcessor {
     /// so the map will be populated for any transaction that needs finishing.
     private func finishTransaction(_ item: AppActorPaymentQueueItem) async {
         if let transaction = transactionMap.removeValue(forKey: item.key) {
-            // StoreKit re-delivered it revoked while the unrevoked JWS was being posted (the
-            // stale copy then overwrote the merged one). Unfinished, the next sweep posts the revocation.
-            guard transaction.revocationDate == nil || item.ledgerKey != item.key else {
-                Log.receipts.info("[key=\(item.key)] Revoked while posting — left unfinished for the next sweep")
+            // A revoked transaction is finished only once the server has its revocation. StoreKit
+            // can deliver the revocation while the purchase is being posted or waits to be
+            // finished; unfinished, the next sweep posts it.
+            guard transaction.revocationDate == nil || store.isPosted(key: item.revocationLedgerKey) else {
+                Log.receipts.info("[key=\(item.key)] Revocation not posted yet — left unfinished for the next sweep")
                 return
             }
             await transaction.finish()

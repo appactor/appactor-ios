@@ -24,8 +24,9 @@ final class IdentitySessionTests: XCTestCase {
         storage.setAppUserId("user_a")
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         appactor.profileContextSyncTask?.cancel()
+        await appactor.profileContextSyncTask?.value
         appactor.profileContextSyncTask = nil
         appactor.paymentConfig = nil
         appactor.paymentStorage = nil
@@ -43,7 +44,15 @@ final class IdentitySessionTests: XCTestCase {
         appactor.customerInfo = .empty
         appactor.paymentLifecycle = .idle
         try? FileManager.default.removeItem(at: cacheDir)
-        super.tearDown()
+        try await super.tearDown()
+    }
+
+    /// Fulfilled by a mocked call the code under test is expected to make. Waited on with a
+    /// timeout, so a regression that skips the call fails instead of hanging.
+    private func calledExpectation(_ description: String) -> XCTestExpectation {
+        let called = expectation(description: description)
+        called.assertForOverFulfill = false
+        return called
     }
 
     private func configure(storage: InMemoryPaymentStorage, queueStore: InMemoryPaymentQueueStore = InMemoryPaymentQueueStore()) {
@@ -58,13 +67,13 @@ final class IdentitySessionTests: XCTestCase {
 
     /// Remote config that targets users: the public probe says so, and each user gets their
     /// own `tier`. The fetch for `user_a` waits on `release` once `started` fires.
-    private func serveUserTargetedRemoteConfig(holdingUserA started: AsyncSignal? = nil, until release: AsyncSignal? = nil) {
+    private func serveUserTargetedRemoteConfig(holdingUserA started: XCTestExpectation? = nil, until release: AsyncSignal? = nil) {
         mockClient.getRemoteConfigsHandler = { appUserId, _, _, _ in
             guard let appUserId else {
                 return .fresh([], eTag: nil, requestId: nil, signatureVerified: false, requiresUserContext: true)
             }
             if appUserId == "user_a", let started, let release {
-                await started.signal()
+                started.fulfill()
                 await release.wait()
             }
             let tier = AppActorRemoteConfigItemDTO(key: "tier", value: .string(appUserId), valueType: "string")
@@ -74,9 +83,9 @@ final class IdentitySessionTests: XCTestCase {
 
     // MARK: - I-S6-3: a logIn that resolves after reset()
 
-    private func holdLogin(started: AsyncSignal, release: AsyncSignal) {
+    private func holdLogin(started: XCTestExpectation, release: AsyncSignal) {
         mockClient.loginHandler = { request in
-            await started.signal()
+            started.fulfill()
             await release.wait()
             return AppActorLoginResult(
                 appUserId: request.newAppUserId,
@@ -89,12 +98,12 @@ final class IdentitySessionTests: XCTestCase {
     }
 
     func testLogInThatResolvesAfterResetDoesNotSignTheUserBackIn() async throws {
-        let loginStarted = AsyncSignal()
+        let loginStarted = calledExpectation("/login sent")
         let releaseLogin = AsyncSignal()
         holdLogin(started: loginStarted, release: releaseLogin)
 
         let login = Task { try await appactor.logIn(newAppUserId: "user_b") }
-        await loginStarted.wait()
+        await fulfillment(of: [loginStarted], timeout: 2)
         await appactor.reset()
         await releaseLogin.signal()
 
@@ -110,12 +119,12 @@ final class IdentitySessionTests: XCTestCase {
     }
 
     func testLogInThatResolvesAfterResetAndConfigureLeavesTheNewSessionAlone() async throws {
-        let loginStarted = AsyncSignal()
+        let loginStarted = calledExpectation("/login sent")
         let releaseLogin = AsyncSignal()
         holdLogin(started: loginStarted, release: releaseLogin)
 
         let login = Task { try await appactor.logIn(newAppUserId: "user_b") }
-        await loginStarted.wait()
+        await fulfillment(of: [loginStarted], timeout: 2)
         await appactor.reset()
         let nextStorage = InMemoryPaymentStorage()
         configure(storage: nextStorage)
@@ -144,12 +153,12 @@ final class IdentitySessionTests: XCTestCase {
     }
 
     func testLogInThatResolvesAfterAReconfigureIsDropped() async throws {
-        let loginStarted = AsyncSignal()
+        let loginStarted = calledExpectation("/login sent")
         let releaseLogin = AsyncSignal()
         holdLogin(started: loginStarted, release: releaseLogin)
 
         let login = Task { try await appactor.logIn(newAppUserId: "user_b") }
-        await loginStarted.wait()
+        await fulfillment(of: [loginStarted], timeout: 2)
         // A cancelled startup reverts to idle without reset(); configure() then runs again.
         appactor.paymentLifecycle = .idle
         configure(storage: InMemoryPaymentStorage())
@@ -167,10 +176,10 @@ final class IdentitySessionTests: XCTestCase {
     func testResetDuringTheReceiptDrainKeepsLogInFromReachingTheServer() async throws {
         let queueStore = InMemoryPaymentQueueStore()
         configure(storage: storage, queueStore: queueStore)
-        let postStarted = AsyncSignal()
+        let postStarted = calledExpectation("receipt POST sent")
         let releasePost = AsyncSignal()
         mockClient.postReceiptHandler = { _ in
-            await postStarted.signal()
+            postStarted.fulfill()
             await releasePost.wait()
             return AppActorReceiptPostResponse(status: "ok", requestId: nil)
         }
@@ -184,7 +193,7 @@ final class IdentitySessionTests: XCTestCase {
         ))
 
         let login = Task { try await appactor.logIn(newAppUserId: "user_b") }
-        await postStarted.wait()
+        await fulfillment(of: [postStarted], timeout: 2)
         await appactor.reset()
         await releasePost.signal()
 
@@ -265,12 +274,12 @@ final class IdentitySessionTests: XCTestCase {
     // MARK: - I-S4-2: remote config fetched for the previous identity
 
     func testRemoteConfigFetchedForThePreviousUserIsNotServedAfterLogIn() async throws {
-        let fetchStarted = AsyncSignal()
+        let fetchStarted = calledExpectation("user_a's fetch sent")
         let releaseFetch = AsyncSignal()
         serveUserTargetedRemoteConfig(holdingUserA: fetchStarted, until: releaseFetch)
 
         let fetch = Task { try await appactor.getRemoteConfigs() }
-        await fetchStarted.wait()
+        await fulfillment(of: [fetchStarted], timeout: 2)
         _ = try await appactor.logIn(newAppUserId: "user_b")
         await releaseFetch.signal()
         let configs = try await fetch.value
@@ -279,44 +288,53 @@ final class IdentitySessionTests: XCTestCase {
         XCTAssertEqual(appactor.cachedRemoteConfigs?["tier"], .string("user_b"))
     }
 
-    func testRemoteConfigFetchCancelledByLogOutIsFetchedAgainNotThrown() async throws {
-        let fetchStarted = AsyncSignal()
-        let release = AsyncSignal()
-        mockClient.getRemoteConfigsHandler = { appUserId, _, _, _ in
+    func testRemoteConfigFetchCancelledByLogOutIsFetchedAgainForTheNewUser() async throws {
+        let client = try XCTUnwrap(mockClient)
+        let fetchStarted = calledExpectation("user_a's fetch sent")
+        let fetchCancelled = calledExpectation("user_a's fetch cancelled by logOut's cache clear")
+        let releaseLaterFetches = AsyncSignal()
+        client.getRemoteConfigsHandler = { appUserId, _, _, _ in
             guard let appUserId else {
                 return .fresh([], eTag: nil, requestId: nil, signatureVerified: false, requiresUserContext: true)
             }
             if appUserId == "user_a" {
-                await fetchStarted.signal()
-                // Like URLSession, a cancelled request returns at once.
-                await withTaskCancellationHandler {
-                    await release.wait()
-                } onCancel: {
-                    Task { await release.signal() }
+                if client.getRemoteConfigsCalls.filter({ $0.appUserId == "user_a" }).count == 1 {
+                    fetchStarted.fulfill()
+                    // Like URLSession, a cancelled request ends at once.
+                    do {
+                        try await Task.sleep(nanoseconds: 5_000_000_000)
+                    } catch {
+                        fetchCancelled.fulfill()
+                        throw error
+                    }
+                } else {
+                    // A retry that still read user_a completes only after logOut switched.
+                    await releaseLaterFetches.wait()
                 }
-                try Task.checkCancellation()
             }
             let tier = AppActorRemoteConfigItemDTO(key: "tier", value: .string(appUserId), valueType: "string")
             return .fresh([tier], eTag: nil, requestId: nil, signatureVerified: false, requiresUserContext: true)
         }
 
         let fetch = Task { try await appactor.getRemoteConfigs() }
-        await fetchStarted.wait()
+        await fulfillment(of: [fetchStarted], timeout: 2)
         _ = try await appactor.logOut()
+        await fulfillment(of: [fetchCancelled], timeout: 2)
+        await releaseLaterFetches.signal()
         let configs = try await fetch.value
 
         let anonymousId = try XCTUnwrap(storage.currentAppUserId)
-        XCTAssertTrue([.string("user_a"), .string(anonymousId)].contains(configs["tier"]))
-        XCTAssertNotEqual(appactor.cachedRemoteConfigs?["tier"], .string("user_a"), "never published once logOut switched")
+        XCTAssertEqual(configs["tier"], .string(anonymousId))
+        XCTAssertEqual(appactor.cachedRemoteConfigs?["tier"], .string(anonymousId))
     }
 
     func testRemoteConfigFetchedBeforeResetIsNotPublishedIntoTheNextSession() async throws {
-        let fetchStarted = AsyncSignal()
+        let fetchStarted = calledExpectation("user_a's fetch sent")
         let releaseFetch = AsyncSignal()
         serveUserTargetedRemoteConfig(holdingUserA: fetchStarted, until: releaseFetch)
 
         let fetch = Task { try await appactor.getRemoteConfigs() }
-        await fetchStarted.wait()
+        await fulfillment(of: [fetchStarted], timeout: 2)
         await appactor.reset()
         let nextStorage = InMemoryPaymentStorage()
         configure(storage: nextStorage)
@@ -330,12 +348,12 @@ final class IdentitySessionTests: XCTestCase {
     }
 
     func testRemoteConfigFetchThatOutlivesResetThrowsNotConfigured() async throws {
-        let fetchStarted = AsyncSignal()
+        let fetchStarted = calledExpectation("user_a's fetch sent")
         let releaseFetch = AsyncSignal()
         serveUserTargetedRemoteConfig(holdingUserA: fetchStarted, until: releaseFetch)
 
         let fetch = Task { try await appactor.getRemoteConfigs() }
-        await fetchStarted.wait()
+        await fulfillment(of: [fetchStarted], timeout: 2)
         await appactor.reset()
         await releaseFetch.signal()
 
@@ -355,8 +373,8 @@ final class IdentitySessionTests: XCTestCase {
         configure(storage: storage, queueStore: queueStore)
         await appactor.wireReceiptCustomerInfoUpdateHandler()
         mockClient.postReceiptHandler = { _ in PaymentProcessorTests.revokedResponse }
-        let refreshed = expectation(description: "customer info fetched after the revocation")
-        let published = expectation(description: "the refreshed customer info published")
+        let refreshed = calledExpectation("customer info fetched after the revocation")
+        let published = calledExpectation("the refreshed customer info published")
         appactor.onCustomerInfoChanged = { _ in published.fulfill() }
         mockClient.getCustomerHandler = { appUserId, _ in
             refreshed.fulfill()
@@ -397,13 +415,13 @@ final class IdentitySessionTests: XCTestCase {
 
     func testRevocationRefreshDoesNotJoinACustomerFetchAlreadyInFlight() async throws {
         let client = try XCTUnwrap(mockClient)
-        let firstStarted = AsyncSignal()
+        let firstStarted = calledExpectation("the host's customer fetch sent")
         let releaseFirst = AsyncSignal()
-        let ownRequest = expectation(description: "the refresh sends its own request")
+        let ownRequest = calledExpectation("the refresh sends its own request")
         client.getCustomerHandler = { appUserId, _ in
             if client.getCustomerCalls.count == 1 {
                 // The host's fetch, sent before the server committed the revocation.
-                await firstStarted.signal()
+                firstStarted.fulfill()
                 await releaseFirst.wait()
             } else {
                 ownRequest.fulfill()
@@ -411,7 +429,7 @@ final class IdentitySessionTests: XCTestCase {
             return .fresh(AppActorCustomerInfo(appUserId: appUserId), eTag: nil, requestId: nil, signatureVerified: false)
         }
         let hostFetch = Task { try await appactor.getCustomerInfo() }
-        await firstStarted.wait()
+        await fulfillment(of: [firstStarted], timeout: 2)
 
         // A refresh that joined the host's fetch would wait on it: the expectation then times
         // out, and releasing the host's fetch afterwards lets the test end instead of hanging.

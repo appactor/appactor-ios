@@ -30,11 +30,12 @@ extension AppActor {
     }
 
     /// Identifies the configured session. Work that awaits captures it and checks
-    /// ``isSessionCurrent(_:)`` before it writes, so a result that lands after `reset()`
-    /// never reaches storage or the session configured after it.
+    /// ``isSessionCurrent(_:)`` before it writes, so a result that lands after `reset()` (or a
+    /// cancelled startup) never reaches storage or the session configured after it.
     var sessionGeneration: UInt64 { paymentContext.sessionGeneration }
 
-    /// Called when a configured session starts or ends.
+    /// Called when configure() starts a session. Leaving `.configured` needs no call:
+    /// ``isSessionCurrent(_:)`` checks the lifecycle too.
     func advanceSessionGeneration() {
         paymentContext.sessionGeneration &+= 1
     }
