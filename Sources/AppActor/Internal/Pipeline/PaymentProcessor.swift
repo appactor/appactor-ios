@@ -950,8 +950,9 @@ actor AppActorPaymentProcessor {
 
     /// Backoff for a response that can't be verified or an unexpected error: 2^n s, capped at
     /// 10 minutes. Transient failures (offline, 5xx) keep ``backoffDelay(attempt:)``. The cap stays
-    /// in minutes because the launch and foreground drains respect `nextRetryAt`: it is also how
-    /// long a queued purchase can wait once the cause (a wrong clock, say) is fixed.
+    /// in minutes because the launch and foreground drains respect `nextRetryAt`: it bounds how
+    /// long a queued purchase waits once the cause is fixed, on the device clock (a clock that was
+    /// set ahead and put back also holds it back by the difference).
     static func unverifiedResponseBackoffDelay(attempt: Int) -> TimeInterval {
         min(pow(2, Double(min(attempt, 10))), 10 * 60)
     }

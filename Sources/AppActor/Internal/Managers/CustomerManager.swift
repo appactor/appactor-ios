@@ -102,6 +102,9 @@ actor AppActorCustomerManager {
     func getCustomerInfo(appUserId: String, forceRefresh: Bool = false) async throws -> AppActorCustomerInfo {
         currentAppUserId = appUserId
         let resource = AppActorCacheResource.customer(appUserId: appUserId)
+        // A cancelled caller neither starts nor waits on a fetch: nothing would cancel one it
+        // started (see cancelInFlight()), and a reset() or a cancelled startup would wait for it.
+        try Task.checkCancellation()
 
         // Coalesce only if same userId and not a force refresh.
         if !forceRefresh, let inflight, inflight.userId == appUserId {
@@ -118,6 +121,9 @@ actor AppActorCustomerManager {
 
             do {
                 let result = try await client.getCustomer(appUserId: appUserId, eTag: lastETag)
+                // Cancelled by cancelInFlight() while the response was on its way: logOut() or
+                // reset() is deleting this cache, and a write now would bring it back.
+                try Task.checkCancellation()
 
                 switch result {
                 case .fresh(let info, let eTag, let requestId, let signatureVerified):
@@ -135,6 +141,7 @@ actor AppActorCustomerManager {
                     }
                     // 304 but cache is missing/corrupt — force a fresh fetch (no eTag)
                     let retry = try await client.getCustomer(appUserId: appUserId, eTag: nil)
+                    try Task.checkCancellation()
                     guard case .fresh(let info, let retryETag, _, let retryVerified) = retry else {
                         throw AppActorError.serverError(
                             httpStatus: 304,

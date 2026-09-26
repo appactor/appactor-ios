@@ -45,6 +45,9 @@ final class BootstrapTests: XCTestCase {
         appactor.asaTask = nil
         appactor.foregroundTask?.cancel()
         appactor.foregroundTask = nil
+        // A completed startup starts it on UIKit platforms.
+        appactor.stalenessTimerTask?.cancel()
+        appactor.stalenessTimerTask = nil
         appactor.offeringsPrefetchTask?.cancel()
         appactor.offeringsPrefetchTask = nil
         appactor.paymentConfig = nil

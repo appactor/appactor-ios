@@ -64,7 +64,8 @@ extension AppActor {
         _ config: AppActorPaymentConfiguration,
         testClient: (any AppActorPaymentClientProtocol)? = nil
     ) async {
-        if paymentLifecycle == .configured, !isBootstrapComplete {
+        // Again after each wake: another waiter may have configured, and its startup be in flight.
+        while paymentLifecycle == .configured, !isBootstrapComplete {
             await waitForStartupToSettle()
             if Task.isCancelled { return }
         }
@@ -95,6 +96,8 @@ extension AppActor {
         }
 
         paymentLifecycle = .configured
+        // Its startup sets it; a startup that ended with an earlier session must not have left it set.
+        isBootstrapComplete = false
 
         // If payment options specify a log level, escalate (never downgrade).
         if let paymentLevel = config.options.logLevel, paymentLevel > AppActorLogger.level {

@@ -581,6 +581,11 @@ final class RemoteConfigManagerTests: XCTestCase {
         currentDate = currentDate.addingTimeInterval(360)
         let afterExpiry = try await manager.getRemoteConfigs(appUserId: defaultUserId, appVersion: "2.1.0", country: "TR")
         XCTAssertEqual(afterExpiry["audience"]?.stringValue, "premium")
+
+        // Each offline call made one request, the probe; the copy came from disk, not a second cycle.
+        XCTAssertEqual(client.getRemoteConfigsCalls.count, 4)
+        XCTAssertNil(client.getRemoteConfigsCalls[2].appUserId)
+        XCTAssertNil(client.getRemoteConfigsCalls[3].appUserId)
     }
 
     func testPublicModeDoesNotFetchUserSpecificRemoteConfig() async throws {

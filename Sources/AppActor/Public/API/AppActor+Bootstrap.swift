@@ -1,5 +1,8 @@
 import Foundation
 import StoreKit
+#if canImport(UIKit) && !os(watchOS)
+import UIKit
+#endif
 
 // MARK: - Bootstrap & Startup Sequence
 
@@ -12,6 +15,9 @@ extension AppActor {
     func runStartupSequence() async {
         // Every exit settles it: a completed bootstrap, a revert, or a reset() that took over.
         defer { settleStartup() }
+        // reset(), and a configure() after it, can run while this awaits. The startup of a session
+        // that ended then leaves the next one alone: it neither reverts it nor completes it.
+        let session = sessionGeneration
         let sequenceStart = CFAbsoluteTimeGetCurrent()
         let verboseBootstrap = (paymentConfig?.options.logLevel ?? AppActorLogger.level) >= .verbose
         let watcher = transactionWatcher
@@ -31,7 +37,7 @@ extension AppActor {
         if let watcher {
             let t0 = CFAbsoluteTimeGetCurrent()
             guard !Task.isCancelled else {
-                await revertLifecycleIfCancelled()
+                await revertLifecycleIfCancelled(session: session)
                 return
             }
             await watcher.start()
@@ -51,7 +57,7 @@ extension AppActor {
         }
 
         guard !Task.isCancelled else {
-            await revertLifecycleIfCancelled()
+            await revertLifecycleIfCancelled(session: session)
             return
         }
 
@@ -70,16 +76,19 @@ extension AppActor {
 
         // If bootstrap was cancelled mid-way, revert lifecycle so configure() can be retried.
         guard !Task.isCancelled else {
-            await revertLifecycleIfCancelled()
+            await revertLifecycleIfCancelled(session: session)
             return
         }
+        guard isSessionCurrent(session) else { return }
 
         self.isBootstrapComplete = true
         settleStartup()
         #if canImport(UIKit) && !os(watchOS)
         // The foreground observer starts it too, but at a cold launch into the foreground its
         // notification comes before bootstrap completes (or before configure() registered it).
-        if paymentLifecycle == .configured, stalenessTimerTask == nil {
+        // Not in the background: the background observer that stops it may have fired already,
+        // before there was a timer, and a background launch gets it on its first foreground.
+        if stalenessTimerTask == nil, UIApplication.shared.applicationState != .background {
             startStalenessTimer()
         }
         #endif
@@ -233,29 +242,41 @@ extension AppActor {
 
     /// Reverts lifecycle to `.idle` when startup is cancelled before completion.
     /// This ensures `configure()` can be called again without needing `reset()`.
-    /// Only reverts if still in `.configured` state (avoids conflicting with `reset()`
-    /// which sets `.resetting` before cancellation propagates).
+    /// Only reverts while `session` is still current (avoids conflicting with `reset()`,
+    /// which sets `.resetting` before cancellation propagates, and with the session after it).
     ///
     /// Stops the transaction watcher and payment processor to prevent orphan actors
     /// from running in the background after a cancelled bootstrap.
-    private func revertLifecycleIfCancelled() async {
-        guard paymentLifecycle == .configured else { return }
-        offeringsPrefetchTask?.cancel()
+    private func revertLifecycleIfCancelled(session: UInt64) async {
+        guard isSessionCurrent(session) else { return }
+        // Captured: reset() and a configure() after it can run during the awaits below, and the
+        // next session's watcher, processor and prefetch must not be the ones stopped.
+        let prefetch = offeringsPrefetchTask
+        let offeringsManager = self.offeringsManager
+        let transactionWatcher = self.transactionWatcher
+        let paymentProcessor = self.paymentProcessor
+        let intentWatcher = purchaseIntentWatcher
+        prefetch?.cancel()
         // The prefetch waits on the manager's shared network task, which its cancel doesn't reach.
         await offeringsManager?.cancelInFlight()
-        await offeringsPrefetchTask?.value
-        offeringsPrefetchTask = nil
+        await prefetch?.value
         await transactionWatcher?.stop()
         await paymentProcessor?.stop()
-        transactionWatcher = nil
-        paymentProcessor = nil
         if #available(iOS 16.4, macOS 14.4, tvOS 16.4, watchOS 9.4, *) {
-            if let watcher = purchaseIntentWatcher as? AppActorPurchaseIntentWatcher {
+            if let watcher = intentWatcher as? AppActorPurchaseIntentWatcher {
                 await watcher.stop()
             }
         }
+        guard isSessionCurrent(session) else { return }
+        offeringsPrefetchTask = nil
+        self.transactionWatcher = nil
+        self.paymentProcessor = nil
         purchaseIntentWatcher = nil
         pendingPurchaseIntents.removeAll()
+        // The session ends here, as after reset(): the next configure() may be another user's,
+        // and must not find this one's customer info or remote config published.
+        customerInfo = .empty
+        paymentRemoteConfigs = nil
         isBootstrapComplete = false
         paymentLifecycle = .idle
         Log.sdk.warn("Startup cancelled before bootstrap completed — reverted to idle.")

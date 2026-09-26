@@ -85,7 +85,9 @@ extension KeyedDecodingContainer {
     /// value becomes the string Android's plugin hands the wrappers (OfferingsSurrogate.kt,
     /// `v?.toString() ?: ""`): null → "" with the key kept, a string as is, a bool as
     /// "true"/"false", an integer as "20" (never "20.0"), any other number as a Double, and an
-    /// array or object as Kotlin prints a collection ("[a, 1]", "{k=v}").
+    /// array or object as Kotlin prints a collection ("[a, 1]", "{k=v}"). Two edges differ: an
+    /// object's keys come in the decoder's order, not the document's, and a number beyond Int64
+    /// or a Double outside 10^-3..10^7 prints as Swift writes it ("1e+20", Kotlin "1.0E20").
     func decodeMetadataIfPresent(forKey key: Key) throws -> [String: String]? {
         guard contains(key), try !decodeNil(forKey: key) else { return nil }
         let values = try nestedContainer(keyedBy: AppActorMetadataKey.self, forKey: key)

@@ -381,6 +381,9 @@ actor AppActorOfferingsManager {
     }
 
     private func fetchNetworkStageCoalesced(generation: UInt64) async throws -> NetworkStagePayload {
+        // A cancelled caller (a prefetch cancelled before it ran) neither starts nor waits on the
+        // shared task: nothing would cancel one it started, and whoever cancelled it would wait.
+        try Task.checkCancellation()
         if let existing = networkStageTask {
             return try await existing.value
         }
