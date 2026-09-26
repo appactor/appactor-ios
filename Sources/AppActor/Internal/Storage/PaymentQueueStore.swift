@@ -435,7 +435,8 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
 
     // MARK: - Default Path
 
-    private static var defaultDirectory: URL {
+    /// Application Support/appactor, where the SDK keeps its protected files.
+    static var defaultDirectory: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
         return appSupport.appendingPathComponent("appactor", isDirectory: true)
     }

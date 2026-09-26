@@ -16,6 +16,14 @@ final class ProtectedDataTests: XCTestCase {
     }
 
     #if canImport(UIKit) && !os(watchOS)
+    func testRecordedProbeReadsBackAsAvailable() {
+        AppActorProtectedData.recordFirstUnlockProbe()
+
+        let probe = AppActorAtomicJSONQueueStore.defaultDirectory.appendingPathComponent("first-unlock-probe")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: probe.path))
+        XCTAssertTrue(AppActorProtectedData.isAvailable())
+    }
+
     func testWaitResumesWhenProtectedDataBecomesAvailable() async {
         let isAvailable = AppActorProtectedData.isAvailable
         defer { AppActorProtectedData.isAvailable = isAvailable }

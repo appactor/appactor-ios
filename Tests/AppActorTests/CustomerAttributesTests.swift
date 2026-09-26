@@ -393,6 +393,29 @@ final class CustomerAttributesTests: XCTestCase {
         XCTAssertNotNil(storage.currentAppUserId)
     }
 
+    func testRejectedAttributionRollsBackToTheLastDeliveredOne() async throws {
+        let invalid = AppActorError.serverError(httpStatus: 400, code: "VALIDATION_FAILED", message: nil, details: nil, requestId: nil)
+        let rejectingClient = MockPaymentClient()
+        rejectingClient.patchAttributionHandler = { _, request in
+            if request.attribution.keyword == "bad" { throw invalid }
+            return AppActorMutationResult(requestId: nil)
+        }
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage(), client: rejectingClient)
+        let delivered = manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(network: "facebook"))
+        try manager.enqueueAttribution(appUserId: "user_1", attribution: delivered)
+        try await manager.flush(appUserId: "user_1")
+        let rejected = manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(keyword: "bad"))
+        try manager.enqueueAttribution(appUserId: "user_1", attribution: rejected)
+        try await manager.flush(appUserId: "user_1")
+
+        let next = manager.mergeCustomAttribution(appUserId: "user_1", patch: AppActorAttribution(campaign: "launch"))
+
+        // The server replaces the whole attribution, so the delivered network must still be sent.
+        XCTAssertEqual(next.network, "facebook")
+        XCTAssertNil(next.keyword)
+        XCTAssertEqual(next.campaign, "launch")
+    }
+
     func testSingleRejectedKeyIsDropped() async throws {
         let invalid = AppActorError.serverError(httpStatus: 400, code: "VALIDATION_FAILED", message: nil, details: nil, requestId: nil)
         let rejectingClient = MockPaymentClient()

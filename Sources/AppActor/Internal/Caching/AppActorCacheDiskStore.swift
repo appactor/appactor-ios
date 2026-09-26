@@ -85,53 +85,49 @@ actor AppActorCacheDiskStore {
     }
 
     func clear(prefix: String) {
-        let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-        for file in files where file.pathExtension == "json" && file.lastPathComponent.hasPrefix(prefix) {
-            try? fm.removeItem(at: file)
-        }
+        removeEntries(keyPrefixes: [prefix])
     }
 
     func clearAll() {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Removes all cache files whose verification result resolved to `.failed`.
-    /// Keeps `.verified` and `.notRequested` entries intact.
+    /// Removes all cache files whose verification result resolved to `.failed`, and any file
+    /// that can't be read or decoded. Keeps `.verified` and `.notRequested` entries intact.
     /// Used for hygiene cleanup at bootstrap when verification mode is enabled.
     func clearAllUnverified() {
-        let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-        for file in files where file.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: file),
-                  let entry = try? decoder.decode(AppActorCacheEntry.self, from: data) else {
-                // Corrupt or undecodable — remove
-                try? fm.removeItem(at: file)
-                continue
-            }
-            if entry.resolvedVerification == .failed {
-                try? fm.removeItem(at: file)
-            }
-        }
+        removeEntries { entry in (entry?.resolvedVerification ?? .failed) == .failed }
     }
 
     /// Removes offerings, remote-config and offline-catalog entries that don't hold a verified
     /// response. Earlier SDK versions accepted unsigned responses on these salt-signed routes,
     /// so such an entry may carry a forged body.
     func clearUnverifiedSaltRouteEntries() {
-        let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-        let prefixes = [
+        removeEntries(keyPrefixes: [
             AppActorCacheResource.offerings.cacheKey,
             AppActorCacheResource.offlineProductCatalog.cacheKey,
             AppActorCacheResource.remoteConfigsKeyPrefix
-        ]
-        for file in files where file.pathExtension == "json"
-            && prefixes.contains(where: { file.lastPathComponent.hasPrefix($0) }) {
-            let entry = (try? Data(contentsOf: file)).flatMap { try? decoder.decode(AppActorCacheEntry.self, from: $0) }
-            if entry?.resolvedVerification.isVerified != true {
-                try? fm.removeItem(at: file)
+        ]) { entry in entry?.resolvedVerification.isVerified != true }
+    }
+
+    /// Removes the cache files whose key starts with one of `keyPrefixes` (every file when nil)
+    /// and that `shouldRemove` picks. `shouldRemove` gets nil for a file that can't be read or
+    /// decoded; without it, every matching file is removed unread.
+    private func removeEntries(
+        keyPrefixes: [String]? = nil,
+        where shouldRemove: ((AppActorCacheEntry?) -> Bool)? = nil
+    ) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        for file in files where file.pathExtension == "json" {
+            if let keyPrefixes, !keyPrefixes.contains(where: { file.lastPathComponent.hasPrefix($0) }) {
+                continue
             }
+            if let shouldRemove {
+                let entry = (try? Data(contentsOf: file)).flatMap { try? decoder.decode(AppActorCacheEntry.self, from: $0) }
+                guard shouldRemove(entry) else { continue }
+            }
+            try? fm.removeItem(at: file)
         }
     }
 

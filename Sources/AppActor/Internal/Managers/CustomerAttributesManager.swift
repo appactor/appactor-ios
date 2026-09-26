@@ -345,9 +345,10 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
         return batches
     }
 
-    /// Removes a delivered or rejected attribution from the queue. A rejected one is also dropped
-    /// as the merge base of the attribution helpers, which would otherwise send it again with
-    /// every later update.
+    /// Removes a delivered or rejected attribution from the queue. The server replaces the whole
+    /// attribution on every PATCH, so the helpers' merge base must stay what it last accepted: a
+    /// rejected attribution is rolled back to that, instead of being sent again with every later
+    /// update or dropped along with the fields already delivered.
     private func removeFlushedAttribution(
         appUserId: String,
         attribution: AppActorAttribution,
@@ -360,9 +361,13 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
                 }
                 state.update(bucket, for: appUserId)
             }
-            if rejected, customAttributionSnapshots[appUserId] == attribution || state.customAttributionSnapshots[appUserId] == attribution {
-                customAttributionSnapshots.removeValue(forKey: appUserId)
-                state.customAttributionSnapshots.removeValue(forKey: appUserId)
+            if !rejected {
+                state.deliveredAttributions[appUserId] = attribution
+            } else if customAttributionSnapshots[appUserId] == attribution
+                        || state.customAttributionSnapshots[appUserId] == attribution {
+                let delivered = state.deliveredAttributions[appUserId]
+                customAttributionSnapshots[appUserId] = delivered
+                state.customAttributionSnapshots[appUserId] = delivered
             }
         }
     }
@@ -452,9 +457,17 @@ extension AppActorCustomerAttributesManager {
     struct PendingState: Codable, Sendable, Equatable {
         var buckets: [String: PendingBucket] = [:]
         var customAttributionSnapshots: [String: AppActorAttribution] = [:]
+        /// The attribution the server last accepted per user; queues saved before it existed
+        /// decode without it.
+        private var lastDeliveredAttributions: [String: AppActorAttribution]?
+
+        var deliveredAttributions: [String: AppActorAttribution] {
+            get { lastDeliveredAttributions ?? [:] }
+            set { lastDeliveredAttributions = newValue.isEmpty ? nil : newValue }
+        }
 
         var isEmpty: Bool {
-            buckets.isEmpty && customAttributionSnapshots.isEmpty
+            buckets.isEmpty && customAttributionSnapshots.isEmpty && deliveredAttributions.isEmpty
         }
 
         mutating func update(_ bucket: PendingBucket, for appUserId: String) {

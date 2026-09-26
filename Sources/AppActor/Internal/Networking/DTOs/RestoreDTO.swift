@@ -58,8 +58,8 @@ struct AppActorRestoreResponseData: Decodable, Sendable {
 
 /// Server outcome for one transaction of a bulk restore.
 ///
-/// Only `restored` and `noop` mean the server holds the transaction. `conflict` and
-/// `skipped_invalid` come back in a 2xx too, but nothing was recorded for them.
+/// Only `restored` and `noop` mean the restore settled the transaction. `conflict` (not
+/// written, or kept with another owner) and `skipped_invalid` come back in a 2xx too.
 struct AppActorRestoreItemDTO: Decodable, Sendable {
     let transactionId: String
     let status: String

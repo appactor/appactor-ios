@@ -253,10 +253,11 @@ public final class AppActor: ObservableObject {
             // Step 4: POST bulk restore
             let result = try await client.postRestore(request)
 
-            // Step 5: Finish only the transactions the server recorded. A `conflict` or
-            // `skipped_invalid` item comes back in the same 2xx, but nothing was written for
-            // it. It is not finished, ledgered or dropped from the queue, so an unfinished one
-            // is posted again by the receipt queue or the next launch sweep.
+            // Step 5: Finish only the transactions the server restored or already held for
+            // this user. A `conflict` (not written, or kept with another owner) or
+            // `skipped_invalid` item comes back in the same 2xx. It is not finished, ledgered
+            // or dropped from the queue, so an unfinished one is posted again by the receipt
+            // queue or the next launch sweep.
             let recorded = toSend.filter { result.recordedTransactionIds.contains(String($0.transaction.id)) }
             if recorded.count < toSend.count {
                 Log.sdk.warn("Restore: server did not record \(toSend.count - recorded.count) of \(toSend.count) transaction(s); leaving them unfinished")

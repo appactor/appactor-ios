@@ -15,30 +15,40 @@ enum AppActorProtectedData {
     /// Replaced in tests.
     static var isAvailable: () -> Bool = {
         #if canImport(UIKit) && !os(watchOS)
-        // The probe goes first so it gets written while the data is readable.
-        firstUnlockProbeIsReadable() || UIApplication.shared.isProtectedDataAvailable
+        // Before the probe has been written, only isProtectedDataAvailable can tell, and it
+        // is also false on a device that is merely locked again.
+        firstUnlockProbeIsReadable() ?? UIApplication.shared.isProtectedDataAvailable
         #else
         true
         #endif
     }
 
+    /// Writes the probe file if it is missing. Called once the stored identity is known to be
+    /// readable, so the probe is in place before the next launch that comes before the first
+    /// unlock after a reboot.
+    static func recordFirstUnlockProbe() {
+        #if canImport(UIKit) && !os(watchOS)
+        guard !FileManager.default.fileExists(atPath: probeURL.path) else { return }
+        try? FileManager.default.createDirectory(
+            at: probeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? Data([1]).write(to: probeURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        #endif
+    }
+
     #if canImport(UIKit) && !os(watchOS)
-    /// Reads a small file with the same protection class as UserDefaults. Apple documents that
-    /// a `completeUntilFirstUserAuthentication` file can't be accessed until the user unlocks
-    /// the device for the first time after boot, and stays accessible while it is locked again.
-    /// `isProtectedDataAvailable` alone is false whenever the device is locked.
-    private static func firstUnlockProbeIsReadable() -> Bool {
-        guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("appactor", isDirectory: true) else { return true }
-        let probe = directory.appendingPathComponent("first-unlock-probe")
-        if FileManager.default.fileExists(atPath: probe.path) {
-            return (try? Data(contentsOf: probe)) != nil
-        }
-        // Not written yet. If it can't be written either, this can't tell, so it doesn't
-        // hold anything back.
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? Data([1]).write(to: probe, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        return true
+    /// A small file with the same protection class as UserDefaults. Apple documents that a
+    /// `completeUntilFirstUserAuthentication` file can't be accessed until the user unlocks the
+    /// device for the first time after boot, and stays accessible while it is locked again.
+    private static var probeURL: URL {
+        AppActorAtomicJSONQueueStore.defaultDirectory.appendingPathComponent("first-unlock-probe")
+    }
+
+    /// Whether the probe can be read, or nil when it hasn't been written yet.
+    private static func firstUnlockProbeIsReadable() -> Bool? {
+        guard FileManager.default.fileExists(atPath: probeURL.path) else { return nil }
+        return (try? Data(contentsOf: probeURL)) != nil
     }
     #endif
 

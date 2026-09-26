@@ -40,6 +40,7 @@ extension AppActor {
         if AppActorUserDefaultsPaymentStorage().currentAppUserId == nil {
             await AppActorProtectedData.waitUntilAvailable()
         }
+        AppActorProtectedData.recordFirstUnlockProbe()
         guard shared.configureInternal(config) else { return }
         await shared.runStartupSequence()
     }
