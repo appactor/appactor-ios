@@ -249,7 +249,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         if let appUserId { queryItems.append(URLQueryItem(name: "app_user_id", value: appUserId)) }
         if let appVersion { queryItems.append(URLQueryItem(name: "app_version", value: appVersion)) }
         if let country { queryItems.append(URLQueryItem(name: "country", value: country)) }
-        if !queryItems.isEmpty { components.queryItems = queryItems }
+        if !queryItems.isEmpty { setQuery(queryItems, on: &components) }
 
         guard let url = components.url else {
             throw AppActorError.networkError(URLError(.badURL))
@@ -315,7 +315,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         ]
         if let appVersion { queryItems.append(URLQueryItem(name: "app_version", value: appVersion)) }
         if let country { queryItems.append(URLQueryItem(name: "country", value: country)) }
-        components.queryItems = queryItems
+        setQuery(queryItems, on: &components)
 
         guard let url = components.url else {
             throw AppActorError.networkError(URLError(.badURL))
@@ -427,7 +427,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 throw AppActorError.decodingError(error, requestId: requestId)
             }
             let customerInfo = AppActorCustomerInfo(
-                dto: envelope.data.user,
+                dto: envelope.data.customer,
                 appUserId: request.appUserId,
                 requestDate: nil,
                 requestId: envelope.requestId
@@ -647,6 +647,14 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             throw AppActorError.networkError(URLError(.badURL))
         }
         return url
+    }
+
+    /// Sets `items` as the query. URLQueryItem leaves '+' raw, and the server's query parser
+    /// reads a raw '+' as a space, so "ana+ios@x.com" would reach it as another user. It goes
+    /// out as %2B, as OkHttp sends it on Android. The signed target is read back from this URL.
+    private func setQuery(_ items: [URLQueryItem], on components: inout URLComponents) {
+        components.queryItems = items
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
     }
 
     private func encodedPathSegment(_ value: String) -> String {

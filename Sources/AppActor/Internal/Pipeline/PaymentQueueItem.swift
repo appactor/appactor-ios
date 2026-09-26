@@ -172,6 +172,19 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         "apple:\(transactionId)"
     }
 
+    /// The posted-ledger key for what this item would tell the server.
+    ///
+    /// `key` for the transaction itself. A JWS with a `revocationDate` (a refund or a Family
+    /// Sharing revoke) gets `revocationLedgerKey`: StoreKit re-delivers an already-posted
+    /// transaction that way, and the server processes the revocation only from the receipt.
+    /// Read from the JWS that gets posted, which `mergeFrom` replaces with the incoming one.
+    var ledgerKey: String {
+        let revocationDate = AppActorASATransactionSupport.decodeJWSPayload(jws)?["revocationDate"]
+        return revocationDate is NSNumber ? revocationLedgerKey : key
+    }
+
+    var revocationLedgerKey: String { "\(key):revoked" }
+
     // MARK: - Merge
 
     /// Merges an incoming item (e.g. from sweepUnfinished re-enqueue) into this existing item.

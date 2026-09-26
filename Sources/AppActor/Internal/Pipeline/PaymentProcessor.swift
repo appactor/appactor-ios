@@ -55,7 +55,7 @@ struct AppActorReceiptCustomerUpdateContext: Sendable, Equatable {
 /// 1. `claimReady()` → phase=.posting + claimedAt persisted to disk
 /// 2. POST to backend
 /// 3. On response: transition phase + persist
-/// 4. Crash recovery: stale claims (>2 min) reset to `.needsPost`
+/// 4. Crash recovery: claims read back from disk load as `.needsPost`; in-process claims older than 2 min are reclaimed
 actor AppActorPaymentProcessor {
 
     private let store: AppActorPaymentQueueStoreProtocol
@@ -111,6 +111,10 @@ actor AppActorPaymentProcessor {
     /// Includes receipt context so the caller can verify identity and deferred-purchase state.
     private var onCustomerInfoUpdated: (@Sendable (AppActorCustomerInfo, AppActorReceiptCustomerUpdateContext) -> Void)?
 
+    /// Callback for a `REVOKED_TRANSACTION` answer: the server has processed a refund or revoke,
+    /// and that answer carries no customer info, so the owner fetches it.
+    private var onRevokedTransaction: (@Sendable () -> Void)?
+
     private struct CompletedReceiptResult {
         let result: AppActorReceiptPostResult
         let recordedAt: Date
@@ -163,11 +167,11 @@ actor AppActorPaymentProcessor {
     /// Enqueues a payment queue item (fire-and-forget). Used by background callers
     /// (Transaction.updates, restore, sweep).
     ///
-    /// Skips enqueue if the key is already in the posted ledger (duplicate prevention).
+    /// Skips enqueue if the item is already posted (duplicate prevention, see `isAlreadyPosted`).
     /// Finishes the transaction directly when skipping to prevent it from reappearing
     /// in `Transaction.unfinished` on subsequent boots.
     func enqueue(item: AppActorPaymentQueueItem, transaction: Transaction) async {
-        if store.isPosted(key: item.key) {
+        if isAlreadyPosted(item) {
             Log.receipts.debug("[key=\(item.key)] Skipped enqueue — already in posted ledger")
             emitEvent(.duplicateSkipped(key: item.key), item: item)
             await transaction.finish()
@@ -188,7 +192,7 @@ actor AppActorPaymentProcessor {
     /// Also checks the posted ledger — the same transaction may have been enqueued
     /// and posted by `Transaction.updates` before the purchase flow runs.
     func enqueueAndAwait(item: AppActorPaymentQueueItem, transaction: Transaction) async -> AppActorReceiptPostResult {
-        if store.isPosted(key: item.key) {
+        if isAlreadyPosted(item) {
             Log.receipts.debug("[key=\(item.key)] Skipped enqueueAndAwait — already in posted ledger")
             emitEvent(.duplicateSkipped(key: item.key), item: item)
             await transaction.finish()
@@ -221,6 +225,12 @@ actor AppActorPaymentProcessor {
                 await self?.timeoutContinuation(key: key)
             }
         }
+    }
+
+    /// Whether the server already has what posting `item` would tell it: the transaction, or, for
+    /// a JWS with a revocationDate, the revocation (see `AppActorPaymentQueueItem.ledgerKey`).
+    func isAlreadyPosted(_ item: AppActorPaymentQueueItem) -> Bool {
+        store.isPosted(key: item.ledgerKey)
     }
 
     /// Moves receipts an older SDK queued under an app user ID the server rejects, and never
@@ -378,6 +388,11 @@ actor AppActorPaymentProcessor {
         self.onCustomerInfoUpdated = handler
     }
 
+    /// Sets the handler called when the server answers a receipt with `REVOKED_TRANSACTION`.
+    func setRevokedTransactionHandler(_ handler: (@Sendable () -> Void)?) {
+        self.onRevokedTransaction = handler
+    }
+
     /// Returns and clears the most recent terminal result for a receipt key.
     ///
     /// Internal so tests can validate the watcher/purchase reconciliation path.
@@ -436,7 +451,7 @@ actor AppActorPaymentProcessor {
             // Excludes .deadLettered items — those are intentionally kept in the store for diagnostics
             // even though they are also written to the posted ledger (to prevent re-enqueue on StoreKit re-delivery).
             let stalePosted = allItems.filter {
-                $0.phase != .needsFinish && $0.phase != .deadLettered && store.isPosted(key: $0.key)
+                $0.phase != .needsFinish && $0.phase != .deadLettered && isAlreadyPosted($0)
             }
             for item in stalePosted {
                 hasWork = true
@@ -506,7 +521,7 @@ actor AppActorPaymentProcessor {
                 // Mark as posted to prevent re-enqueue if StoreKit re-delivers
                 // this transaction after finish(). Decode mismatch = permanently
                 // unprocessable (server contract incompatible).
-                store.markPosted(key: item.key)
+                store.markPosted(key: item.ledgerKey)
                 updated.phase = .deadLettered
                 updated.lastError = "decode_mismatch (dead-lettered after \(updated.attemptCount) attempts)"
                 store.update(updated)
@@ -577,7 +592,7 @@ actor AppActorPaymentProcessor {
                     requestId: appError.requestId
                 )
                 rememberCompletedResult(key: item.key, result: rejectionResult)
-                store.markPosted(key: item.key)
+                store.markPosted(key: item.ledgerKey)
                 updated.phase = .deadLettered
                 updated.lastError = "permanent_client_error: \(error.localizedDescription)"
                 store.update(updated)
@@ -649,7 +664,7 @@ actor AppActorPaymentProcessor {
             if shouldFinish {
                 await markPostedFinishAndRemove(item)
             } else {
-                store.markPosted(key: item.key)
+                store.markPosted(key: item.ledgerKey)
                 transactionMap.removeValue(forKey: item.key)
                 store.remove(key: item.key)
             }
@@ -689,6 +704,9 @@ actor AppActorPaymentProcessor {
             Log.receipts.warn("Receipt rejected by server (code: \(errorCode ?? "unknown"), finish: \(shouldFinish))")
             emitEvent(.permanentlyRejected(transactionId: item.transactionId, errorCode: errorCode), item: item)
             resumeContinuation(key: item.key, result: rejectionResult)
+            if errorCode == "REVOKED_TRANSACTION" {
+                onRevokedTransaction?()
+            }
 
         default:
             // retryable_error or unknown status
@@ -741,6 +759,13 @@ actor AppActorPaymentProcessor {
     /// so the map will be populated for any transaction that needs finishing.
     private func finishTransaction(_ item: AppActorPaymentQueueItem) async {
         if let transaction = transactionMap.removeValue(forKey: item.key) {
+            // A revoked transaction is finished only once the server has its revocation. StoreKit
+            // can deliver the revocation while the purchase is being posted or waits to be
+            // finished; unfinished, the next sweep posts it.
+            guard transaction.revocationDate == nil || store.isPosted(key: item.revocationLedgerKey) else {
+                Log.receipts.info("[key=\(item.key)] Revocation not posted yet — left unfinished for the next sweep")
+                return
+            }
             await transaction.finish()
             Log.receipts.debug("[key=\(item.key)] Transaction \(item.transactionId) finished")
         } else {
@@ -764,7 +789,7 @@ actor AppActorPaymentProcessor {
         var updated = item
         updated.phase = .needsFinish
         updated.claimedAt = nil
-        store.markPostedAndUpdate(key: item.key, item: updated)
+        store.markPostedAndUpdate(key: item.ledgerKey, item: updated)
         await finishAndRemove(updated)
     }
 

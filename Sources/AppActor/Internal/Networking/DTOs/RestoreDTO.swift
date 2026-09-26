@@ -49,8 +49,11 @@ struct AppActorRestoreTransactionItem: Encodable, Sendable {
 // MARK: - Response
 
 /// `data` payload from `POST /v1/payment/restore/apple`.
+///
+/// `customer` is the full CustomerInfo view that `GET /v1/customers` returns. The response's
+/// `user` is a different, reduced view; the SDK does not read it.
 struct AppActorRestoreResponseData: Decodable, Sendable {
-    let user: AppActorCustomerDTO
+    let customer: AppActorCustomerDTO
     let restoredCount: Int
     let transferred: Bool
     let items: [AppActorRestoreItemDTO]

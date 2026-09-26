@@ -11,25 +11,6 @@ import XCTest
 @MainActor
 final class BootstrapLifecycleTests: XCTestCase {
 
-    private actor AsyncSignal {
-        private var didSignal = false
-        private var continuation: CheckedContinuation<Void, Never>?
-
-        func signal() {
-            guard !didSignal else { return }
-            didSignal = true
-            continuation?.resume()
-            continuation = nil
-        }
-
-        func wait() async {
-            guard !didSignal else { return }
-            await withCheckedContinuation { continuation in
-                self.continuation = continuation
-            }
-        }
-    }
-
     private var appactor: AppActor!
     private var mockClient: MockPaymentClient!
     private var storage: InMemoryPaymentStorage!

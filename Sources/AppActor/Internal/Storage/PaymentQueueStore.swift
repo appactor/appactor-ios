@@ -12,7 +12,7 @@ protocol AppActorPaymentQueueStoreProtocol: AnyObject, Sendable {
     func upsert(_ item: AppActorPaymentQueueItem)
 
     /// Claims items ready for POSTing:
-    /// - `.needsPost` items whose `nextRetryAt <= now`
+    /// - `.needsPost` items whose `nextRetryAt <= now` (claims read back from disk load as `.needsPost`)
     /// - Stale `.posting` items (claimedAt > 2 min ago)
     ///
     /// `.needsFinish` items are handled separately by the drain loop.
@@ -60,8 +60,8 @@ protocol AppActorPaymentQueueStoreProtocol: AnyObject, Sendable {
     /// Removes dead-lettered items older than 30 days. Returns the count of purged items.
     func purgeExpiredDeadLetters() -> Int
 
-    /// Atomically marks a key as posted AND updates the item in a single disk write.
-    /// Eliminates the crash window between separate `markPosted` and `update` calls.
+    /// Atomically marks `key` as posted AND updates `item` (stored under `item.key`) in a single
+    /// disk write. Eliminates the crash window between separate `markPosted` and `update` calls.
     func markPostedAndUpdate(key: String, item: AppActorPaymentQueueItem)
 }
 
@@ -264,7 +264,7 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         postedLedger = ledger
 
         var map = loadFromDisk()
-        map[key] = item
+        map[item.key] = item
         items = map
         writeToDisk(map)
     }
@@ -399,6 +399,15 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         if purgedCount > 0 {
             Log.storage.info("Purged \(purgedCount) dead-lettered payment queue item(s) older than 30 days")
             writeToDisk(map)
+        }
+
+        // A claim on disk was made by an earlier store, in practice an earlier process that died
+        // mid-POST: nothing will finish that POST, so the receipt is due now rather than once
+        // the claim goes stale, and the launch drain posts it. After reset() and configure() in
+        // one process the old POST may still be running; the server dedups by transaction.
+        for (key, item) in map where item.phase == .posting {
+            map[key]?.phase = .needsPost
+            map[key]?.claimedAt = nil
         }
 
         items = map

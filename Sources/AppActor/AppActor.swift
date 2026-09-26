@@ -585,6 +585,8 @@ private final class AppActorLockedBox<Value>: @unchecked Sendable {
 @MainActor
 final class AppActorPaymentContext {
     var lifecycle: AppActorPaymentLifecycle = .idle
+    /// Advances each time the lifecycle becomes `.configured` (see `sessionGeneration`).
+    var sessionGeneration: UInt64 = 0
     var config: AppActorPaymentConfiguration?
     var storage: (any AppActorPaymentStorage)?
     var client: (any AppActorPaymentClientProtocol)?

@@ -28,28 +28,46 @@ extension AppActor {
     /// - Throws: `AppActorError` if payment is not configured or network fails.
     @discardableResult
     public func getRemoteConfigs() async throws -> AppActorRemoteConfigs {
-        guard paymentLifecycle == .configured else {
-            throw AppActorError.notConfigured
-        }
-        guard let manager = remoteConfigManager else {
-            throw AppActorError.notConfigured
-        }
+        // A logIn, logOut or reset() can land while the fetch is in flight. The result is then
+        // the previous user's, entitlement-targeted values included: it is neither published nor
+        // returned, and the fetch runs again for whoever is current (or throws after a reset).
+        // The same runs again when a cache clear cancelled the fetch (identity switches and
+        // entitlement changes do that), unless the caller itself was cancelled.
+        for _ in 0..<Self.remoteConfigFetchAttempts {
+            guard paymentLifecycle == .configured, let manager = remoteConfigManager else {
+                throw AppActorError.notConfigured
+            }
 
-        let appUserId = paymentStorage?.currentAppUserId
-        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let country = Self.deviceCountryCode
+            let session = sessionGeneration
+            let appUserId = paymentStorage?.currentAppUserId
+            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            let country = Self.deviceCountryCode
 
-        let result = try await manager.getRemoteConfigs(
-            appUserId: appUserId,
-            appVersion: appVersion,
-            country: country
-        )
-        self.paymentRemoteConfigs = result
-        if let rid = await manager.requestId {
-            paymentStorage?.setLastRequestId(rid)
+            let result: AppActorRemoteConfigs
+            do {
+                result = try await manager.getRemoteConfigs(
+                    appUserId: appUserId,
+                    appVersion: appVersion,
+                    country: country
+                )
+            } catch is CancellationError where !Task.isCancelled {
+                continue
+            }
+            let requestId = await manager.requestId
+            guard isSessionCurrent(session), paymentStorage?.currentAppUserId == appUserId else { continue }
+
+            self.paymentRemoteConfigs = result
+            if let requestId {
+                paymentStorage?.setLastRequestId(requestId)
+            }
+            return result
         }
-        return result
+        throw CancellationError()
     }
+
+    /// One logIn can cancel a fetch up to four times (its clears, the switch, the entitlement
+    /// change); the bound only stops a pathological loop.
+    private static let remoteConfigFetchAttempts = 5
 
     // MARK: - Typed Accessors (nonisolated — safe to call from any context)
 

@@ -227,4 +227,52 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertEqual(context?.sdkVersion, "9.9.9")
     }
 
+    // MARK: - I-S3-2: a claim left by an earlier process
+
+    func test_givenClaimFromAnEarlierProcess_whenLoaded_thenDueAgainAtOnce() {
+        store.upsert(.fixture(key: "apple:claimed"))
+        XCTAssertEqual(store.claimReady(limit: 10, now: Date()).map(\.key), ["apple:claimed"])
+        XCTAssertTrue(store.claimReady(limit: 10, now: Date()).isEmpty, "a live claim in this store is not claimed twice")
+
+        // The process dies mid-POST and is relaunched well within the 2-minute stale window.
+        let relaunched = AppActorAtomicJSONQueueStore(directory: tempDir)
+        let item = relaunched.snapshot().first
+        XCTAssertEqual(item?.phase, .needsPost)
+        XCTAssertNil(item?.claimedAt)
+        XCTAssertEqual(relaunched.claimReady(limit: 10, now: Date()).map(\.key), ["apple:claimed"])
+    }
+
+    func test_givenClaimFromAnEarlierProcess_whenTheLaunchDrainRuns_thenPosted() async {
+        store.upsert(.fixture(key: "apple:claimed", appUserId: "guest"))
+        _ = store.claimReady(limit: 10, now: Date())
+
+        let client = MockPaymentClient()
+        let processor = AppActorPaymentProcessor(store: AppActorAtomicJSONQueueStore(directory: tempDir), client: client)
+        // The startup order: the rejected-ID migration first, then the bootstrap drain.
+        await processor.reassignUnpostedItemsWithRejectedAppUserId(to: "appactor-anon-new")
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.map(\.transactionId), ["apple:claimed"])
+        XCTAssertEqual(client.postReceiptCalls.first?.appUserId, "appactor-anon-new")
+        XCTAssertTrue(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().isEmpty)
+    }
+
+    // MARK: - I-G-1: a revocation's ledger key is not the item's key
+
+    func test_givenRevocationLedgerKey_whenMarkedPostedAndUpdated_thenItemStaysUnderItsOwnKey() {
+        store.upsert(.fixture(key: "apple:1"))
+        var finished = AppActorPaymentQueueItem.fixture(key: "apple:1")
+        finished.phase = .needsFinish
+
+        store.markPostedAndUpdate(key: "apple:1:revoked", item: finished)
+
+        XCTAssertEqual(store.snapshot().map(\.key), ["apple:1"])
+        XCTAssertEqual(store.snapshot().first?.phase, .needsFinish)
+        XCTAssertTrue(store.isPosted(key: "apple:1:revoked"))
+        XCTAssertFalse(store.isPosted(key: "apple:1"))
+        store.remove(key: "apple:1")
+        XCTAssertTrue(store.snapshot().isEmpty)
+        XCTAssertTrue(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().isEmpty)
+    }
+
 }

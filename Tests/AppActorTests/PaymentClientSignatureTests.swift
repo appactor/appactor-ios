@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import AppActor
@@ -263,7 +264,7 @@ final class PaymentClientSignatureTests: XCTestCase {
 
     func testRestoreReportsOnlyRecordedTransactions() async throws {
         let body = Data("""
-        {"data":{"user":{"entitlements":{},"subscriptions":{},"nonSubscriptions":{}},"restoredCount":1,"transferred":false,"hasFailures":true,"items":[
+        {"data":{"customer":{"entitlements":{},"subscriptions":{},"nonSubscriptions":{}},"restoredCount":1,"transferred":false,"hasFailures":true,"items":[
           {"transactionId":"1001","status":"restored","replayedCount":0,"didMutate":true,"userId":"u1"},
           {"transactionId":"1002","status":"noop","replayedCount":0,"didMutate":false,"userId":"u1"},
           {"transactionId":"1003","status":"conflict","replayedCount":0,"didMutate":false,"userId":"u1","errorCode":"OWNERSHIP_CONFLICT"},
@@ -296,6 +297,153 @@ final class PaymentClientSignatureTests: XCTestCase {
         let requests = PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests }
         XCTAssertNotNil(requests.first?.value(forHTTPHeaderField: "X-AppActor-Nonce"))
         XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "X-AppActor-Signature-Binding"), "request")
+    }
+
+    func testRestoreBuildsTheCustomerFromTheFullCustomerView() async throws {
+        // Both views as the server sends them: `user` has no isActive on subscriptions and no
+        // unsubscribeDetectedAt, periodType or isSandbox on entitlements.
+        let body = Data("""
+        {"data":{
+          "user":{"entitlements":{"pro":{"isActive":true,"productId":"pro_monthly"}},"subscriptions":{"pro_monthly":{"productId":"pro_monthly","expiresAt":"2099-01-01T00:00:00.000Z"}},"nonSubscriptions":{}},
+          "customer":{"entitlements":{"pro":{"isActive":true,"productId":"pro_monthly","periodType":"trial","isSandbox":true,"unsubscribeDetectedAt":"2026-09-20T00:00:00.000Z"}},"subscriptions":{"pro_monthly":{"productId":"pro_monthly","isActive":true,"expiresAt":"2099-01-01T00:00:00.000Z","periodType":"trial","isSandbox":true,"unsubscribeDetectedAt":"2026-09-20T00:00:00.000Z"}},"nonSubscriptions":{},"firstSeen":"2026-01-01T00:00:00.000Z","lastSeen":"2026-09-26T00:00:00.000Z"},
+          "restoredCount":1,"transferred":false,"hasFailures":false,
+          "items":[{"transactionId":"1001","status":"restored","replayedCount":0,"didMutate":true,"userId":"u1"}]
+        },"requestId":"req_restore_views"}
+        """.utf8)
+        PaymentClientURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!, body)
+        }
+
+        let result = try await makeClient(requireSignatures: false).postRestore(
+            AppActorRestoreRequest(
+                appUserId: "user_restore",
+                sourceIntent: "restore",
+                transactions: [AppActorRestoreTransactionItem(transactionId: "1001", jwsRepresentation: "jws_1001")],
+                signedAppTransactionInfo: nil
+            )
+        )
+
+        let info = result.customerInfo
+        XCTAssertEqual(info.subscriptions["pro_monthly"]?.isActive, true)
+        XCTAssertEqual(info.subscriptions["pro_monthly"]?.periodType, .trial)
+        XCTAssertEqual(info.subscriptions["pro_monthly"]?.isSandbox, true)
+        XCTAssertEqual(info.entitlements["pro"]?.isActive, true)
+        XCTAssertEqual(info.entitlements["pro"]?.willRenew, false, "auto-renew was turned off")
+        XCTAssertEqual(info.entitlements["pro"]?.periodType, .trial)
+        XCTAssertEqual(info.entitlements["pro"]?.isSandbox, true)
+        XCTAssertEqual(info.firstSeen, "2026-01-01T00:00:00.000Z")
+        XCTAssertEqual(info.lastSeen, "2026-09-26T00:00:00.000Z")
+    }
+
+    // MARK: - '+' in query values (I-S2-4)
+
+    /// What the server reads for `name`: Hono splits on '&' and '=', turns '+' into a space,
+    /// then percent-decodes.
+    private func serverDecodedQueryValue(_ name: String, in request: URLRequest) -> String? {
+        for pair in (sentQuery(request) ?? "").split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.first == name else { continue }
+            return (parts.count > 1 ? parts[1] : "").replacingOccurrences(of: "+", with: " ").removingPercentEncoding
+        }
+        return nil
+    }
+
+    /// Ends with "ana+ios@x.com": the remote-config test checks the exact bytes of the last request.
+    private static let queryEdgeCaseAppUserIds = ["+905551234567", "a&b=c", "100%", "two words", "a+b&c=d%e f", "ana+ios@x.com"]
+
+    private func sentQuery(_ request: URLRequest) -> String? {
+        URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.percentEncodedQuery
+    }
+
+    func testRemoteConfigQuerySendsPlusSoTheServerReadsTheSameAppUserId() async throws {
+        for appUserId in Self.queryEdgeCaseAppUserIds {
+            PaymentClientURLProtocol.reset()
+            PaymentClientURLProtocol.handler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+                return (response, Data(#"{"data":[],"requestId":"req_rc"}"#.utf8))
+            }
+            _ = try await makeClient(requireSignatures: false).getRemoteConfigs(
+                appUserId: appUserId, appVersion: "1.0+42", country: "TR", eTag: nil
+            )
+            let request = try XCTUnwrap(PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests.first })
+            let query = try XCTUnwrap(sentQuery(request))
+            XCTAssertFalse(query.contains("+"), "\(appUserId): a raw '+' reads as a space on the server")
+            XCTAssertEqual(serverDecodedQueryValue("app_user_id", in: request), appUserId)
+            XCTAssertEqual(serverDecodedQueryValue("app_version", in: request), "1.0+42")
+        }
+        // The last round sent "ana+ios@x.com".
+        let request = try XCTUnwrap(PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests.first })
+        XCTAssertEqual(sentQuery(request), "app_user_id=ana%2Bios@x.com&app_version=1.0%2B42&country=TR")
+    }
+
+    func testExperimentQuerySendsPlusSoTheServerReadsTheSameAppUserId() async throws {
+        for appUserId in Self.queryEdgeCaseAppUserIds {
+            PaymentClientURLProtocol.reset()
+            PaymentClientURLProtocol.handler = { request in
+                (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: [:])!, Data())
+            }
+            _ = try? await makeClient().postExperimentAssignment(
+                experimentKey: "paywall", appUserId: appUserId, appVersion: nil, country: nil
+            )
+            let request = try XCTUnwrap(PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests.first })
+            XCTAssertFalse(sentQuery(request)?.contains("+") ?? true, appUserId)
+            XCTAssertEqual(serverDecodedQueryValue("app_user_id", in: request), appUserId)
+        }
+    }
+
+    /// The nonce binding (#599) signs the request target as it arrived. The SDK checks against
+    /// the target it reads back from the URL it sent, so the two must be the same bytes.
+    func testSignatureBindingCoversTheEncodedPlusAsSent() async throws {
+        PaymentClientURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "HTTP/1.1", headerFields: [:])!, Data())
+        }
+        _ = try? await makeClient().postExperimentAssignment(
+            experimentKey: "paywall", appUserId: "ana+ios@x.com", appVersion: nil, country: nil
+        )
+        let request = try XCTUnwrap(PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests.first })
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-AppActor-Signature-Binding"), "request")
+        let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: "X-AppActor-Nonce"))
+
+        // What the server reads back from the request line: path + '?' + raw query.
+        let absolute = try XCTUnwrap(request.url?.absoluteString)
+        let pathStart = try XCTUnwrap(absolute.range(of: "/v1/")).lowerBound
+        let serverTarget = String(absolute[pathStart...])
+        XCTAssertEqual(serverTarget, "/v1/experiments/paywall/assignments?app_user_id=ana%2Bios@x.com")
+        let sdkTarget = AppActorPaymentClient.signatureRequestTarget(for: request, fallbackPath: "/")
+        XCTAssertEqual(sdkTarget, serverTarget)
+
+        let key = Curve25519.Signing.PrivateKey()
+        let body = Data(#"{"data":{"inExperiment":false}}"#.utf8)
+        let timestamp = String(Int(Date().timeIntervalSince1970))
+        func response(signedFor target: String) throws -> HTTPURLResponse {
+            let binding = ResponseSignatureVerifier.requestBinding(method: "POST", target: target, body: nil)
+            let payload = "\(nonce)\n\(timestamp)\n\(binding)\n\(String(decoding: body, as: UTF8.self))"
+            let signature = try key.signature(for: Data(payload.utf8)).base64EncodedString()
+            return HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "X-AppActor-Request-Nonce": nonce,
+                    "X-AppActor-Signature": signature,
+                    "X-AppActor-Signature-Timestamp": timestamp,
+                ]
+            )!
+        }
+        func verify(_ response: HTTPURLResponse) -> ResponseSignatureVerifier.VerificationResult {
+            ResponseSignatureVerifier.verify(
+                response: response, body: body, sentNonce: nonce, apiKey: "", requestPath: sdkTarget,
+                method: "POST", requestBody: nil,
+                v1Key: key.publicKey, rootKey: Curve25519.Signing.PrivateKey().publicKey,
+                now: Date().timeIntervalSince1970
+            )
+        }
+        XCTAssertEqual(verify(try response(signedFor: serverTarget)), .success)
+        XCTAssertEqual(
+            verify(try response(signedFor: "/v1/experiments/paywall/assignments?app_user_id=ana+ios@x.com")),
+            .signatureInvalid,
+            "the target with a raw '+' is another request"
+        )
     }
 
     func testSignatureTargetEncodesApostrophesInTheQueryLikeTheServer() {

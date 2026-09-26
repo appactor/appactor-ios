@@ -615,6 +615,97 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(store.allItems().count, 0, "Should be removed after permanent_error")
     }
 
+    // MARK: - 8b. Revocation of an already-posted transaction (I-G-1)
+
+    private func makeRevokedItem() -> AppActorPaymentQueueItem {
+        var item = makeItem(source: .transactionUpdates)
+        item.jws = StoreKitJWSFixture.transaction(revoked: true)
+        return item
+    }
+
+    func testLedgerKeySeparatesTheRevocationFromThePurchase() {
+        var item = makeItem()
+        XCTAssertEqual(item.ledgerKey, "apple:12345", "an undecodable JWS is the purchase")
+        item.jws = StoreKitJWSFixture.transaction(revoked: false)
+        XCTAssertEqual(item.ledgerKey, "apple:12345")
+        item.jws = StoreKitJWSFixture.transaction(revoked: true)
+        XCTAssertEqual(item.ledgerKey, "apple:12345:revoked")
+    }
+
+    func testRevokedRedeliveryOfAPostedTransactionIsNotAlreadyPosted() async {
+        store.markPosted(key: "apple:12345")
+
+        let isPurchasePosted = await processor.isAlreadyPosted(makeItem())
+        let isRevocationPosted = await processor.isAlreadyPosted(makeRevokedItem())
+        XCTAssertTrue(isPurchasePosted)
+        XCTAssertFalse(isRevocationPosted, "enqueue must let the revocation through to the server")
+
+        store.markPosted(key: "apple:12345:revoked")
+        let isRevocationPostedNow = await processor.isAlreadyPosted(makeRevokedItem())
+        XCTAssertTrue(isRevocationPostedNow)
+    }
+
+    func testPostedTransactionRedeliveredRevokedIsPostedOnceThenSkipped() async {
+        let refreshed = expectation(description: "customer refresh requested")
+        refreshed.assertForOverFulfill = false
+        await processor.setRevokedTransactionHandler { refreshed.fulfill() }
+        client.postReceiptHandler = { _ in .revokedTransaction }
+        // The purchase posted earlier; Apple then refunded it.
+        store.markPosted(key: "apple:12345")
+
+        let revoked = makeRevokedItem()
+        store.upsert(revoked)
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1, "the revocation reaches the server")
+        XCTAssertEqual(client.postReceiptCalls.first?.signedTransactionInfo, revoked.jws)
+        XCTAssertEqual(client.postReceiptCalls.first?.idempotencyKey, "apple:12345", "same body shape and key as any receipt")
+        XCTAssertTrue(store.allItems().isEmpty, "terminal: finished and removed, not dead-lettered")
+        XCTAssertTrue(store.isPosted(key: "apple:12345:revoked"))
+        await fulfillment(of: [refreshed], timeout: 1)
+
+        // StoreKit delivers the same revocation again (another update, the next launch's sweep).
+        store.upsert(revoked)
+        await processor.drainAll()
+        // And the purchase itself, which stays a duplicate.
+        store.upsert(makeItem())
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1, "neither is posted again")
+        XCTAssertTrue(store.allItems().isEmpty)
+    }
+
+    func testRevokedTransactionNeverPostedIsLedgeredAsARevocation() async {
+        client.postReceiptHandler = { _ in .revokedTransaction }
+
+        store.upsert(makeRevokedItem())
+        await processor.drainAll()
+        store.upsert(makeRevokedItem())
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1)
+        XCTAssertTrue(store.isPosted(key: "apple:12345:revoked"))
+    }
+
+    func testDeadLetteredRevocationIsNotRepostedOnRedelivery() async {
+        client.postReceiptHandler = { _ in
+            throw AppActorError.serverError(httpStatus: 400, code: "VALIDATION_ERROR", message: nil, details: nil, requestId: nil)
+        }
+        store.markPosted(key: "apple:12345")
+
+        store.upsert(makeRevokedItem())
+        await processor.drainAll()
+        XCTAssertEqual(store.allItems().first?.phase, .deadLettered)
+        XCTAssertTrue(store.isPosted(key: "apple:12345:revoked"))
+
+        // A re-delivery resets the dead letter to .needsPost; the ledger keeps it from posting.
+        store.upsert(makeRevokedItem())
+        await processor.drainAll()
+
+        XCTAssertEqual(client.postReceiptCalls.count, 1)
+        XCTAssertTrue(store.allItems().isEmpty)
+    }
+
     // MARK: - 9. Backoff + retryAfterSeconds
 
     func testBackoffSchedule() {
