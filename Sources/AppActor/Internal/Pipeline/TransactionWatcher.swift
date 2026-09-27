@@ -140,10 +140,7 @@ actor AppActorTransactionWatcher {
     /// Begins an identity transition. Transactions arriving during transition are buffered
     /// with their current (pre-switch) appUserId to prevent wrong-user attribution.
     func beginIdentityTransition(appUserId: String? = nil) {
-        let transitionAppUserId = appUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        identityTransitionAppUserId = transitionAppUserId?.isEmpty == false
-            ? transitionAppUserId
-            : storage.ensureAppUserId()
+        identityTransitionAppUserId = AppActorPaymentValidation.nonBlankAppUserId(appUserId) ?? storage.ensureAppUserId()
         isIdentityTransitioning = true
     }
 
@@ -322,7 +319,6 @@ actor AppActorTransactionWatcher {
             transactionReason: transactionReason
         )
         let effectiveContext = pendingMatch?.context ?? observedContext
-        let capturedAppUserId = pendingMatch?.appUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let enqueueSource = Self.queueSource(
             for: source,
             pendingPurchaseContextMatch: pendingMatch
@@ -330,9 +326,7 @@ actor AppActorTransactionWatcher {
 
         // During identity transition, buffer with the ownership user captured before the transition.
         if isIdentityTransitioning {
-            let capturedUserId = capturedAppUserId?.isEmpty == false
-                ? capturedAppUserId!
-                : identityTransitionAppUserId ?? storage.ensureAppUserId()
+            let capturedUserId = pendingMatch?.appUserId ?? identityTransitionAppUserId ?? storage.ensureAppUserId()
             if pendingBuffer.count >= 50 {
                 Log.storeKit.warn("Identity transition buffer full (\(pendingBuffer.count)) — enqueuing directly")
                 await enqueueWithUserId(
@@ -354,7 +348,7 @@ actor AppActorTransactionWatcher {
             }
         }
 
-        let appUserId = capturedAppUserId?.isEmpty == false ? capturedAppUserId! : storage.ensureAppUserId()
+        let appUserId = pendingMatch?.appUserId ?? storage.ensureAppUserId()
         await enqueueWithUserId(
             transaction,
             jws: jws,

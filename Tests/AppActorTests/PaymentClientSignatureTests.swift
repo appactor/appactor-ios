@@ -468,4 +468,41 @@ final class PaymentClientSignatureTests: XCTestCase {
             requireSignatures: requireSignatures
         )
     }
+
+    // MARK: - I-E9b: Login merge conflict is retried
+
+    func testLoginMergeConflictIsRetried() async throws {
+        PaymentClientURLProtocol.handler = { request in
+            let body = #"{"error":{"code":"CONFLICT","message":"Concurrent identity merge in progress, please retry"},"requestId":"req_1"}"#
+            return (HTTPURLResponse(url: request.url!, statusCode: 409, httpVersion: "HTTP/1.1", headerFields: [:])!, Data(body.utf8))
+        }
+
+        do {
+            _ = try await makeClient(requireSignatures: false).login(
+                AppActorLoginRequest(currentAppUserId: "appactor-anon-1", newAppUserId: "user_1")
+            )
+            XCTFail("Every attempt met the conflict")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.httpStatus, 409)
+        }
+        XCTAssertEqual(PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests.count }, 2)
+    }
+
+    // MARK: - I-E12b: Logged paths mask the app user ID
+
+    func testLoggedPathMasksTheAppUserId() {
+        XCTAssertEqual(AppActorPaymentClient.loggedPath("/v1/customers/jane.doe%40example.com"), "/v1/customers/{appUserId}")
+        XCTAssertEqual(
+            AppActorPaymentClient.loggedPath("/v1/payment/users/jane/attributes/%24email"),
+            "/v1/payment/users/{appUserId}/attributes/%24email"
+        )
+        XCTAssertEqual(AppActorPaymentClient.loggedPath("/v1/payment/offerings"), "/v1/payment/offerings")
+    }
+
+    // MARK: - I-S2-5: The API key is trimmed like the server trims it
+
+    func testConfigurationTrimsTheApiKeyLikeTheServer() {
+        let config = AppActorPaymentConfiguration(apiKey: " \u{FEFF}pk_live_key\t\n")
+        XCTAssertEqual(config.apiKey, "pk_live_key")
+    }
 }

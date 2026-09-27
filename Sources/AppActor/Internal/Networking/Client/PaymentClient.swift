@@ -94,7 +94,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         urlRequest.httpBody = try encoder.encode(request)
         urlRequest.timeoutInterval = 30
 
-        Log.network.debug("identify request → \(path)")
+        Log.network.debug("identify request → \(Self.loggedPath(path))")
 
         return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce) { data, http, signatureVerified, requestId in
             guard (200..<300).contains(http.statusCode) else {
@@ -104,7 +104,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             do {
                 dto = try self.decoder.decode(AppActorIdentifyResponseDTO.self, from: data)
             } catch {
-                Log.network.error("Decode failed for \(path): \(error)")
+                Log.network.error("Decode failed for \(Self.loggedPath(path)): \(error)")
                 throw AppActorError.decodingError(error, requestId: requestId)
             }
             let customerInfo = AppActorCustomerInfo(
@@ -134,7 +134,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         urlRequest.httpBody = try encoder.encode(request)
         urlRequest.timeoutInterval = 30
 
-        Log.network.debug("login request → \(path)")
+        Log.network.debug("login request → \(Self.loggedPath(path))")
 
         return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce) { data, http, signatureVerified, requestId in
             guard (200..<300).contains(http.statusCode) else {
@@ -144,7 +144,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             do {
                 dto = try self.decoder.decode(AppActorLoginResponseDTO.self, from: data)
             } catch {
-                Log.network.error("Decode failed for \(path): \(error)")
+                Log.network.error("Decode failed for \(Self.loggedPath(path)): \(error)")
                 throw AppActorError.decodingError(error, requestId: requestId)
             }
             let customerInfo = AppActorCustomerInfo(
@@ -181,7 +181,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     let envelope = try self.decoder.decode(AppActorPaymentResponse<AppActorOfferingsResponseDTO>.self, from: data)
                     dto = envelope.data
                 } catch {
-                    Log.network.error("Decode failed for \(path): \(error)")
+                    Log.network.error("Decode failed for \(Self.loggedPath(path)): \(error)")
                     throw AppActorError.decodingError(error, requestId: requestId)
                 }
                 let responseETag = self.normalizeETag(http.value(forHTTPHeaderField: "ETag"))
@@ -212,7 +212,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             eTag: eTag,
             additionalNonRetryHandler: { statusCode, data, requestId in
                 guard statusCode == 404 else { return nil }
-                Log.network.error("404 \(path): customer not found")
+                Log.network.error("404 \(Self.loggedPath(path)): customer not found")
                 throw AppActorError.customerNotFound(appUserId: appUserId, requestId: requestId)
             },
             onSuccess: { data, http, signatureVerified, requestId in
@@ -222,7 +222,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     do {
                         dto = try self.decoder.decode(AppActorCustomerResponseDTO.self, from: data)
                     } catch {
-                        Log.network.error("Decode failed for \(path) (\(data.count) bytes): \(error)")
+                        Log.network.error("Decode failed for \(Self.loggedPath(path)) (\(data.count) bytes): \(error)")
                         throw AppActorError.decodingError(error, requestId: requestId)
                     }
                     let info = AppActorCustomerInfo(dto: dto.customer, appUserId: appUserId, requestDate: dto.requestDate, requestId: dto.requestId)
@@ -268,7 +268,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     let envelope = try self.decoder.decode(AppActorPaymentResponse<[AppActorRemoteConfigItemDTO]>.self, from: data)
                     items = envelope.data
                 } catch {
-                    Log.network.error("Decode failed for \(path): \(error)")
+                    Log.network.error("Decode failed for \(Self.loggedPath(path)): \(error)")
                     throw AppActorError.decodingError(error, requestId: requestId)
                 }
                 let responseETag = self.normalizeETag(http.value(forHTTPHeaderField: "ETag"))
@@ -326,7 +326,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         let nonce = applyAuth(to: &urlRequest, path: path)
         urlRequest.timeoutInterval = 30
 
-        Log.network.debug("experiment assignment → \(path)")
+        Log.network.debug("experiment assignment → \(Self.loggedPath(path))")
 
         return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce) { data, http, signatureVerified, requestId in
             guard (200..<300).contains(http.statusCode) else {
@@ -339,7 +339,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 )
                 dto = envelope.data
             } catch {
-                Log.network.error("Decode failed for \(path): \(error)")
+                Log.network.error("Decode failed for \(Self.loggedPath(path)): \(error)")
                 throw AppActorError.decodingError(error, requestId: requestId)
             }
             return .success(dto, requestId: requestId, signatureVerified: signatureVerified)
@@ -375,18 +375,18 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                         signatureVerified: signatureVerified
                     )
                 } catch {
-                    Log.network.error("Decode failed for \(path): \(error)")
+                    Log.network.error("Decode failed for \(Self.loggedPath(path)): \(error)")
                     throw AppActorError.decodingError(error, requestId: requestId)
                 }
 
             case 429:
                 let serverError = makeServerError(statusCode: 429, data: data, http: http, requestId: requestId)
-                Log.network.warn("Rate limited on \(path), retryAfter=\(serverError.retryAfterSeconds.map { "\($0)s" } ?? "–")")
+                Log.network.warn("Rate limited on \(Self.loggedPath(path)), retryAfter=\(serverError.retryAfterSeconds.map { "\($0)s" } ?? "–")")
                 throw serverError
 
             case 400..<500:
                 let serverError = makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
-                Log.network.error("\(http.statusCode) \(path): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
+                Log.network.error("\(http.statusCode) \(Self.loggedPath(path)): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
                 throw serverError
 
             default:
@@ -413,7 +413,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         urlRequest.httpBody = try encoder.encode(request)
         urlRequest.timeoutInterval = 30
 
-        Log.network.debug("restore request → \(path)")
+        Log.network.debug("restore request → \(Self.loggedPath(path))")
 
         return try await performRetryableRequest(urlRequest, path: path, sentNonce: nonce) { data, http, signatureVerified, requestId in
             guard (200..<300).contains(http.statusCode) else {
@@ -423,7 +423,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             do {
                 envelope = try self.decoder.decode(AppActorPaymentResponse<AppActorRestoreResponseData>.self, from: data)
             } catch {
-                Log.network.error("Decode failed for \(path): \(error)")
+                Log.network.error("Decode failed for \(Self.loggedPath(path)): \(error)")
                 throw AppActorError.decodingError(error, requestId: requestId)
             }
             let customerInfo = AppActorCustomerInfo(
@@ -547,18 +547,18 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                 do {
                     return try decoder.decode(Response.self, from: data)
                 } catch {
-                    Log.network.error("Decode failed for \(path): \(error)")
+                    Log.network.error("Decode failed for \(Self.loggedPath(path)): \(error)")
                     throw AppActorError.decodingError(error, requestId: requestId)
                 }
 
             case 429:
                 let serverError = makeServerError(statusCode: 429, data: data, http: http, requestId: requestId)
-                Log.network.warn("Rate limited on \(path), retryAfter=\(serverError.retryAfterSeconds.map { "\($0)s" } ?? "–")")
+                Log.network.warn("Rate limited on \(Self.loggedPath(path)), retryAfter=\(serverError.retryAfterSeconds.map { "\($0)s" } ?? "–")")
                 throw serverError
 
             case 400..<500:
                 let serverError = makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
-                Log.network.error("\(http.statusCode) \(path): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
+                Log.network.error("\(http.statusCode) \(Self.loggedPath(path)): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
                 throw serverError
 
             default:
@@ -631,10 +631,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     /// match when they are equal once a `W/` prefix is dropped.
     private func etagMatches(_ returned: String?, sent: String) -> Bool {
         guard let returned = normalizeETag(returned) else { return true }
-        func opaqueTag(_ tag: String) -> Substring {
-            tag.hasPrefix("W/") ? tag.dropFirst(2) : Substring(tag)
-        }
-        return opaqueTag(returned) == opaqueTag(sent)
+        return AppActorETagManager.weakETagsMatch(returned, sent)
     }
 
     private func parseBooleanHeader(_ value: String?) -> Bool? {
@@ -697,6 +694,17 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         return nonce
     }
 
+    /// The path as logged, with the app user ID masked: release builds keep warn and error lines
+    /// in the device's unified log, and the ID is only percent-encoded in the path.
+    static func loggedPath(_ path: String) -> String {
+        for prefix in ["/v1/customers/", "/v1/payment/users/"] where path.hasPrefix(prefix) {
+            let rest = path.dropFirst(prefix.count)
+            let tail = rest.firstIndex(of: "/").map { rest[$0...] } ?? ""
+            return prefix + "{appUserId}" + tail
+        }
+        return path
+    }
+
     /// Returns the exact request target (path + query) used by response signing.
     /// Query params are part of the signature so targeted resources cannot be replayed across contexts.
     ///
@@ -724,7 +732,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         path: String,
         sentNonce: String?
     ) async throws -> (Data, HTTPURLResponse, Bool) {
-        Log.network.debug("→ \(urlRequest.httpMethod ?? "?") \(path)")
+        Log.network.debug("→ \(urlRequest.httpMethod ?? "?") \(Self.loggedPath(path))")
 
         let (data, response) = try await session.data(for: urlRequest)
 
@@ -734,9 +742,9 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
         let requestId = extractRequestId(from: data)
         if http.statusCode == 304 {
-            Log.network.debug("← 304 \(path) (not modified)")
+            Log.network.debug("← 304 \(Self.loggedPath(path)) (not modified)")
         } else {
-            Log.network.debug("← \(http.statusCode) \(path)\(requestId.map { " [\($0)]" } ?? "")")
+            Log.network.debug("← \(http.statusCode) \(Self.loggedPath(path))\(requestId.map { " [\($0)]" } ?? "")")
         }
 
         // Log rate-limit headers for observability
@@ -758,37 +766,37 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
             switch result {
             case .success:
                 signatureVerified = true
-                Log.signing.debug("Signature verified for \(path)")
+                Log.signing.debug("Signature verified for \(Self.loggedPath(path))")
             case .unsigned, .signatureMissing:
                 if http.statusCode == 304 {
-                    Log.signing.warn("304 response signature missing for \(path); forcing fresh validation")
+                    Log.signing.warn("304 response signature missing for \(Self.loggedPath(path)); forcing fresh validation")
                     break
                 }
                 // The server signs every JSON response on both the nonce and the salt routes, so
                 // a 2xx without its signature had the headers stripped on the way. Only a response
                 // with no signature at all passes, and only when signatures aren't required.
                 if result == .signatureMissing || requireSignatures {
-                    Log.signing.error("Response signature missing for \(path)")
+                    Log.signing.error("Response signature missing for \(Self.loggedPath(path))")
                     throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
                 }
-                Log.signing.debug("Unsigned response accepted for \(path) (signatures not required)")
+                Log.signing.debug("Unsigned response accepted for \(Self.loggedPath(path)) (signatures not required)")
             case .signatureInvalid:
-                Log.signing.error("Response signature INVALID for \(path)")
+                Log.signing.error("Response signature INVALID for \(Self.loggedPath(path))")
                 throw AppActorError.signatureError(.signatureVerificationFailed, requestId: requestId)
             case .timestampOutOfRange:
-                Log.signing.error("Response timestamp out of range for \(path)")
+                Log.signing.error("Response timestamp out of range for \(Self.loggedPath(path))")
                 throw AppActorError.signatureError(.signatureTimestampOutOfRange, requestId: requestId)
             case .nonceMismatch:
-                Log.signing.error("Response nonce mismatch for \(path)")
+                Log.signing.error("Response nonce mismatch for \(Self.loggedPath(path))")
                 throw AppActorError.signatureError(.nonceMismatch, requestId: requestId)
             case .publicKeyUnavailable:
                 Log.signing.error("Ed25519 public key unavailable")
                 throw AppActorError.signatureError(.signatureVerificationFailed, requestId: requestId)
             case .intermediateCertInvalid:
-                Log.signing.error("Intermediate key certification invalid for \(path)")
+                Log.signing.error("Intermediate key certification invalid for \(Self.loggedPath(path))")
                 throw AppActorError.signatureError(.intermediateCertInvalid, requestId: requestId)
             case .intermediateKeyExpired:
-                Log.signing.error("Intermediate signing key expired for \(path)")
+                Log.signing.error("Intermediate signing key expired for \(Self.loggedPath(path))")
                 throw AppActorError.signatureError(.intermediateKeyExpired, requestId: requestId)
             }
         }
@@ -870,7 +878,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                         if sentETag != nil {
                             lastError = AppActorError.signatureError(.signatureMissing, requestId: requestId)
                             skipDelayForImmediateETagRetry = true
-                            Log.signing.warn("Unsigned 304 for \(path); retrying once without ETag")
+                            Log.signing.warn("Unsigned 304 for \(Self.loggedPath(path)); retrying once without ETag")
                             continue
                         }
                         throw AppActorError.signatureError(.signatureMissing, requestId: requestId)
@@ -891,7 +899,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                         )
                         guard sentETag != nil else { throw lastError }
                         skipDelayForImmediateETagRetry = true
-                        Log.network.warn("304 for \(path) doesn't match the sent ETag; retrying once without it")
+                        Log.network.warn("304 for \(Self.loggedPath(path)) doesn't match the sent ETag; retrying once without it")
                         continue
                     }
                     // Let onSuccess handle 304 too (for ETag-based endpoints)
@@ -901,7 +909,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                     let serverError = makeServerError(statusCode: 429, data: data, http: http, requestId: requestId)
                     retryAfterOverride = serverError.retryAfterSeconds
                     lastError = serverError
-                    Log.network.warn("Rate limited on \(path), retrying…")
+                    Log.network.warn("Rate limited on \(Self.loggedPath(path)), retrying…")
                     continue
 
                 case 400..<500:
@@ -911,13 +919,20 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                         return result
                     }
                     let serverError = makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
-                    Log.network.error("\(http.statusCode) \(path): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
+                    // The server asks the SDK to re-drive a login that met another identity merge
+                    // in progress: retried like a 5xx (Android does the same).
+                    if serverError.isConcurrentIdentityMergeConflict {
+                        lastError = serverError
+                        Log.network.warn("\(http.statusCode) \(Self.loggedPath(path)): identity merge in progress, retrying…")
+                        continue
+                    }
+                    Log.network.error("\(http.statusCode) \(Self.loggedPath(path)): code=\(serverError.code ?? "nil") message=\(serverError.message ?? "nil")")
                     throw serverError
 
                 default:
                     // 5xx — retry
                     lastError = makeServerError(statusCode: http.statusCode, data: data, http: http, requestId: requestId)
-                    Log.network.warn("\(http.statusCode) \(path), retrying…")
+                    Log.network.warn("\(http.statusCode) \(Self.loggedPath(path)), retrying…")
                     continue
                 }
 
@@ -928,19 +943,19 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
                    || error.code == .notConnectedToInternet
                    || error.code == .networkConnectionLost {
                 lastError = AppActorError.networkError(error)
-                Log.network.warn("Network error on \(path): \(error.localizedDescription), retrying…")
+                Log.network.warn("Network error on \(Self.loggedPath(path)): \(error.localizedDescription), retrying…")
                 continue
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as URLError where error.code == .cancelled {
                 throw CancellationError()
             } catch {
-                Log.network.error("Network error on \(path): \(error.localizedDescription)")
+                Log.network.error("Network error on \(Self.loggedPath(path)): \(error.localizedDescription)")
                 throw AppActorError.networkError(error)
             }
         }
 
-        Log.network.error("All retries exhausted for \(path)")
+        Log.network.error("All retries exhausted for \(Self.loggedPath(path))")
         throw lastError
     }
 
@@ -1066,7 +1081,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
 
         if remaining != nil || reset != nil || limit != nil {
             Log.network.debug(
-                "Rate-limit headers for \(path): " +
+                "Rate-limit headers for \(Self.loggedPath(path)): " +
                 "limit=\(limit ?? "–") remaining=\(remaining ?? "–") reset=\(reset ?? "–")"
             )
         }

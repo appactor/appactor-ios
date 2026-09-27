@@ -44,14 +44,17 @@ actor AppActorCustomerManager {
     /// The currently cached customer info, if any.
     func cachedInfo() async -> AppActorCustomerInfo? {
         guard let userId = currentAppUserId else { return nil }
-        return await etagManager.cached(AppActorCustomerInfo.self, for: .customer(appUserId: userId))?.value
+        return await cachedInfo(appUserId: userId)
     }
 
     /// Reads the persisted customer cache for a specific user, without rebinding the
-    /// manager's active user (a pure read). Used to seed `customerInfo` at cold start,
-    /// before any network call has set the active user.
+    /// manager's active user (a pure read), labelled with the verification its cache entry was
+    /// stored with, which a fetched snapshot is stored without.
     func cachedInfo(appUserId: String) async -> AppActorCustomerInfo? {
-        await etagManager.cached(AppActorCustomerInfo.self, for: .customer(appUserId: appUserId))?.value
+        guard let cached = await etagManager.cached(AppActorCustomerInfo.self, for: .customer(appUserId: appUserId)) else {
+            return nil
+        }
+        return cached.value.withVerification(cached.verification)
     }
 
     /// Whether the customer cache is fresh enough to skip a network fetch on foreground.
@@ -112,7 +115,7 @@ actor AppActorCustomerManager {
 
         // Coalesce only if same userId and not a force refresh.
         if !forceRefresh, let newest = runningFetches[inflightGeneration], newest.userId == appUserId {
-            return try await newest.task.value
+            return try await value(of: newest.task, appUserId: appUserId, forceRefresh: false)
         }
 
         let client = self.client
@@ -123,51 +126,39 @@ actor AppActorCustomerManager {
             // forceRefresh always skips the eTag to guarantee a fresh 200.
             let lastETag = await etagManager.eTag(for: resource, forceRefresh: forceRefresh)
 
-            do {
-                let result = try await client.getCustomer(appUserId: appUserId, eTag: lastETag)
-                // Cancelled while the response was on its way: the teardown is deleting this cache.
+            let result = try await client.getCustomer(appUserId: appUserId, eTag: lastETag)
+            // Cancelled while the response was on its way: the teardown is deleting this cache.
+            try Task.checkCancellation()
+
+            switch result {
+            case .fresh(let info, let eTag, let requestId, let signatureVerified):
+                self.lastRequestId = requestId
+                await etagManager.storeFresh(info, for: resource, eTag: eTag, verified: signatureVerified)
+                let verification = AppActorVerificationResult.from(signatureVerified: signatureVerified)
+                return info.withVerification(verification)
+
+            case .notModified(let eTag, let requestId):
+                self.lastRequestId = requestId
+                if let result = await etagManager.handleNotModified(
+                    AppActorCustomerInfo.self, for: resource, rotatedETag: eTag
+                ) {
+                    return result.value.withVerification(result.verification)
+                }
+                // 304 but cache is missing/corrupt — force a fresh fetch (no eTag)
+                let retry = try await client.getCustomer(appUserId: appUserId, eTag: nil)
                 try Task.checkCancellation()
-
-                switch result {
-                case .fresh(let info, let eTag, let requestId, let signatureVerified):
-                    self.lastRequestId = requestId
-                    await etagManager.storeFresh(info, for: resource, eTag: eTag, verified: signatureVerified)
-                    let verification = AppActorVerificationResult.from(signatureVerified: signatureVerified)
-                    return info.withVerification(verification)
-
-                case .notModified(let eTag, let requestId):
-                    self.lastRequestId = requestId
-                    if let result = await etagManager.handleNotModified(
-                        AppActorCustomerInfo.self, for: resource, rotatedETag: eTag
-                    ) {
-                        return result.value.withVerification(result.verification)
-                    }
-                    // 304 but cache is missing/corrupt — force a fresh fetch (no eTag)
-                    let retry = try await client.getCustomer(appUserId: appUserId, eTag: nil)
-                    try Task.checkCancellation()
-                    guard case .fresh(let info, let retryETag, _, let retryVerified) = retry else {
-                        throw AppActorError.serverError(
-                            httpStatus: 304,
-                            code: "CACHE_INCONSISTENCY",
-                            message: "Server returned 304 but local cache is unavailable",
-                            details: nil,
-                            requestId: nil
-                        )
-                    }
-                    await etagManager.storeFresh(info, for: resource, eTag: retryETag, verified: retryVerified)
-                    let retryVerification = AppActorVerificationResult.from(signatureVerified: retryVerified)
-                    return info.withVerification(retryVerification)
+                guard case .fresh(let info, let retryETag, _, let retryVerified) = retry else {
+                    throw AppActorError.serverError(
+                        httpStatus: 304,
+                        code: "CACHE_INCONSISTENCY",
+                        message: "Server returned 304 but local cache is unavailable",
+                        details: nil,
+                        requestId: nil
+                    )
                 }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // Returns stale cached data on transient network/server errors instead of throwing.
-                if !forceRefresh,
-                   Self.shouldFallbackToCache(error),
-                   let cached = await etagManager.cached(AppActorCustomerInfo.self, for: resource) {
-                    return cached.value.withVerification(cached.verification)
-                }
-                throw error
+                await etagManager.storeFresh(info, for: resource, eTag: retryETag, verified: retryVerified)
+                let retryVerification = AppActorVerificationResult.from(signatureVerified: retryVerified)
+                return info.withVerification(retryVerification)
             }
         }
 
@@ -175,7 +166,24 @@ actor AppActorCustomerManager {
         let generation = inflightGeneration
         runningFetches[generation] = (userId: appUserId, task: task)
         defer { runningFetches[generation] = nil }
-        return try await task.value
+        return try await value(of: task, appUserId: appUserId, forceRefresh: forceRefresh)
+    }
+
+    /// Awaits a fetch, answering a transient failure from the cache unless the caller forced a
+    /// refresh. Per caller: one that joined a forced fetch still gets its own cache fallback.
+    private func value(
+        of task: Task<AppActorCustomerInfo, Error>,
+        appUserId: String,
+        forceRefresh: Bool
+    ) async throws -> AppActorCustomerInfo {
+        do {
+            return try await task.value
+        } catch {
+            if !forceRefresh, Self.shouldFallbackToCache(error), let cached = await cachedInfo(appUserId: appUserId) {
+                return cached
+            }
+            throw error
+        }
     }
 
     /// Derives active entitlement keys offline from StoreKit 2 transactions and

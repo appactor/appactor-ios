@@ -302,6 +302,12 @@ enum AppActorPaymentValidation {
         id.trimmingCharacters(in: serverTrimmedCharacters).isEmpty
     }
 
+    /// `id` as given, or nil if it is blank. Never trimmed: the SDK stores and posts the ID
+    /// verbatim, so a trimmed copy would name another user.
+    static func nonBlankAppUserId(_ id: String?) -> String? {
+        id.flatMap { isBlank($0) ? nil : $0 }
+    }
+
     /// The server's `BLOCKED_USER_IDS`, compared lowercased after trimming.
     private static let blockedAppUserIds: Set<String> = [
         "null", "(null)", "anonymous", "guest", "-1", "0", "none", "nil", "nan", "no_user",
@@ -311,7 +317,7 @@ enum AppActorPaymentValidation {
     /// What JavaScript's `String.prototype.trim()` removes, which the server trims with:
     /// space separators, tab, the line terminators and U+FEFF. Unlike `.whitespacesAndNewlines`
     /// it keeps U+0085.
-    private static let serverTrimmedCharacters: CharacterSet = {
+    static let serverTrimmedCharacters: CharacterSet = {
         var set = CharacterSet.whitespaces
         set.insert(charactersIn: "\n\u{0B}\u{0C}\r\u{2028}\u{2029}\u{FEFF}")
         return set

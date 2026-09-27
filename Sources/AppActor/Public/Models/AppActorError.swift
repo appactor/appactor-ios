@@ -22,7 +22,8 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         case decoding
         /// Server returned a non-2xx response.
         case server
-        /// All StoreKit products for offerings were missing from the App Store.
+        /// All StoreKit products for offerings were missing from the App Store, or StoreKit
+        /// couldn't load them (code `STOREKIT_PRODUCTS_UNAVAILABLE`).
         case storeKitProductsMissing
         /// Customer not found (404 from server).
         case customerNotFound
@@ -78,7 +79,7 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         case .notAvailable:
             return "[AppActor] Feature not available: \(message ?? "unknown")"
         case .network:
-            let detail = underlying?.localizedDescription ?? "unknown"
+            let detail = underlying?.localizedDescription ?? message ?? "unknown"
             return "[AppActor] Network error: \(detail)"
         case .decoding:
             let detail = underlying?.localizedDescription ?? "unknown"
@@ -157,6 +158,13 @@ public struct AppActorError: Error, Sendable, LocalizedError {
     var isRejectedPayload: Bool {
         guard kind == .server, let status = httpStatus else { return false }
         return [400, 409, 413, 422].contains(status)
+    }
+
+    /// The server's 409 for a login that met another identity merge in progress, which it asks
+    /// the SDK to retry.
+    var isConcurrentIdentityMergeConflict: Bool {
+        kind == .server && httpStatus == 409
+            && message?.range(of: "Concurrent identity merge in progress", options: .caseInsensitive) != nil
     }
 
     /// Whether this is a permanent client error (4xx excluding 429).
@@ -277,6 +285,14 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         kind: .purchaseAlreadyInProgress,
         code: "PURCHASE_IN_PROGRESS",
         message: "A purchase is already in progress"
+    )
+
+    /// A read that the SDK's own state changes (an identity switch, an entitlement change)
+    /// kept cancelling. Transient, as on Android: the next call runs for the new state.
+    static let stateChangedDuringOperation = clientError(
+        kind: .network,
+        code: "STATE_CHANGED",
+        message: "State changed while performing the operation. Please retry."
     )
 
     static func signatureError(_ kind: Kind, requestId: String? = nil) -> AppActorError {

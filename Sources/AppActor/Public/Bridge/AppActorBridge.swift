@@ -332,7 +332,8 @@ public final class AppActorBridge {
 
     /// Sets bundled fallback offerings for first-launch offline scenarios.
     ///
-    /// - Parameter jsonData: JSON data containing an offerings response DTO.
+    /// - Parameter jsonData: JSON holding the offerings: a saved `GET /v1/payment/offerings` body,
+    ///   or its `data` object.
     /// - Parameter onError: Called if the JSON data is invalid.
     public func setFallbackOfferings(
         jsonData: Data,

@@ -862,3 +862,53 @@ private func XCTAssertThrowsErrorAsync(
         handler(error)
     }
 }
+
+// MARK: - I-S5-4: An anonymous user's queued writes move with its logIn
+
+extension CustomerAttributesTests {
+    func testQueuedMutationsMoveToTheUserTheAnonymousOneWasFoldedInto() throws {
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage())
+        try manager.enqueueAttributes(appUserId: "user_b", attributes: ["plan": .string("old"), "kept": .string("b")])
+        try manager.enqueueAttributes(appUserId: "anon_a", attributes: ["plan": .string("anon")], unsetKeys: ["kept"])
+        try manager.enqueueIntegrationIdentifier(appUserId: "anon_a", key: "$onesignalId", value: "os_1")
+
+        manager.moveQueuedMutations(from: "anon_a", to: "user_b")
+
+        XCTAssertNil(manager.pendingBucket(appUserId: "anon_a"))
+        let bucket = try XCTUnwrap(manager.pendingBucket(appUserId: "user_b"))
+        XCTAssertEqual(bucket.attributes, ["plan": .string("anon")])
+        XCTAssertEqual(bucket.unsetAttributeKeys, ["kept"])
+        XCTAssertEqual(bucket.integrationIdentifiers, ["$onesignalId": "os_1"])
+
+        try manager.enqueueAttributes(appUserId: "user_b", attributes: ["plan": .string("new")])
+        XCTAssertEqual(manager.pendingBucket(appUserId: "user_b")?.attributes["plan"], .string("new"))
+    }
+
+    func testAttributionMergeBaseMovesWithTheFoldedUserWhenNothingIsQueued() {
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage())
+        var campaign = AppActorAttribution()
+        campaign.campaignName = "summer"
+        _ = manager.mergeCustomAttribution(appUserId: "anon_a", patch: campaign)
+
+        manager.moveQueuedMutations(from: "anon_a", to: "user_b")
+
+        var source = AppActorAttribution()
+        source.source = "fb"
+        XCTAssertEqual(manager.mergeCustomAttribution(appUserId: "user_b", patch: source).campaignName, "summer")
+    }
+
+    func testFoldedUsersAttributionReplacesTheTargetsOlderQueuedOne() throws {
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage())
+        var winter = AppActorAttribution()
+        winter.campaignName = "winter"
+        try manager.enqueueAttribution(appUserId: "user_b", attribution: winter)
+        var summer = AppActorAttribution()
+        summer.campaignName = "summer"
+        _ = manager.mergeCustomAttribution(appUserId: "anon_a", patch: summer)
+
+        manager.moveQueuedMutations(from: "anon_a", to: "user_b")
+
+        XCTAssertNil(manager.pendingBucket(appUserId: "user_b")?.attribution, "The older queued attribution is not sent")
+        XCTAssertEqual(manager.mergeCustomAttribution(appUserId: "user_b", patch: AppActorAttribution()).campaignName, "summer")
+    }
+}

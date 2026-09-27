@@ -275,6 +275,9 @@ extension AppActor {
 
         // Always drain pending receipts on foreground
         if let processor = self.paymentProcessor {
+            if let appUserId = paymentStorage?.currentAppUserId {
+                await processor.reassignUnpostedItemsWithRejectedAppUserId(to: appUserId)
+            }
             await processor.drainAll()
         }
         try? await flushPendingCustomerAttributeWritesForAllUsers()
@@ -367,8 +370,9 @@ extension AppActor {
     ///
     /// - Parameter newAppUserId: The new user identifier (e.g. your backend user ID).
     /// - Returns: The server-authoritative `AppActorCustomerInfo` with entitlements and subscriptions.
-    /// - Throws: `AppActorError` with `.server` kind and 409 status if the ID belongs to another user,
-    ///   or `.notConfigured` if ``reset()`` runs before the login completes (the result is dropped).
+    /// - Throws: `AppActorError` on network or server failures (a login that meets another identity
+    ///   merge in progress is retried first, as the server asks), or `.notConfigured` if
+    ///   ``reset()`` runs before the login completes (the result is dropped).
     @discardableResult
     public func logIn(newAppUserId: String) async throws -> AppActorCustomerInfo {
         guard paymentLifecycle == .configured else {
@@ -381,6 +385,7 @@ extension AppActor {
         try AppActorPaymentValidation.validateAppUserId(newAppUserId)
 
         let currentId = storage.ensureAppUserId()
+        let isCurrentIdAnonymous = storage.isCurrentAppUserIdAnonymous
         let session = sessionGeneration
         let watcher = transactionWatcher
 
@@ -437,6 +442,12 @@ extension AppActor {
 
         // Overwrite local identity
         storage.setAppUserId(loginResult.appUserId)
+        // The server folds an anonymous user into the one logged in to and keeps its ID as an
+        // alias (see foldedAnonymousAppUser, moveQueuedMutations).
+        if isCurrentIdAnonymous && currentId != loginResult.appUserId {
+            customerAttributesManager.moveQueuedMutations(from: currentId, to: loginResult.appUserId)
+            storage.setFoldedAnonymousAppUser((anonymousId: currentId, into: loginResult.appUserId))
+        }
 
         // Rotate appAccountToken for new identity
         storage.clearAppAccountToken()
@@ -539,6 +550,7 @@ extension AppActor {
 
         storage.ensureAppAccountToken()
         storage.clearLegacyIdentityState()
+        storage.setFoldedAnonymousAppUser(nil)
         self.customerInfo = .empty
 
         Log.identity.debug("Logged out. New anonymous ID: \(String((storage.currentAppUserId ?? "nil").prefix(8)))…")
@@ -644,6 +656,7 @@ extension AppActor {
             storage.clearAsaTokenOnlyAttempts()
             storage.remove(forKey: AppActorPaymentStorageKey.customerAttributesQueue)
             storage.remove(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
+            storage.remove(forKey: AppActorPaymentStorageKey.foldedAnonymousAppUser)
             storage.clearLegacyIdentityState()
         }
 

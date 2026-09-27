@@ -235,10 +235,11 @@ actor AppActorPaymentProcessor {
 
     /// Moves receipts an older SDK queued under an app user ID the server rejects, and never
     /// got to post, to `appUserId`. Posted under that ID they would be refused and finished,
-    /// the purchase never recorded. Call before anything is enqueued.
+    /// the purchase never recorded, so the drain leaves them until this runs: at launch, and
+    /// again on foreground, since a launch before the first unlock can't read the queue.
     func reassignUnpostedItemsWithRejectedAppUserId(to appUserId: String) {
         for var item in store.snapshot() where (item.phase == .needsPost || item.phase == .posting)
-            && !AppActorPaymentValidation.isValidAppUserId(item.appUserId) {
+            && !item.hasPostableAppUserId {
             item.appUserId = appUserId
             store.update(item)
         }
@@ -307,7 +308,8 @@ actor AppActorPaymentProcessor {
     /// Called from the listener loop — not from drainOnce() — to keep drainOnce() pure.
     private func scheduleNextDrainIfNeeded() {
         guard !isStopped else { return }
-        let pending = store.snapshot().filter { $0.phase == .needsPost }
+        // Not the items claimReady leaves (hasPostableAppUserId): they would wake the drain at once, forever.
+        let pending = store.snapshot().filter { $0.phase == .needsPost && $0.hasPostableAppUserId }
         if var earliest = pending.compactMap(\.nextRetryAt).min() {
             // Respect the global rate-limit cooldown to avoid a spin loop:
             // items may have nextRetryAt in the past while the cooldown is still active.

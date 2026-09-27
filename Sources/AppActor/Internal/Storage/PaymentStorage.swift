@@ -16,6 +16,7 @@ enum AppActorPaymentStorageKey {
     static let lastRequestId = "appactor_billing_last_request_id"
     static let customerAttributesQueue = "appactor_customer_attributes_queue_v1"
     static let pendingPurchaseContexts = "appactor_pending_purchase_contexts_v1"
+    static let foldedAnonymousAppUser = "appactor_folded_anonymous_app_user_v1"
     /// Per-user fingerprint of the last successfully delivered automatic device-attribute
     /// bucket. Lets cold start skip the redundant attribute PATCH when nothing changed.
     static let automaticProfileContextFingerprintPrefix = "appactor_profile_context_fp_v1_"
@@ -170,8 +171,30 @@ extension AppActorPaymentStorage {
         remove(forKey: AppActorPaymentStorageKey.appUserId)
         remove(forKey: AppActorPaymentStorageKey.appAccountToken)
         remove(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
+        remove(forKey: AppActorPaymentStorageKey.foldedAnonymousAppUser)
         clearLegacyIdentityState()
         // Note: lastRequestId is kept for debugging.
+    }
+
+    // MARK: - Folded Anonymous User
+
+    /// The anonymous ID the last logIn folded into the ID it logged in to: the server renames or
+    /// merges an anonymous user into the login target and keeps its ID as an alias, so a receipt
+    /// posted under it later (a pending purchase approved after the login) is that user's. Kept
+    /// through later logIns, as the alias is; logOut, reset() and `clearAll` clear it.
+    var foldedAnonymousAppUser: (anonymousId: String, into: String)? {
+        guard let raw = string(forKey: AppActorPaymentStorageKey.foldedAnonymousAppUser),
+              let pair = try? JSONDecoder().decode([String].self, from: Data(raw.utf8)),
+              pair.count == 2 else { return nil }
+        return (anonymousId: pair[0], into: pair[1])
+    }
+
+    func setFoldedAnonymousAppUser(_ fold: (anonymousId: String, into: String)?) {
+        guard let fold, let data = try? JSONEncoder().encode([fold.anonymousId, fold.into]) else {
+            remove(forKey: AppActorPaymentStorageKey.foldedAnonymousAppUser)
+            return
+        }
+        set(String(data: data, encoding: .utf8), forKey: AppActorPaymentStorageKey.foldedAnonymousAppUser)
     }
 
     // MARK: - Automatic Device-Attribute Fingerprint

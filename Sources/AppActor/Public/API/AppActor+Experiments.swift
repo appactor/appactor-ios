@@ -40,29 +40,16 @@ extension AppActor {
     public func getExperimentAssignment(
         experimentKey: String
     ) async throws -> AppActorExperimentAssignment? {
-        guard paymentLifecycle == .configured else {
-            throw AppActorError.notConfigured
+        try await guardedRead { appUserId in
+            guard let manager = self.experimentManager, let appUserId else { throw AppActorError.notConfigured }
+            let assignment = try await manager.getAssignment(
+                experimentKey: experimentKey,
+                appUserId: appUserId,
+                appVersion: AppActorAutoDeviceInfo.appVersion,
+                country: Self.experimentDeviceCountryCode
+            )
+            return (assignment, await manager.lastRequestId)
         }
-        guard let manager = experimentManager else {
-            throw AppActorError.notConfigured
-        }
-        guard let appUserId = paymentStorage?.currentAppUserId else {
-            throw AppActorError.notConfigured
-        }
-
-        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let country = Self.experimentDeviceCountryCode
-
-        let assignment = try await manager.getAssignment(
-            experimentKey: experimentKey,
-            appUserId: appUserId,
-            appVersion: appVersion,
-            country: country
-        )
-        if let rid = await manager.lastRequestId {
-            paymentStorage?.setLastRequestId(rid)
-        }
-        return assignment
     }
 
     // MARK: - Helpers

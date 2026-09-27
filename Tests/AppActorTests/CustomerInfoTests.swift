@@ -340,4 +340,15 @@ final class CustomerInfoTests: XCTestCase {
         XCTAssertNil(dto.subscriptions)
         XCTAssertNil(dto.nonSubscriptions)
     }
+
+    // MARK: - I-E10b: The server's family_shared
+
+    func testFamilySharedOwnershipFromTheServerMapsToFamilyShared() throws {
+        let json = #"{"id":"premium","isActive":true,"ownershipType":"family_shared"}"#
+        let dto = try JSONDecoder().decode(AppActorEntitlementDTO.self, from: Data(json.utf8))
+
+        XCTAssertEqual(AppActorEntitlementInfo(id: "premium", dto: dto).ownershipType, .familyShared)
+        XCTAssertEqual(try JSONDecoder().decode(AppActorOwnershipType.self, from: Data(#""family_shared""#.utf8)), .familyShared)
+        XCTAssertEqual(try JSONDecoder().decode(AppActorOwnershipType.self, from: Data(#""familyShared""#.utf8)), .familyShared)
+    }
 }

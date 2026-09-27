@@ -1309,4 +1309,42 @@ final class CustomerManagerTests: XCTestCase {
         XCTAssertEqual(client.getCustomerCalls[0].eTag, "original_etag",
                        "clearCache should preserve ETag for conditional 304 requests")
     }
+
+    // MARK: - I-G-3: Cached snapshot carries its entry's verification
+
+    func testCachedInfoCarriesTheVerificationItWasStoredWith() async {
+        await etagManager.storeFresh(makePremiumInfo(), for: .customer(appUserId: "user_123"), eTag: "e1", verified: true)
+
+        let manager = makeManager()
+        let cached = await manager.cachedInfo(appUserId: "user_123")
+
+        XCTAssertEqual(cached?.verification, .verified)
+    }
+
+    // MARK: - I-S4-4: Joining a forced fetch keeps the joiner's cache fallback
+
+    func testCallerJoiningAForcedFetchGetsTheCacheOnATransientFailure() async throws {
+        await etagManager.storeFresh(makePremiumInfo(), for: .customer(appUserId: "user_123"), eTag: "e1")
+        client.getCustomerHandler = { _, _ in
+            try await Task.sleep(nanoseconds: 100_000_000)
+            throw AppActorError.networkError(URLError(.notConnectedToInternet))
+        }
+        let manager = makeManager()
+
+        let forced = Task { try await manager.getCustomerInfo(appUserId: "user_123", forceRefresh: true) }
+        for _ in 0..<2_000 where client.getCustomerCalls.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(client.getCustomerCalls.count, 1, "The forced fetch has started")
+        let joined = try await manager.getCustomerInfo(appUserId: "user_123")
+
+        XCTAssertEqual(joined.entitlements["premium"]?.isActive, true)
+        XCTAssertEqual(client.getCustomerCalls.count, 1, "The caller joins the forced fetch")
+        do {
+            _ = try await forced.value
+            XCTFail("A forced refresh doesn't fall back to the cache")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.kind, .network)
+        }
+    }
 }

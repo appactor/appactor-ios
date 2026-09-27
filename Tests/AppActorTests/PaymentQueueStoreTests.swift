@@ -243,8 +243,11 @@ final class PaymentQueueStoreTests: XCTestCase {
     }
 
     func test_givenClaimFromAnEarlierProcess_whenTheLaunchDrainRuns_thenPosted() async {
-        store.upsert(.fixture(key: "apple:claimed", appUserId: "guest"))
-        _ = store.claimReady(limit: 10, now: Date())
+        var claimed = AppActorPaymentQueueItem.fixture(key: "apple:claimed", appUserId: "guest")
+        claimed.phase = .posting
+        claimed.claimedAt = Date()
+        store.upsert(claimed)
+        XCTAssertEqual(store.snapshot().first?.phase, .posting)
 
         let client = MockPaymentClient()
         let processor = AppActorPaymentProcessor(store: AppActorAtomicJSONQueueStore(directory: tempDir), client: client)
@@ -275,4 +278,72 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertTrue(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().isEmpty)
     }
 
+    // MARK: - I-S3-4: Unreadable file (before the first unlock)
+
+    func testUnreadableQueueFileIsNeitherOverwrittenNorLost() throws {
+        try XCTSkipIf(getuid() == 0, "root reads a file with no permissions")
+        store.upsert(.fixture(key: "apple:on_disk"))
+        store.markPosted(key: "apple:posted")
+        let fileURL = tempDir.appendingPathComponent("payment_queue.json")
+        let before = try Data(contentsOf: fileURL)
+
+        // A new process before the first unlock: the class C file exists but can't be read.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        let locked = AppActorAtomicJSONQueueStore(directory: tempDir)
+        XCTAssertTrue(locked.snapshot().isEmpty)
+        locked.upsert(.fixture(key: "apple:while_locked"))
+        locked.markPosted(key: "apple:posted_while_locked")
+        locked.purgeExpiredLedgerEntries(olderThan: 90 * 24 * 60 * 60)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        XCTAssertEqual(try Data(contentsOf: fileURL), before, "Nothing may be written over a queue that couldn't be read")
+
+        // Unlocked: the same store reads the file, keeps the upsert made meanwhile, and saves both.
+        XCTAssertEqual(Set(locked.snapshot().map(\.key)), ["apple:on_disk", "apple:while_locked"])
+        XCTAssertTrue(locked.isPosted(key: "apple:posted"))
+        XCTAssertEqual(
+            Set(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().map(\.key)),
+            ["apple:on_disk", "apple:while_locked"]
+        )
+    }
+
+    func testUpsertMadeWhileUnreadableTakesTheNewOwnerOfAClaimADeadProcessLeft() throws {
+        try XCTSkipIf(getuid() == 0, "root reads a file with no permissions")
+        store.upsert(.fixture(key: "apple:bg", appUserId: "user_a", source: .transactionUpdates))
+        XCTAssertEqual(store.claimReady(limit: 10, now: Date()).count, 1)
+        let fileURL = tempDir.appendingPathComponent("payment_queue.json")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        let locked = AppActorAtomicJSONQueueStore(directory: tempDir)
+        locked.upsert(.fixture(key: "apple:bg", appUserId: "user_b", source: .transactionUpdates))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+
+        let item = try XCTUnwrap(locked.snapshot().first)
+        XCTAssertEqual(item.phase, .needsPost)
+        XCTAssertEqual(item.appUserId, "user_b", "As a normal launch would: the claim is reset before the merge")
+    }
+
+    func testItemUnderARejectedAppUserIdIsNotClaimedUntilReassigned() throws {
+        store.upsert(.fixture(key: "apple:rejected", appUserId: "null"))
+        XCTAssertTrue(store.claimReady(limit: 10, now: Date()).isEmpty)
+
+        var item = try XCTUnwrap(store.snapshot().first)
+        item.appUserId = "user_123"
+        store.update(item)
+        XCTAssertEqual(store.claimReady(limit: 10, now: Date()).map(\.key), ["apple:rejected"])
+    }
+
+    // MARK: - I-E11b: Phase dropped since 0.0.6/0.0.7
+
+    func testQueueWithWaitingForIdentityPhaseFromOldReleaseLoadsAsNeedsPost() throws {
+        store.upsert(.fixture(key: "apple:parked"))
+        store.markPosted(key: "apple:posted")
+        let fileURL = tempDir.appendingPathComponent("payment_queue.json")
+        let written = try XCTUnwrap(String(data: Data(contentsOf: fileURL), encoding: .utf8))
+        XCTAssertTrue(written.contains("\"needsPost\""))
+        try Data(written.replacingOccurrences(of: "\"needsPost\"", with: "\"waitingForIdentity\"").utf8).write(to: fileURL)
+
+        let reloaded = AppActorAtomicJSONQueueStore(directory: tempDir)
+        XCTAssertEqual(reloaded.snapshot().map(\.phase), [.needsPost])
+        XCTAssertTrue(reloaded.isPosted(key: "apple:posted"), "The rest of the file must survive the old phase")
+    }
 }

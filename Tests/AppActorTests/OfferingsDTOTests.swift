@@ -380,4 +380,15 @@ final class OfferingsDTOTests: XCTestCase {
         let ids = dto.allStoreProductIds
         XCTAssertEqual(ids.count, 2)
     }
+
+    // MARK: - I-E10a: Fallback offerings file shapes
+
+    func testFallbackOfferingsFileAcceptsTheEndpointBodyAndItsDataObject() throws {
+        let data = #"{"currentOffering":null,"offerings":[],"productEntitlements":{"com.app.monthly":["premium"]}}"#
+        for json in [data, #"{"data":\#(data),"requestId":"req_1"}"#] {
+            let file = try JSONDecoder().decode(FallbackOfferingsFile.self, from: Data(json.utf8))
+            XCTAssertEqual(file.dto.productEntitlements, ["com.app.monthly": ["premium"]], json)
+        }
+        XCTAssertThrowsError(try JSONDecoder().decode(FallbackOfferingsFile.self, from: Data(#"{"data":{}}"#.utf8)))
+    }
 }

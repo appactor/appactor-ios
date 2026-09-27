@@ -151,7 +151,7 @@ actor AppActorRemoteConfigManager {
     /// Cancels any in-flight fetch to prevent actor-reentrancy stale writes.
     func clearCache(appUserId: String?) async {
         clearCount &+= 1
-        let normalized = normalizedUserId(appUserId)
+        let normalized = AppActorPaymentValidation.nonBlankAppUserId(appUserId)
         let appUserIdsToClear = appUserIdsToClear(for: normalized)
         let taskContexts = inFlightTasks.keys.filter { appUserIdsToClear.contains($0.appUserId) }
         for context in taskContexts {
@@ -510,14 +510,10 @@ actor AppActorRemoteConfigManager {
 
     private func normalizedContext(appUserId: String?, appVersion: String?, country: String?) -> CacheContext {
         CacheContext(
-            appUserId: normalizedUserId(appUserId),
+            appUserId: AppActorPaymentValidation.nonBlankAppUserId(appUserId),
             appVersion: normalizedOptional(appVersion),
             country: normalizedOptional(country)?.uppercased()
         )
-    }
-
-    private func normalizedUserId(_ appUserId: String?) -> String? {
-        normalizedOptional(appUserId)
     }
 
     private func normalizedOptional(_ value: String?) -> String? {

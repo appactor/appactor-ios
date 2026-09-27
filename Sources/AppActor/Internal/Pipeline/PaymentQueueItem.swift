@@ -36,6 +36,13 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// migrate to the current identity to avoid stale-user queue gates after relaunch.
     var appUserId: String
 
+    /// Whether the server accepts the item's app user ID. It doesn't for one an older SDK stored:
+    /// such an item waits for `reassignUnpostedItemsWithRejectedAppUserId` instead of being
+    /// posted, refused and finished with the purchase never recorded.
+    var hasPostableAppUserId: Bool {
+        AppActorPaymentValidation.isValidAppUserId(appUserId)
+    }
+
     /// The product identifier.
     let productId: String
 
@@ -110,6 +117,13 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         case needsFinish
         /// Terminal item kept only for diagnostics after a permanent/decode-mismatch failure.
         case deadLettered
+
+        /// A phase this version doesn't have is posted again. 0.0.6 and 0.0.7 parked unposted
+        /// items in `waitingForIdentity`, and one of them made the whole queue file unreadable.
+        init(from decoder: Decoder) throws {
+            let rawValue = try decoder.singleValueContainer().decode(String.self)
+            self = Phase(rawValue: rawValue) ?? .needsPost
+        }
     }
 
     // MARK: - Source Enum

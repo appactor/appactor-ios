@@ -58,16 +58,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     ) throws {
         try mutateState { state in
             var bucket = state.buckets[appUserId] ?? PendingBucket()
-            for (key, value) in attributes {
-                bucket.attributes[key] = value
-                bucket.unsetAttributeKeys.removeAll { $0 == key }
-            }
-            for key in unsetKeys {
-                bucket.attributes.removeValue(forKey: key)
-                if !bucket.unsetAttributeKeys.contains(key) {
-                    bucket.unsetAttributeKeys.append(key)
-                }
-            }
+            bucket.queue(attributes: attributes, unsetKeys: unsetKeys)
             try enforceCaps(bucket)
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
@@ -82,8 +73,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     ) throws {
         try mutateState { state in
             var bucket = state.buckets[appUserId] ?? PendingBucket()
-            bucket.integrationIdentifiers[key] = value
-            bucket.unsetIntegrationIdentifierKeys.removeAll { $0 == key }
+            bucket.queue(integrationIdentifiers: [key: value])
             try enforceCaps(bucket)
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
@@ -97,10 +87,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     ) throws {
         try mutateState { state in
             var bucket = state.buckets[appUserId] ?? PendingBucket()
-            bucket.integrationIdentifiers.removeValue(forKey: key)
-            if !bucket.unsetIntegrationIdentifierKeys.contains(key) {
-                bucket.unsetIntegrationIdentifierKeys.append(key)
-            }
+            bucket.queue(integrationIdentifiers: [:], unsetKeys: [key])
             try enforceCaps(bucket)
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
@@ -120,6 +107,49 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             customAttributionSnapshots[appUserId] = attribution
             state.customAttributionSnapshots[appUserId] = attribution
             trimQueuedUsers(&state, preserving: appUserId)
+        }
+    }
+
+    /// Moves `appUserId`'s queue state to `newAppUserId`, which the server has folded it into:
+    /// its queued writes go under what that user has queued (they are newer) and before any made
+    /// from now on. Its attribution, queued or delivered, replaces that user's: on the server the
+    /// newer attribution wins the merge, and on this device the anonymous one is the newer.
+    func moveQueuedMutations(from appUserId: String, to newAppUserId: String) {
+        lock.withLock {
+            guard appUserId != newAppUserId else { return }
+            var state = loadState(from: storage)
+            let moved = state.buckets[appUserId]
+            let snapshot = customAttributionSnapshots[appUserId] ?? state.customAttributionSnapshots[appUserId]
+            let delivered = state.deliveredAttributions[appUserId]
+            guard moved != nil || snapshot != nil || delivered != nil else { return }
+
+            var bucket = state.buckets[newAppUserId] ?? PendingBucket()
+            if let moved {
+                bucket.queue(attributes: moved.attributes, unsetKeys: moved.unsetAttributeKeys)
+                bucket.queue(integrationIdentifiers: moved.integrationIdentifiers, unsetKeys: moved.unsetIntegrationIdentifierKeys)
+            }
+            if moved?.attribution != nil || snapshot != nil || delivered != nil {
+                bucket.attribution = moved?.attribution
+            }
+            // Too many to queue for one user: left under the old ID, which the server resolves to
+            // the same user.
+            guard (try? enforceCaps(bucket)) != nil else { return }
+            bucket.updatedAt = Date()
+            state.update(bucket, for: newAppUserId)
+            state.buckets.removeValue(forKey: appUserId)
+
+            customAttributionSnapshots.removeValue(forKey: appUserId)
+            state.customAttributionSnapshots.removeValue(forKey: appUserId)
+            state.deliveredAttributions.removeValue(forKey: appUserId)
+            if let snapshot {
+                customAttributionSnapshots[newAppUserId] = snapshot
+                state.customAttributionSnapshots[newAppUserId] = snapshot
+            }
+            if let delivered {
+                state.deliveredAttributions[newAppUserId] = delivered
+            }
+            trimQueuedUsers(&state, preserving: newAppUserId)
+            saveState(state, to: storage)
         }
     }
 
@@ -533,6 +563,36 @@ extension AppActorCustomerAttributesManager {
             unsetIntegrationIdentifierKeys = try container.decodeIfPresent([String].self, forKey: .unsetIntegrationIdentifierKeys) ?? []
             attribution = try container.decodeIfPresent(AppActorAttribution.self, forKey: .attribution)
             updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        }
+
+        mutating func queue(attributes: [String: AppActorAttributeValue], unsetKeys: [String]) {
+            Self.queue(attributes, unsets: unsetKeys, into: &self.attributes, unsetKeys: &unsetAttributeKeys)
+        }
+
+        mutating func queue(integrationIdentifiers: [String: String], unsetKeys: [String] = []) {
+            Self.queue(
+                integrationIdentifiers, unsets: unsetKeys,
+                into: &self.integrationIdentifiers, unsetKeys: &unsetIntegrationIdentifierKeys
+            )
+        }
+
+        /// Queues sets and unsets over what is queued; the later one for a key wins.
+        private static func queue<Value>(
+            _ sets: [String: Value],
+            unsets: [String],
+            into values: inout [String: Value],
+            unsetKeys: inout [String]
+        ) {
+            for (key, value) in sets {
+                values[key] = value
+                unsetKeys.removeAll { $0 == key }
+            }
+            for key in unsets {
+                values.removeValue(forKey: key)
+                if !unsetKeys.contains(key) {
+                    unsetKeys.append(key)
+                }
+            }
         }
 
         var isEmpty: Bool {

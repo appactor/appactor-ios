@@ -351,6 +351,23 @@ extension AppActor {
 
 extension AppActorError {
 
+    /// An error from loading products from StoreKit, whose `Product.products(for:)` throws
+    /// `StoreKitError` for system errors: a network failure stays transient.
+    static func fromProductLookupError(_ error: Error) -> AppActorError {
+        if case .networkError(let urlError)? = error as? StoreKitError {
+            return .networkError(urlError)
+        }
+        if let urlError = error as? URLError {
+            return .networkError(urlError)
+        }
+        return .clientError(
+            kind: .storeKitProductsMissing,
+            code: "STOREKIT_PRODUCTS_UNAVAILABLE",
+            message: "StoreKit could not load the products: \(error.localizedDescription)",
+            underlying: error
+        )
+    }
+
     /// Maps any purchase-time error (StoreKit or generic) to a specific `AppActorError`.
     @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
     static func fromPurchaseError(_ error: Error) -> AppActorError {

@@ -569,9 +569,7 @@ final class PipelineEdgeCaseTests: XCTestCase {
     // MARK: - Fix #19: Identity change during drain
 
     func testItemsPostedWithOriginalUserIdDuringDrain() async {
-        var capturedUserIds: [String] = []
         client.postReceiptHandler = { (request: AppActorReceiptPostRequest) in
-            capturedUserIds.append(request.appUserId)
             // Slow response to create window for identity change
             try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
             return AppActorReceiptPostResponse(status: "ok", requestId: "req_1")
@@ -588,7 +586,9 @@ final class PipelineEdgeCaseTests: XCTestCase {
         await processor.kick()
         try? await Task.sleep(nanoseconds: 500_000_000) // 500ms for drain
 
-        // All items should have been posted with user_A
+        // All items should have been posted with user_A. Read from the mock, which records calls
+        // under its lock: the posts run concurrently.
+        let capturedUserIds = client.postReceiptCalls.map(\.appUserId)
         XCTAssertEqual(capturedUserIds.count, 3, "All 3 items should be posted")
         for userId in capturedUserIds {
             XCTAssertEqual(userId, "user_A", "Items should be posted with original user ID")

@@ -27,6 +27,15 @@ actor AppActorETagManager {
 
     // MARK: - ETag Retrieval
 
+    /// Whether two ETags name the same entity once a `W/` prefix is dropped: the weak comparison
+    /// the server uses (RFC 7232 §2.3.2).
+    static func weakETagsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        func opaqueTag(_ tag: String) -> Substring {
+            tag.hasPrefix("W/") ? tag.dropFirst(2) : Substring(tag)
+        }
+        return opaqueTag(lhs) == opaqueTag(rhs)
+    }
+
     /// Returns the stored ETag for the resource, or nil if none/forceRefresh.
     ///
     /// When response verification is enabled, ETags from failed-verification cache
