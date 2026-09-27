@@ -631,15 +631,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     /// match when they are equal once a `W/` prefix is dropped.
     private func etagMatches(_ returned: String?, sent: String) -> Bool {
         guard let returned = normalizeETag(returned) else { return true }
-        return Self.weakETagsMatch(returned, sent)
-    }
-
-    /// Whether two ETags name the same entity once a `W/` prefix is dropped.
-    static func weakETagsMatch(_ lhs: String, _ rhs: String) -> Bool {
-        func opaqueTag(_ tag: String) -> Substring {
-            tag.hasPrefix("W/") ? tag.dropFirst(2) : Substring(tag)
-        }
-        return opaqueTag(lhs) == opaqueTag(rhs)
+        return AppActorETagManager.weakETagsMatch(returned, sent)
     }
 
     private func parseBooleanHeader(_ value: String?) -> Bool? {

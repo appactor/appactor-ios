@@ -180,7 +180,8 @@ extension AppActorPaymentStorage {
 
     /// The anonymous ID the last logIn folded into the ID it logged in to: the server renames or
     /// merges an anonymous user into the login target and keeps its ID as an alias, so a receipt
-    /// posted under it later (a pending purchase approved after the login) is that user's.
+    /// posted under it later (a pending purchase approved after the login) is that user's. Kept
+    /// through later logIns, as the alias is; logOut, reset() and `clearAll` clear it.
     var foldedAnonymousAppUser: (anonymousId: String, into: String)? {
         guard let raw = string(forKey: AppActorPaymentStorageKey.foldedAnonymousAppUser),
               let pair = try? JSONDecoder().decode([String].self, from: Data(raw.utf8)),

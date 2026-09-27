@@ -32,49 +32,13 @@ extension AppActor {
             guard let manager = self.remoteConfigManager else { throw AppActorError.notConfigured }
             let configs = try await manager.getRemoteConfigs(
                 appUserId: appUserId,
-                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                appVersion: AppActorAutoDeviceInfo.appVersion,
                 country: Self.deviceCountryCode
             )
             return (configs, await manager.requestId)
         } publish: { configs in
             self.paymentRemoteConfigs = configs
         }
-    }
-
-    /// Runs `read` for the current user and returns what it read, once the session and the user
-    /// are still the ones it ran for; `publish` runs then too, with no suspension in between.
-    ///
-    /// A logIn, logOut or reset() can land while the read is in flight. Its result is then the
-    /// previous user's, entitlement-targeted values included: it is neither published nor
-    /// returned, and the read runs again for whoever is current (or throws after a reset). It
-    /// also runs again when a cache clear cancelled it (identity switches and entitlement changes
-    /// do that), unless the caller itself was cancelled. Android's `executeGuardedRead`.
-    func guardedRead<Value>(
-        _ read: (_ appUserId: String?) async throws -> (Value, requestId: String?),
-        publish: (Value) -> Void = { _ in }
-    ) async throws -> Value {
-        // One logIn can cancel a read up to four times (its clears, the switch, the entitlement
-        // change); the bound only stops a pathological loop.
-        for _ in 0..<5 {
-            guard paymentLifecycle == .configured else { throw AppActorError.notConfigured }
-            let session = sessionGeneration
-            let appUserId = paymentStorage?.currentAppUserId
-            let value: Value
-            let requestId: String?
-            do {
-                (value, requestId) = try await read(appUserId)
-            } catch is CancellationError where !Task.isCancelled {
-                continue
-            }
-            guard isSessionCurrent(session), paymentStorage?.currentAppUserId == appUserId else { continue }
-
-            publish(value)
-            if let requestId {
-                paymentStorage?.setLastRequestId(requestId)
-            }
-            return value
-        }
-        throw AppActorError.stateChangedDuringOperation
     }
 
     // MARK: - Typed Accessors (nonisolated — safe to call from any context)

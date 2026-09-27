@@ -457,7 +457,7 @@ actor AppActorOfferingsManager {
             }
 
             if let cached = suitableInMemoryCache(), let cachedETag, let lastETag,
-               AppActorPaymentClient.weakETagsMatch(cachedETag, lastETag) {
+               AppActorETagManager.weakETagsMatch(cachedETag, lastETag) {
                 if cacheGeneration == generation {
                     _ = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag)
                     cachedAt = dateProvider()

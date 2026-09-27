@@ -45,7 +45,7 @@ extension AppActor {
             let assignment = try await manager.getAssignment(
                 experimentKey: experimentKey,
                 appUserId: appUserId,
-                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                appVersion: AppActorAutoDeviceInfo.appVersion,
                 country: Self.experimentDeviceCountryCode
             )
             return (assignment, await manager.lastRequestId)

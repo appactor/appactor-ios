@@ -1,5 +1,4 @@
 import Foundation
-import StoreKit
 
 // MARK: - Payment Offerings Public API
 
@@ -110,25 +109,6 @@ struct FallbackOfferingsFile: Decodable {
         dto = container.contains(.data)
             ? try container.decode(AppActorOfferingsResponseDTO.self, forKey: .data)
             : try AppActorOfferingsResponseDTO(from: decoder)
-    }
-}
-
-extension AppActorError {
-    /// An error from loading products from StoreKit, whose `Product.products(for:)` throws
-    /// `StoreKitError` for system errors: a network failure stays transient.
-    static func fromProductLookupError(_ error: Error) -> AppActorError {
-        if case .networkError(let urlError)? = error as? StoreKitError {
-            return .networkError(urlError)
-        }
-        if let urlError = error as? URLError {
-            return .networkError(urlError)
-        }
-        return .clientError(
-            kind: .storeKitProductsMissing,
-            code: "STOREKIT_PRODUCTS_UNAVAILABLE",
-            message: "StoreKit could not load the products: \(error.localizedDescription)",
-            underlying: error
-        )
     }
 }
 

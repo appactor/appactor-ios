@@ -48,9 +48,8 @@ actor AppActorCustomerManager {
     }
 
     /// Reads the persisted customer cache for a specific user, without rebinding the
-    /// manager's active user (a pure read). Used to seed `customerInfo` at cold start,
-    /// before any network call has set the active user. Labelled with the verification its cache
-    /// entry was stored with, which a fetched snapshot is stored without.
+    /// manager's active user (a pure read), labelled with the verification its cache entry was
+    /// stored with, which a fetched snapshot is stored without.
     func cachedInfo(appUserId: String) async -> AppActorCustomerInfo? {
         guard let cached = await etagManager.cached(AppActorCustomerInfo.self, for: .customer(appUserId: appUserId)) else {
             return nil

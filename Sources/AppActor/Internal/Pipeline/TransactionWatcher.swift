@@ -319,7 +319,6 @@ actor AppActorTransactionWatcher {
             transactionReason: transactionReason
         )
         let effectiveContext = pendingMatch?.context ?? observedContext
-        let capturedAppUserId = pendingMatch?.appUserId
         let enqueueSource = Self.queueSource(
             for: source,
             pendingPurchaseContextMatch: pendingMatch
@@ -327,9 +326,7 @@ actor AppActorTransactionWatcher {
 
         // During identity transition, buffer with the ownership user captured before the transition.
         if isIdentityTransitioning {
-            let capturedUserId = capturedAppUserId?.isEmpty == false
-                ? capturedAppUserId!
-                : identityTransitionAppUserId ?? storage.ensureAppUserId()
+            let capturedUserId = pendingMatch?.appUserId ?? identityTransitionAppUserId ?? storage.ensureAppUserId()
             if pendingBuffer.count >= 50 {
                 Log.storeKit.warn("Identity transition buffer full (\(pendingBuffer.count)) — enqueuing directly")
                 await enqueueWithUserId(
@@ -351,7 +348,7 @@ actor AppActorTransactionWatcher {
             }
         }
 
-        let appUserId = capturedAppUserId?.isEmpty == false ? capturedAppUserId! : storage.ensureAppUserId()
+        let appUserId = pendingMatch?.appUserId ?? storage.ensureAppUserId()
         await enqueueWithUserId(
             transaction,
             jws: jws,

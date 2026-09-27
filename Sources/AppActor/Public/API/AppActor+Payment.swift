@@ -275,7 +275,6 @@ extension AppActor {
 
         // Always drain pending receipts on foreground
         if let processor = self.paymentProcessor {
-            // Again, not only at launch: a launch before the first unlock couldn't read the queue.
             if let appUserId = paymentStorage?.currentAppUserId {
                 await processor.reassignUnpostedItemsWithRejectedAppUserId(to: appUserId)
             }
@@ -443,12 +442,9 @@ extension AppActor {
 
         // Overwrite local identity
         storage.setAppUserId(loginResult.appUserId)
-        // The server folds an anonymous user into the one logged in to (renamed in place or
-        // merged) and resolves the anonymous ID to that user from then on.
-        // Kept through later logIns (logOut and reset() clear it): the alias stays on the server.
+        // The server folds an anonymous user into the one logged in to and keeps its ID as an
+        // alias (see foldedAnonymousAppUser, moveQueuedMutations).
         if isCurrentIdAnonymous && currentId != loginResult.appUserId {
-            // Its writes still queued go out as the new user's, before any the app makes from
-            // now on: replayed later under the anonymous ID, they would land after those.
             customerAttributesManager.moveQueuedMutations(from: currentId, to: loginResult.appUserId)
             storage.setFoldedAnonymousAppUser((anonymousId: currentId, into: loginResult.appUserId))
         }
