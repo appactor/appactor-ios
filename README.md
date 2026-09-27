@@ -10,7 +10,7 @@
 
 <p align="center">
 <a href="https://github.com/appactor/appactor-ios/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-<img src="https://img.shields.io/badge/iOS-15%2B-blue.svg">
+<img src="https://img.shields.io/badge/iOS-16%2B-blue.svg">
 <img src="https://img.shields.io/badge/Swift-5.9%2B-orange.svg">
 <img src="https://img.shields.io/badge/SwiftPM-compatible-orange.svg">
 </p>
@@ -23,14 +23,14 @@ AppActor handles in-app purchases, subscriptions, and entitlements so you can fo
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/appactor/appactor-ios.git", from: "0.1.9")
+    .package(url: "https://github.com/appactor/appactor-ios.git", from: "0.2.0")
 ]
 ```
 
 ### CocoaPods
 
 ```ruby
-pod 'AppActor', '~> 0.1.9'
+pod 'AppActor', '~> 0.2.0'
 ```
 
 ## Quick Start

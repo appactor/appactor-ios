@@ -6,7 +6,7 @@ import Foundation
 enum AppActorASATokenResult: Sendable {
     /// Token obtained successfully.
     case token(String)
-    /// Platform doesn't support AdServices (macOS, watchOS, iOS < 14.3).
+    /// Platform doesn't support AdServices (macOS, watchOS).
     /// Attribution should be marked as completed (organic).
     case unavailable
     /// Transient error (AdServices framework failure).
@@ -32,7 +32,7 @@ enum AppActorASAAppleAttributionResult: Sendable {
 
 /// Abstraction over `AAAttribution.attributionToken()` and Apple's AdServices API for testability.
 ///
-/// The live implementation uses AdServices framework (iOS 14.3+).
+/// The live implementation uses the AdServices framework on iOS.
 /// Returns `.unavailable` on unsupported platforms (macOS, watchOS, etc.).
 protocol AppActorASATokenProviderProtocol: Sendable {
     /// Returns the ASA attribution token result.
@@ -46,7 +46,7 @@ protocol AppActorASATokenProviderProtocol: Sendable {
 
 /// Production token provider using Apple's AdServices framework.
 ///
-/// - iOS 14.3+: calls `AAAttribution.attributionToken()`
+/// - iOS: calls `AAAttribution.attributionToken()`
 /// - All other platforms: returns `.unavailable`
 final class AppActorASALiveTokenProvider: AppActorASATokenProviderProtocol, Sendable {
 
@@ -66,37 +66,32 @@ final class AppActorASALiveTokenProvider: AppActorASATokenProviderProtocol, Send
         Log.attribution.debug("Simulator detected, skipping attribution token fetch")
         return .unavailable
         #elseif canImport(AdServices) && os(iOS)
-        if #available(iOS 14.3, *) {
-            var lastError: Error?
-            for attempt in 1...Self.maxRetries {
-                do {
-                    let token = try AAAttribution.attributionToken()
-                    return .token(token)
-                } catch {
-                    lastError = error
-                    if attempt < Self.maxRetries {
-                        Log.attribution.warn("Token fetch attempt \(attempt)/\(Self.maxRetries) failed: \(error.localizedDescription), retrying in 3s…")
-                        do {
-                            try await Task.sleep(nanoseconds: Self.retryDelay)
-                        } catch {
-                            // [Fix #5] Return the sleep cancellation error itself, not the
-                            // previous token-fetch error. `lastError` is always non-nil here
-                            // (set on L71), so `lastError ?? error` would mask the CancellationError.
-                            Log.attribution.debug("Token retry cancelled during sleep")
-                            return .error(error)
-                        }
+        var lastError: Error?
+        for attempt in 1...Self.maxRetries {
+            do {
+                let token = try AAAttribution.attributionToken()
+                return .token(token)
+            } catch {
+                lastError = error
+                if attempt < Self.maxRetries {
+                    Log.attribution.warn("Token fetch attempt \(attempt)/\(Self.maxRetries) failed: \(error.localizedDescription), retrying in 3s…")
+                    do {
+                        try await Task.sleep(nanoseconds: Self.retryDelay)
+                    } catch {
+                        // [Fix #5] Return the sleep cancellation error itself, not the
+                        // previous token-fetch error. `lastError` is always non-nil here
+                        // (set in the catch above), so `lastError ?? error` would mask the CancellationError.
+                        Log.attribution.debug("Token retry cancelled during sleep")
+                        return .error(error)
                     }
                 }
             }
-            guard let finalError = lastError else {
-                return .error(NSError(domain: "AppActorASA", code: -1, userInfo: [NSLocalizedDescriptionKey: "Token fetch failed with unknown error"]))
-            }
-            Log.attribution.warn("Failed to get attribution token after \(Self.maxRetries) attempts: \(finalError.localizedDescription)")
-            return .error(finalError)
-        } else {
-            Log.attribution.debug("AdServices requires iOS 14.3+, skipping attribution")
-            return .unavailable
         }
+        guard let finalError = lastError else {
+            return .error(NSError(domain: "AppActorASA", code: -1, userInfo: [NSLocalizedDescriptionKey: "Token fetch failed with unknown error"]))
+        }
+        Log.attribution.warn("Failed to get attribution token after \(Self.maxRetries) attempts: \(finalError.localizedDescription)")
+        return .error(finalError)
         #else
         Log.attribution.debug("AdServices not available on this platform, skipping attribution")
         return .unavailable

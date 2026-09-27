@@ -643,13 +643,6 @@ actor AppActorOfferingsManager {
                 let customIdentifier: String? = (pkgType == .custom) ? packageDTO.packageType : nil
                 let packageId = packageDTO.id ?? "\(offeringDTO.id)_\(packageDTO.packageType)"
 
-                let currencyCode: String?
-                if #available(iOS 16.0, macOS 13.0, *) {
-                    currencyCode = skProduct.priceFormatStyle.currencyCode
-                } else {
-                    currencyCode = nil
-                }
-
                 let subscriptionGroupId = skProduct.subscription?.subscriptionGroupID
 
                 enrichedPackages.append(AppActorPackage(
@@ -668,7 +661,7 @@ actor AppActorOfferingsManager {
                     tokenAmount: packageDTO.tokenAmount,
                     position: packageDTO.position,
                     price: skProduct.price,
-                    currencyCode: currencyCode,
+                    currencyCode: skProduct.priceFormatStyle.currencyCode,
                     productType: productRef.productType,
                     productName: productRef.displayName ?? skProduct.displayName,
                     productDescription: skProduct.description,

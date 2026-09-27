@@ -652,13 +652,7 @@ extension AppActor {
     }
 
     private static var localeCountryCode: String? {
-        let region: String?
-        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
-            region = Locale.current.region?.identifier
-        } else {
-            region = Locale.current.regionCode
-        }
-        return normalizedCountryCode(region)
+        normalizedCountryCode(Locale.current.region?.identifier)
     }
 
     private static func currentStorefrontCountryCode() async -> String? {
@@ -670,22 +664,21 @@ extension AppActor {
 
     private static var attConsentStatus: String? {
         #if canImport(AppTrackingTransparency) && !os(watchOS)
-        if #available(iOS 14.0, tvOS 14.0, macCatalyst 14.0, *) {
-            switch ATTrackingManager.trackingAuthorizationStatus {
-            case .notDetermined:
-                return "not_determined"
-            case .restricted:
-                return "restricted"
-            case .denied:
-                return "denied"
-            case .authorized:
-                return "authorized"
-            @unknown default:
-                return "unknown"
-            }
+        switch ATTrackingManager.trackingAuthorizationStatus {
+        case .notDetermined:
+            return "not_determined"
+        case .restricted:
+            return "restricted"
+        case .denied:
+            return "denied"
+        case .authorized:
+            return "authorized"
+        @unknown default:
+            return "unknown"
         }
-        #endif
+        #else
         return nil
+        #endif
     }
 
     private static func normalizedCountryCode(_ raw: String?) -> String? {
@@ -698,13 +691,7 @@ extension AppActor {
         }
 
         let locale = Locale(identifier: "und_\(trimmed)")
-        let region: String?
-        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
-            region = locale.region?.identifier
-        } else {
-            region = locale.regionCode
-        }
-        guard let region = region?.uppercased(),
+        guard let region = locale.region?.identifier.uppercased(),
               region.range(of: #"^[A-Z]{2}$"#, options: .regularExpression) != nil else {
             return nil
         }

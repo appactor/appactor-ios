@@ -101,31 +101,27 @@ struct AppActorStoreKitSilentSyncFetcher: AppActorStoreKitSilentSyncFetcherProto
 	}
 
 	private static func fetchAppTransaction() async -> AppActorSilentSyncAppTransaction? {
-		if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
-			do {
-				let result = try await AppTransaction.shared
-				guard case let .verified(appTransaction) = result else {
-					return nil
-				}
-
-				let jws = result.jwsRepresentation
-				let jwsPayload = AppActorASATransactionSupport.decodeJWSPayload(jws)
-				let environment = AppActorASATransactionSupport.resolveEnvironment(
-					storeKitEnvironmentRaw: appTransaction.environment.rawValue,
-					jwsPayload: jwsPayload,
-					receiptFileName: Bundle.main.appStoreReceiptURL?.lastPathComponent
-				).rawValue
-
-				return AppActorSilentSyncAppTransaction(
-					bundleId: appTransaction.bundleID,
-					environment: environment,
-					jwsRepresentation: jws
-				)
-			} catch {
+		do {
+			let result = try await AppTransaction.shared
+			guard case let .verified(appTransaction) = result else {
 				return nil
 			}
-		}
 
-		return nil
+			let jws = result.jwsRepresentation
+			let jwsPayload = AppActorASATransactionSupport.decodeJWSPayload(jws)
+			let environment = AppActorASATransactionSupport.resolveEnvironment(
+				storeKitEnvironmentRaw: appTransaction.environment.rawValue,
+				jwsPayload: jwsPayload,
+				receiptFileName: Bundle.main.appStoreReceiptURL?.lastPathComponent
+			).rawValue
+
+			return AppActorSilentSyncAppTransaction(
+				bundleId: appTransaction.bundleID,
+				environment: environment,
+				jwsRepresentation: jws
+			)
+		} catch {
+			return nil
+		}
 	}
 }

@@ -480,14 +480,14 @@ public final class AppActorBridge {
         }
     }
 
-    // MARK: - Offer Code Redemption (iOS 16+)
+    // MARK: - Offer Code Redemption
 
     /// Presents the App Store offer code redemption sheet.
     ///
     /// - Parameters:
     ///   - onComplete: Called when the sheet is dismissed.
     ///   - onError: Called with an ``AppActorBridgeError`` on failure.
-    @available(iOS 16.0, macOS 14.0, *)
+    @available(macOS 14.0, *)
     public func presentOfferCodeRedeemSheet(
         onComplete: (() -> Void)? = nil,
         onError: ((AppActorBridgeError) -> Void)? = nil

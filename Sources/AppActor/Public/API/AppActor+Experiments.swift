@@ -55,11 +55,7 @@ extension AppActor {
     // MARK: - Helpers
 
     private static var experimentDeviceCountryCode: String? {
-        if #available(iOS 16, macOS 13, tvOS 16, watchOS 9, *) {
-            return Locale.current.region?.identifier
-        } else {
-            return Locale.current.regionCode
-        }
+        Locale.current.region?.identifier
     }
 }
 
