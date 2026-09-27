@@ -883,4 +883,17 @@ extension CustomerAttributesTests {
         try manager.enqueueAttributes(appUserId: "user_b", attributes: ["plan": .string("new")])
         XCTAssertEqual(manager.pendingBucket(appUserId: "user_b")?.attributes["plan"], .string("new"))
     }
+
+    func testAttributionMergeBaseMovesWithTheFoldedUserWhenNothingIsQueued() {
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage())
+        var campaign = AppActorAttribution()
+        campaign.campaignName = "summer"
+        _ = manager.mergeCustomAttribution(appUserId: "anon_a", patch: campaign)
+
+        manager.moveQueuedMutations(from: "anon_a", to: "user_b")
+
+        var source = AppActorAttribution()
+        source.source = "fb"
+        XCTAssertEqual(manager.mergeCustomAttribution(appUserId: "user_b", patch: source).campaignName, "summer")
+    }
 }

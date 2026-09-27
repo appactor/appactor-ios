@@ -279,6 +279,7 @@ final class PaymentQueueStoreTests: XCTestCase {
     // MARK: - I-S3-4: Unreadable file (before the first unlock)
 
     func testUnreadableQueueFileIsNeitherOverwrittenNorLost() throws {
+        try XCTSkipIf(getuid() == 0, "root reads a file with no permissions")
         store.upsert(.fixture(key: "apple:on_disk"))
         store.markPosted(key: "apple:posted")
         let fileURL = tempDir.appendingPathComponent("payment_queue.json")

@@ -275,6 +275,10 @@ extension AppActor {
 
         // Always drain pending receipts on foreground
         if let processor = self.paymentProcessor {
+            // Again, not only at launch: a launch before the first unlock couldn't read the queue.
+            if let appUserId = paymentStorage?.currentAppUserId {
+                await processor.reassignUnpostedItemsWithRejectedAppUserId(to: appUserId)
+            }
             await processor.drainAll()
         }
         try? await flushPendingCustomerAttributeWritesForAllUsers()
@@ -447,7 +451,7 @@ extension AppActor {
             // now on: replayed later under the anonymous ID, they would land after those.
             customerAttributesManager.moveQueuedMutations(from: foldedAnonymousId, to: loginResult.appUserId)
         }
-        paymentContext.foldedAnonymousAppUser = foldedAnonymousId.map { (anonymousId: $0, into: loginResult.appUserId) }
+        storage.setFoldedAnonymousAppUser(foldedAnonymousId.map { (anonymousId: $0, into: loginResult.appUserId) })
 
         // Rotate appAccountToken for new identity
         storage.clearAppAccountToken()
@@ -550,7 +554,7 @@ extension AppActor {
 
         storage.ensureAppAccountToken()
         storage.clearLegacyIdentityState()
-        paymentContext.foldedAnonymousAppUser = nil
+        storage.setFoldedAnonymousAppUser(nil)
         self.customerInfo = .empty
 
         Log.identity.debug("Logged out. New anonymous ID: \(String((storage.currentAppUserId ?? "nil").prefix(8)))…")
@@ -641,7 +645,6 @@ extension AppActor {
         _onPurchaseIntent = nil
         paymentContext.pendingProductCounts.removeAll()
         paymentContext.deferredPurchaseHandler = nil
-        paymentContext.foldedAnonymousAppUser = nil
 
         // ── Phase 3: Clear persisted + in-memory state ──
         if let storage = paymentStorage {
@@ -657,6 +660,7 @@ extension AppActor {
             storage.clearAsaTokenOnlyAttempts()
             storage.remove(forKey: AppActorPaymentStorageKey.customerAttributesQueue)
             storage.remove(forKey: AppActorPaymentStorageKey.pendingPurchaseContexts)
+            storage.remove(forKey: AppActorPaymentStorageKey.foldedAnonymousAppUser)
             storage.clearLegacyIdentityState()
         }
 

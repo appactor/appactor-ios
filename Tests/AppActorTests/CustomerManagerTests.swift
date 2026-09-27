@@ -1332,7 +1332,9 @@ final class CustomerManagerTests: XCTestCase {
         let manager = makeManager()
 
         let forced = Task { try await manager.getCustomerInfo(appUserId: "user_123", forceRefresh: true) }
-        try await Task.sleep(nanoseconds: 20_000_000)
+        while client.getCustomerCalls.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
         let joined = try await manager.getCustomerInfo(appUserId: "user_123")
 
         XCTAssertEqual(joined.entitlements["premium"]?.isActive, true)

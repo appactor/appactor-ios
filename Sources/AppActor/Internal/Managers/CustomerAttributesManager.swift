@@ -110,28 +110,38 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
         }
     }
 
-    /// Queues everything still queued for `appUserId` under `newAppUserId`, over what that user
-    /// has queued: the server has folded the first user into the second, so these are the second
-    /// user's writes, and older than any made from now on.
+    /// Moves `appUserId`'s queue state to `newAppUserId`, which the server has folded it into:
+    /// its queued writes go under what that user has queued (they are newer) and before any made
+    /// from now on, and its attribution becomes the one the helpers build on, as on the server,
+    /// unless that user has one of its own.
     func moveQueuedMutations(from appUserId: String, to newAppUserId: String) {
         lock.withLock {
+            guard appUserId != newAppUserId else { return }
             var state = loadState(from: storage)
-            guard appUserId != newAppUserId, let moved = state.buckets.removeValue(forKey: appUserId) else { return }
-            var bucket = state.buckets[newAppUserId] ?? PendingBucket()
-            bucket.queue(attributes: moved.attributes, unsetKeys: moved.unsetAttributeKeys)
-            bucket.queue(integrationIdentifiers: moved.integrationIdentifiers, unsetKeys: moved.unsetIntegrationIdentifierKeys)
-            if let attribution = moved.attribution {
-                bucket.attribution = attribution
-                // The merge base the attribution helpers build the next one on.
-                let snapshot = customAttributionSnapshots.removeValue(forKey: appUserId)
-                    ?? state.customAttributionSnapshots.removeValue(forKey: appUserId)
-                    ?? attribution
+            let moved = state.buckets[appUserId]
+            if let moved {
+                var bucket = state.buckets[newAppUserId] ?? PendingBucket()
+                bucket.queue(attributes: moved.attributes, unsetKeys: moved.unsetAttributeKeys)
+                bucket.queue(integrationIdentifiers: moved.integrationIdentifiers, unsetKeys: moved.unsetIntegrationIdentifierKeys)
+                bucket.attribution = moved.attribution ?? bucket.attribution
+                // Too many to queue for one user: left under the old ID, which the server resolves
+                // to the same user.
+                guard (try? enforceCaps(bucket)) != nil else { return }
+                bucket.updatedAt = Date()
+                state.buckets[newAppUserId] = bucket
+                state.buckets.removeValue(forKey: appUserId)
+            }
+            let snapshot = customAttributionSnapshots.removeValue(forKey: appUserId)
+                ?? state.customAttributionSnapshots[appUserId]
+            state.customAttributionSnapshots.removeValue(forKey: appUserId)
+            if let snapshot, moved?.attribution != nil || state.customAttributionSnapshots[newAppUserId] == nil {
                 customAttributionSnapshots[newAppUserId] = snapshot
                 state.customAttributionSnapshots[newAppUserId] = snapshot
-                state.customAttributionSnapshots.removeValue(forKey: appUserId)
             }
-            bucket.updatedAt = Date()
-            state.buckets[newAppUserId] = bucket
+            if let delivered = state.deliveredAttributions.removeValue(forKey: appUserId),
+               state.deliveredAttributions[newAppUserId] == nil {
+                state.deliveredAttributions[newAppUserId] = delivered
+            }
             trimQueuedUsers(&state, preserving: newAppUserId)
             saveState(state, to: storage)
         }

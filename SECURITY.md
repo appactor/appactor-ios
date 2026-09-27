@@ -31,4 +31,4 @@ This policy applies to the AppActor iOS SDK source code in this repository.
 - Response integrity is verified using Ed25519 signatures
 - Identity data is stored in the app sandbox via UserDefaults
 - No credentials or API keys are hardcoded in the SDK
-- Logged request paths mask the app user ID; only debug-level diagnostics, off by default, print it
+- Logged request paths mask the app user ID

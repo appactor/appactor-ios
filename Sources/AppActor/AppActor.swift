@@ -622,9 +622,6 @@ final class AppActorPaymentContext {
     var pendingProductCounts: [String: Int] = [:]
     /// Called when a previously deferred (`.pending`) purchase resolves via Transaction.updates.
     var deferredPurchaseHandler: ((_ productId: String, _ customerInfo: AppActorCustomerInfo) -> Void)?
-    /// The anonymous ID the last logIn folded into the ID it logged in to: the same customer on
-    /// the server, so a receipt posted under it is the current user's.
-    var foldedAnonymousAppUser: (anonymousId: String, into: String)?
     /// Bundled fallback offerings DTO for first-launch offline scenarios.
     var fallbackOfferingsDTO: AppActorOfferingsResponseDTO?
 

@@ -125,13 +125,18 @@ extension AppActor {
         // A login/logout between enqueue and response could cause stale data.
         guard receiptContext.appUserId == currentAppUserId else {
             Log.customer.debug("Skipping customer cache seed — receipt userId (\(receiptContext.appUserId)) != current userId (\(currentAppUserId))")
-            // Posted under the anonymous ID the last logIn folded into the current one: bought
-            // by the same customer, so a deferred purchase still resolves for them.
-            let isFoldedIntoCurrent = paymentContext.foldedAnonymousAppUser.map {
-                $0.anonymousId == receiptContext.appUserId && $0.into == currentAppUserId
-            } ?? false
-            if let refreshed = try? await getCustomerInfo(),
-               isFoldedIntoCurrent, paymentStorage?.currentAppUserId == currentAppUserId {
+            // Posted under the anonymous ID the last logIn folded into the current one: bought by
+            // the same customer, so a deferred purchase still resolves for them. Forced, so it
+            // doesn't join a customer fetch already in flight that may predate the purchase.
+            let fold = paymentStorage?.foldedAnonymousAppUser
+            guard receiptContext.isDeferredPurchaseResolution,
+                  fold?.anonymousId == receiptContext.appUserId, fold?.into == currentAppUserId else {
+                _ = try? await getCustomerInfo()
+                return
+            }
+            guard let refreshed = try? await manager.getCustomerInfo(appUserId: currentAppUserId, forceRefresh: true) else { return }
+            await setCustomerInfoIfIdentityMatches(refreshed, expectedAppUserId: currentAppUserId)
+            if paymentStorage?.currentAppUserId == currentAppUserId {
                 resolveDeferredPurchase(receiptContext, info: refreshed)
             }
             return

@@ -78,7 +78,7 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         case .notAvailable:
             return "[AppActor] Feature not available: \(message ?? "unknown")"
         case .network:
-            let detail = underlying?.localizedDescription ?? "unknown"
+            let detail = underlying?.localizedDescription ?? message ?? "unknown"
             return "[AppActor] Network error: \(detail)"
         case .decoding:
             let detail = underlying?.localizedDescription ?? "unknown"
