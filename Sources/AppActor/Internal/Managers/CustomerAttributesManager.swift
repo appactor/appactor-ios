@@ -112,32 +112,40 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
 
     /// Moves `appUserId`'s queue state to `newAppUserId`, which the server has folded it into:
     /// its queued writes go under what that user has queued (they are newer) and before any made
-    /// from now on, and its attribution becomes the one the helpers build on. On the server the
+    /// from now on. Its attribution, queued or delivered, replaces that user's: on the server the
     /// newer attribution wins the merge, and on this device the anonymous one is the newer.
     func moveQueuedMutations(from appUserId: String, to newAppUserId: String) {
         lock.withLock {
             guard appUserId != newAppUserId else { return }
             var state = loadState(from: storage)
             let moved = state.buckets[appUserId]
+            let snapshot = customAttributionSnapshots[appUserId] ?? state.customAttributionSnapshots[appUserId]
+            let delivered = state.deliveredAttributions[appUserId]
+            guard moved != nil || snapshot != nil || delivered != nil else { return }
+
+            var bucket = state.buckets[newAppUserId] ?? PendingBucket()
             if let moved {
-                var bucket = state.buckets[newAppUserId] ?? PendingBucket()
                 bucket.queue(attributes: moved.attributes, unsetKeys: moved.unsetAttributeKeys)
                 bucket.queue(integrationIdentifiers: moved.integrationIdentifiers, unsetKeys: moved.unsetIntegrationIdentifierKeys)
-                bucket.attribution = moved.attribution ?? bucket.attribution
-                // Too many to queue for one user: left under the old ID, which the server resolves
-                // to the same user.
-                guard (try? enforceCaps(bucket)) != nil else { return }
-                bucket.updatedAt = Date()
-                state.buckets[newAppUserId] = bucket
-                state.buckets.removeValue(forKey: appUserId)
             }
-            if let snapshot = customAttributionSnapshots.removeValue(forKey: appUserId)
-                ?? state.customAttributionSnapshots[appUserId] {
+            if moved?.attribution != nil || snapshot != nil || delivered != nil {
+                bucket.attribution = moved?.attribution
+            }
+            // Too many to queue for one user: left under the old ID, which the server resolves to
+            // the same user.
+            guard (try? enforceCaps(bucket)) != nil else { return }
+            bucket.updatedAt = Date()
+            state.update(bucket, for: newAppUserId)
+            state.buckets.removeValue(forKey: appUserId)
+
+            customAttributionSnapshots.removeValue(forKey: appUserId)
+            state.customAttributionSnapshots.removeValue(forKey: appUserId)
+            state.deliveredAttributions.removeValue(forKey: appUserId)
+            if let snapshot {
                 customAttributionSnapshots[newAppUserId] = snapshot
                 state.customAttributionSnapshots[newAppUserId] = snapshot
             }
-            state.customAttributionSnapshots.removeValue(forKey: appUserId)
-            if let delivered = state.deliveredAttributions.removeValue(forKey: appUserId) {
+            if let delivered {
                 state.deliveredAttributions[newAppUserId] = delivered
             }
             trimQueuedUsers(&state, preserving: newAppUserId)

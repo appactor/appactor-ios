@@ -896,4 +896,19 @@ extension CustomerAttributesTests {
         source.source = "fb"
         XCTAssertEqual(manager.mergeCustomAttribution(appUserId: "user_b", patch: source).campaignName, "summer")
     }
+
+    func testFoldedUsersAttributionReplacesTheTargetsOlderQueuedOne() throws {
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage())
+        var winter = AppActorAttribution()
+        winter.campaignName = "winter"
+        try manager.enqueueAttribution(appUserId: "user_b", attribution: winter)
+        var summer = AppActorAttribution()
+        summer.campaignName = "summer"
+        _ = manager.mergeCustomAttribution(appUserId: "anon_a", patch: summer)
+
+        manager.moveQueuedMutations(from: "anon_a", to: "user_b")
+
+        XCTAssertNil(manager.pendingBucket(appUserId: "user_b")?.attribution, "The older queued attribution is not sent")
+        XCTAssertEqual(manager.mergeCustomAttribution(appUserId: "user_b", patch: AppActorAttribution()).campaignName, "summer")
+    }
 }

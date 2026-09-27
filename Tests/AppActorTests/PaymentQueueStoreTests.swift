@@ -320,6 +320,16 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertEqual(item.appUserId, "user_b", "As a normal launch would: the claim is reset before the merge")
     }
 
+    func testItemUnderARejectedAppUserIdIsNotClaimedUntilReassigned() throws {
+        store.upsert(.fixture(key: "apple:rejected", appUserId: "null"))
+        XCTAssertTrue(store.claimReady(limit: 10, now: Date()).isEmpty)
+
+        var item = try XCTUnwrap(store.snapshot().first)
+        item.appUserId = "user_123"
+        store.update(item)
+        XCTAssertEqual(store.claimReady(limit: 10, now: Date()).map(\.key), ["apple:rejected"])
+    }
+
     // MARK: - I-E11b: Phase dropped since 0.0.6/0.0.7
 
     func testQueueWithWaitingForIdentityPhaseFromOldReleaseLoadsAsNeedsPost() throws {

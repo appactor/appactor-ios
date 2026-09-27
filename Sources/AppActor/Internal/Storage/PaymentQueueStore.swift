@@ -173,6 +173,9 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
 
         for (key, item) in map {
             guard claimed.count < limit else { break }
+            // Posted under an ID the server rejects, it would be refused and finished: it waits for
+            // `reassignUnpostedItemsWithRejectedAppUserId` (at launch and on foreground).
+            guard AppActorPaymentValidation.isValidAppUserId(item.appUserId) else { continue }
 
             let shouldClaim: Bool
             switch item.phase {

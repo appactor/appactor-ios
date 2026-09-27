@@ -130,8 +130,16 @@ extension AppActor {
             // doesn't join a customer fetch already in flight that may predate the purchase.
             let fold = paymentStorage?.foldedAnonymousAppUser
             guard paymentLifecycle == .configured, receiptContext.isDeferredPurchaseResolution,
-                  fold?.anonymousId == receiptContext.appUserId, fold?.into == currentAppUserId,
-                  let refreshed = try? await manager.getCustomerInfo(appUserId: currentAppUserId, forceRefresh: true) else {
+                  fold?.anonymousId == receiptContext.appUserId, fold?.into == currentAppUserId else {
+                _ = try? await getCustomerInfo()
+                return
+            }
+            let refreshed: AppActorCustomerInfo
+            do {
+                refreshed = try await manager.getCustomerInfo(appUserId: currentAppUserId, forceRefresh: true)
+            } catch is CancellationError {
+                return // a logOut or reset() is deleting this user's cache
+            } catch {
                 _ = try? await getCustomerInfo()
                 return
             }

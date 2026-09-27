@@ -1332,9 +1332,10 @@ final class CustomerManagerTests: XCTestCase {
         let manager = makeManager()
 
         let forced = Task { try await manager.getCustomerInfo(appUserId: "user_123", forceRefresh: true) }
-        while client.getCustomerCalls.isEmpty {
+        for _ in 0..<2_000 where client.getCustomerCalls.isEmpty {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
+        XCTAssertEqual(client.getCustomerCalls.count, 1, "The forced fetch has started")
         let joined = try await manager.getCustomerInfo(appUserId: "user_123")
 
         XCTAssertEqual(joined.entitlements["premium"]?.isActive, true)

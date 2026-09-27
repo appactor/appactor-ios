@@ -22,7 +22,8 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         case decoding
         /// Server returned a non-2xx response.
         case server
-        /// All StoreKit products for offerings were missing from the App Store.
+        /// All StoreKit products for offerings were missing from the App Store, or StoreKit
+        /// couldn't load them (code `STOREKIT_PRODUCTS_UNAVAILABLE`).
         case storeKitProductsMissing
         /// Customer not found (404 from server).
         case customerNotFound
