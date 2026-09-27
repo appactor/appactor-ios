@@ -311,7 +311,7 @@ enum AppActorPaymentValidation {
     /// What JavaScript's `String.prototype.trim()` removes, which the server trims with:
     /// space separators, tab, the line terminators and U+FEFF. Unlike `.whitespacesAndNewlines`
     /// it keeps U+0085.
-    private static let serverTrimmedCharacters: CharacterSet = {
+    static let serverTrimmedCharacters: CharacterSet = {
         var set = CharacterSet.whitespaces
         set.insert(charactersIn: "\n\u{0B}\u{0C}\r\u{2028}\u{2029}\u{FEFF}")
         return set

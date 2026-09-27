@@ -101,7 +101,8 @@ struct AppActorClientPurchaseContext: Codable, Sendable, Equatable {
 
     static func normalizePlacement(_ placement: String?) -> String? {
         let normalized = placement?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let normalized, !normalized.isEmpty, normalized.count <= 255 else { return nil }
+        // The server counts UTF-16 code units, as JavaScript does.
+        guard let normalized, !normalized.isEmpty, normalized.utf16.count <= 255 else { return nil }
         return normalized
     }
 }
@@ -144,10 +145,10 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
     ) {
         guard context.hasPurchaseAttempt, !productId.isEmpty else { return }
         pruneExpired(now: recordedAt)
-        let normalizedAppUserId = appUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
         contextsByProductId[productId, default: []].append(StoredEntry(
             recordedAt: recordedAt,
-            appUserId: normalizedAppUserId?.isEmpty == false ? normalizedAppUserId : nil,
+            // Verbatim, as configure() and logIn() store it: the receipt is posted under it.
+            appUserId: appUserId.flatMap { AppActorPaymentValidation.isBlank($0) ? nil : $0 },
             appAccountToken: appAccountToken,
             context: context
         ))

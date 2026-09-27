@@ -11,8 +11,12 @@ public enum AppActorOwnershipType: String, Sendable, Codable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        let raw = try container.decode(String.self)
-        self = AppActorOwnershipType(rawValue: raw) ?? .unknown
+        self = AppActorOwnershipType(serverValue: try container.decode(String.self))
+    }
+
+    /// Also reads the server's `family_shared`; the raw value is the SDK's own spelling.
+    init(serverValue: String) {
+        self = serverValue == "family_shared" ? .familyShared : AppActorOwnershipType(rawValue: serverValue) ?? .unknown
     }
 }
 

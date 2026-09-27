@@ -862,3 +862,25 @@ private func XCTAssertThrowsErrorAsync(
         handler(error)
     }
 }
+
+// MARK: - I-S5-4: An anonymous user's queued writes move with its logIn
+
+extension CustomerAttributesTests {
+    func testQueuedMutationsMoveToTheUserTheAnonymousOneWasFoldedInto() throws {
+        let manager = AppActorCustomerAttributesManager(storage: InMemoryPaymentStorage())
+        try manager.enqueueAttributes(appUserId: "user_b", attributes: ["plan": .string("old"), "kept": .string("b")])
+        try manager.enqueueAttributes(appUserId: "anon_a", attributes: ["plan": .string("anon")], unsetKeys: ["kept"])
+        try manager.enqueueIntegrationIdentifier(appUserId: "anon_a", key: "$onesignalId", value: "os_1")
+
+        manager.moveQueuedMutations(from: "anon_a", to: "user_b")
+
+        XCTAssertNil(manager.pendingBucket(appUserId: "anon_a"))
+        let bucket = try XCTUnwrap(manager.pendingBucket(appUserId: "user_b"))
+        XCTAssertEqual(bucket.attributes, ["plan": .string("anon")])
+        XCTAssertEqual(bucket.unsetAttributeKeys, ["kept"])
+        XCTAssertEqual(bucket.integrationIdentifiers, ["$onesignalId": "os_1"])
+
+        try manager.enqueueAttributes(appUserId: "user_b", attributes: ["plan": .string("new")])
+        XCTAssertEqual(manager.pendingBucket(appUserId: "user_b")?.attributes["plan"], .string("new"))
+    }
+}

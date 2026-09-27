@@ -84,6 +84,13 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
     /// In-memory cache. Loaded lazily from disk on first access.
     private var items: [String: AppActorPaymentQueueItem]?
 
+    /// Whether payment_queue.json exists but couldn't be read: before the first unlock after a
+    /// reboot the file is class C. The queue then reads as empty, but nothing is cached or written
+    /// over the file, upserts wait in `stagedUpserts`, and the next access reads it again.
+    private var isFileUnreadable = false
+    /// Upserts made while the file couldn't be read, merged in once it can.
+    private var stagedUpserts: [AppActorPaymentQueueItem] = []
+
     /// In-memory cache for persisted rate-limit cooldown.
     private var cachedCooldown: Date?
     /// Whether `cachedCooldown` has been loaded from disk.
@@ -134,14 +141,26 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
 
     func upsert(_ item: AppActorPaymentQueueItem) {
         var map = loadFromDisk()
+        guard !isFileUnreadable else {
+            stagedUpserts.append(item)
+            return
+        }
+        Self.merge(item, into: &map)
+        save(map)
+    }
 
+    private static func merge(_ item: AppActorPaymentQueueItem, into map: inout [String: AppActorPaymentQueueItem]) {
         if var existing = map[item.key] {
             existing.mergeFrom(item)
             map[item.key] = existing
         } else {
             map[item.key] = item
         }
+    }
 
+    /// Caches and persists `map`, unless the file couldn't be read (see `isFileUnreadable`).
+    private func save(_ map: [String: AppActorPaymentQueueItem]) {
+        guard !isFileUnreadable else { return }
         items = map
         writeToDisk(map)
     }
@@ -179,8 +198,7 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         }
 
         if !claimed.isEmpty {
-            items = map
-            writeToDisk(map)
+            save(map)
         }
 
         return claimed
@@ -189,18 +207,18 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
     func update(_ item: AppActorPaymentQueueItem) {
         var map = loadFromDisk()
         map[item.key] = item
-        items = map
-        writeToDisk(map)
+        save(map)
     }
 
     func remove(key: String) {
         var map = loadFromDisk()
         map.removeValue(forKey: key)
-        items = map
-        writeToDisk(map)
+        save(map)
     }
 
     func clear() {
+        isFileUnreadable = false
+        stagedUpserts = []
         items = [:]
         cachedCooldown = nil
         cooldownLoaded = true
@@ -248,6 +266,8 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
 
     func markPosted(key: String) {
         var ledger = loadLedger()
+        // The ledger on disk wasn't read: kept in memory, this one would replace it.
+        guard !isFileUnreadable else { return }
         ledger[key] = Date().timeIntervalSince1970
         enforceLedgerCap(&ledger)
         postedLedger = ledger
@@ -259,14 +279,14 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         // Atomically mark posted + update item phase in a single disk write.
         // This eliminates the crash window between separate markPosted and update calls.
         var ledger = loadLedger()
+        guard !isFileUnreadable else { return }
         ledger[key] = Date().timeIntervalSince1970
         enforceLedgerCap(&ledger)
         postedLedger = ledger
 
         var map = loadFromDisk()
         map[item.key] = item
-        items = map
-        writeToDisk(map)
+        save(map)
     }
 
     private func enforceLedgerCap(_ ledger: inout [String: TimeInterval]) {
@@ -282,6 +302,7 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
 
     func purgeExpiredLedgerEntries(olderThan retention: TimeInterval) {
         var ledger = loadLedger()
+        guard !isFileUnreadable else { return }
         let cutoff = Date().timeIntervalSince1970 - retention
 
         // Remove entries older than retention
@@ -316,8 +337,7 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
             map.removeValue(forKey: key)
         }
         if purgedCount > 0 {
-            items = map
-            writeToDisk(map)
+            save(map)
         }
         return purgedCount
     }
@@ -334,46 +354,34 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
     private func loadFromDisk() -> [String: AppActorPaymentQueueItem] {
         if let cached = items { return cached }
 
-        guard FileManager.default.fileExists(atPath: fileURL.path),
-              let data = try? Data(contentsOf: fileURL) else {
-            items = [:]
-            if !cooldownLoaded {
-                cachedCooldown = nil
-                cooldownLoaded = true
+        var list: [AppActorPaymentQueueItem] = []
+        var cooldown: Date?
+        var ledger: [String: TimeInterval] = [:]
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            guard let data = try? Data(contentsOf: fileURL) else {
+                if !isFileUnreadable {
+                    Log.storage.warn("Payment queue can't be read yet (device not unlocked since boot?); reading it again on next access")
+                }
+                isFileUnreadable = true
+                return [:]
             }
-            return [:]
+            // Try new PersistedState format first, fall back to legacy [PaymentQueueItem]; a
+            // corrupt file reads as empty.
+            if let state = try? decoder.decode(PersistedState.self, from: data) {
+                list = state.items
+                cooldown = state.rateLimitCooldownUntil
+                ledger = state.postedKeys ?? [:]
+            } else if let legacyList = try? decoder.decode([AppActorPaymentQueueItem].self, from: data) {
+                list = legacyList
+            }
         }
-
-        // Try new PersistedState format first, fall back to legacy [PaymentQueueItem]
-        let list: [AppActorPaymentQueueItem]
-        if let state = try? decoder.decode(PersistedState.self, from: data) {
-            list = state.items
-            if !cooldownLoaded {
-                cachedCooldown = state.rateLimitCooldownUntil
-                cooldownLoaded = true
-            }
-            if postedLedger == nil {
-                postedLedger = state.postedKeys ?? [:]
-            }
-        } else if let legacyList = try? decoder.decode([AppActorPaymentQueueItem].self, from: data) {
-            list = legacyList
-            if !cooldownLoaded {
-                cachedCooldown = nil
-                cooldownLoaded = true
-            }
-            if postedLedger == nil {
-                postedLedger = [:]
-            }
-        } else {
-            items = [:]
-            if !cooldownLoaded {
-                cachedCooldown = nil
-                cooldownLoaded = true
-            }
-            if postedLedger == nil {
-                postedLedger = [:]
-            }
-            return [:]
+        isFileUnreadable = false
+        if !cooldownLoaded {
+            cachedCooldown = cooldown
+            cooldownLoaded = true
+        }
+        if postedLedger == nil {
+            postedLedger = ledger
         }
 
         // Build map keyed by item.key
@@ -398,6 +406,10 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         }
         if purgedCount > 0 {
             Log.storage.info("Purged \(purgedCount) dead-lettered payment queue item(s) older than 30 days")
+        }
+        stagedUpserts.forEach { Self.merge($0, into: &map) }
+        if purgedCount > 0 || !stagedUpserts.isEmpty {
+            stagedUpserts = []
             writeToDisk(map)
         }
 
@@ -417,6 +429,8 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
     /// Writes the current items + cooldown state to disk atomically.
     /// Always reads `cachedCooldown` for the cooldown value.
     private func writeToDisk(_ map: [String: AppActorPaymentQueueItem]) {
+        // It would replace a queue that is still there (see `isFileUnreadable`).
+        guard !isFileUnreadable else { return }
         let state = PersistedState(
             items: Array(map.values),
             rateLimitCooldownUntil: cachedCooldown,

@@ -58,16 +58,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     ) throws {
         try mutateState { state in
             var bucket = state.buckets[appUserId] ?? PendingBucket()
-            for (key, value) in attributes {
-                bucket.attributes[key] = value
-                bucket.unsetAttributeKeys.removeAll { $0 == key }
-            }
-            for key in unsetKeys {
-                bucket.attributes.removeValue(forKey: key)
-                if !bucket.unsetAttributeKeys.contains(key) {
-                    bucket.unsetAttributeKeys.append(key)
-                }
-            }
+            bucket.queue(attributes: attributes, unsetKeys: unsetKeys)
             try enforceCaps(bucket)
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
@@ -82,8 +73,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     ) throws {
         try mutateState { state in
             var bucket = state.buckets[appUserId] ?? PendingBucket()
-            bucket.integrationIdentifiers[key] = value
-            bucket.unsetIntegrationIdentifierKeys.removeAll { $0 == key }
+            bucket.queue(integrationIdentifiers: [key: value])
             try enforceCaps(bucket)
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
@@ -97,10 +87,7 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
     ) throws {
         try mutateState { state in
             var bucket = state.buckets[appUserId] ?? PendingBucket()
-            bucket.integrationIdentifiers.removeValue(forKey: key)
-            if !bucket.unsetIntegrationIdentifierKeys.contains(key) {
-                bucket.unsetIntegrationIdentifierKeys.append(key)
-            }
+            bucket.queue(integrationIdentifiers: [:], unsetKeys: [key])
             try enforceCaps(bucket)
             bucket.updatedAt = Date()
             state.buckets[appUserId] = bucket
@@ -120,6 +107,33 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
             customAttributionSnapshots[appUserId] = attribution
             state.customAttributionSnapshots[appUserId] = attribution
             trimQueuedUsers(&state, preserving: appUserId)
+        }
+    }
+
+    /// Queues everything still queued for `appUserId` under `newAppUserId`, over what that user
+    /// has queued: the server has folded the first user into the second, so these are the second
+    /// user's writes, and older than any made from now on.
+    func moveQueuedMutations(from appUserId: String, to newAppUserId: String) {
+        lock.withLock {
+            var state = loadState(from: storage)
+            guard appUserId != newAppUserId, let moved = state.buckets.removeValue(forKey: appUserId) else { return }
+            var bucket = state.buckets[newAppUserId] ?? PendingBucket()
+            bucket.queue(attributes: moved.attributes, unsetKeys: moved.unsetAttributeKeys)
+            bucket.queue(integrationIdentifiers: moved.integrationIdentifiers, unsetKeys: moved.unsetIntegrationIdentifierKeys)
+            if let attribution = moved.attribution {
+                bucket.attribution = attribution
+                // The merge base the attribution helpers build the next one on.
+                let snapshot = customAttributionSnapshots.removeValue(forKey: appUserId)
+                    ?? state.customAttributionSnapshots.removeValue(forKey: appUserId)
+                    ?? attribution
+                customAttributionSnapshots[newAppUserId] = snapshot
+                state.customAttributionSnapshots[newAppUserId] = snapshot
+                state.customAttributionSnapshots.removeValue(forKey: appUserId)
+            }
+            bucket.updatedAt = Date()
+            state.buckets[newAppUserId] = bucket
+            trimQueuedUsers(&state, preserving: newAppUserId)
+            saveState(state, to: storage)
         }
     }
 
@@ -533,6 +547,34 @@ extension AppActorCustomerAttributesManager {
             unsetIntegrationIdentifierKeys = try container.decodeIfPresent([String].self, forKey: .unsetIntegrationIdentifierKeys) ?? []
             attribution = try container.decodeIfPresent(AppActorAttribution.self, forKey: .attribution)
             updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        }
+
+        /// Queues sets and unsets over what is queued; the later one for a key wins.
+        mutating func queue(attributes: [String: AppActorAttributeValue], unsetKeys: [String]) {
+            for (key, value) in attributes {
+                self.attributes[key] = value
+                unsetAttributeKeys.removeAll { $0 == key }
+            }
+            for key in unsetKeys {
+                self.attributes.removeValue(forKey: key)
+                if !unsetAttributeKeys.contains(key) {
+                    unsetAttributeKeys.append(key)
+                }
+            }
+        }
+
+        /// Queues sets and unsets over what is queued; the later one for a key wins.
+        mutating func queue(integrationIdentifiers: [String: String], unsetKeys: [String] = []) {
+            for (key, value) in integrationIdentifiers {
+                self.integrationIdentifiers[key] = value
+                unsetIntegrationIdentifierKeys.removeAll { $0 == key }
+            }
+            for key in unsetKeys {
+                self.integrationIdentifiers.removeValue(forKey: key)
+                if !unsetIntegrationIdentifierKeys.contains(key) {
+                    unsetIntegrationIdentifierKeys.append(key)
+                }
+            }
         }
 
         var isEmpty: Bool {

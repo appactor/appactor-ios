@@ -367,8 +367,9 @@ extension AppActor {
     ///
     /// - Parameter newAppUserId: The new user identifier (e.g. your backend user ID).
     /// - Returns: The server-authoritative `AppActorCustomerInfo` with entitlements and subscriptions.
-    /// - Throws: `AppActorError` with `.server` kind and 409 status if the ID belongs to another user,
-    ///   or `.notConfigured` if ``reset()`` runs before the login completes (the result is dropped).
+    /// - Throws: `AppActorError` on network or server failures (a login that meets another identity
+    ///   merge in progress is retried first, as the server asks), or `.notConfigured` if
+    ///   ``reset()`` runs before the login completes (the result is dropped).
     @discardableResult
     public func logIn(newAppUserId: String) async throws -> AppActorCustomerInfo {
         guard paymentLifecycle == .configured else {
@@ -381,6 +382,7 @@ extension AppActor {
         try AppActorPaymentValidation.validateAppUserId(newAppUserId)
 
         let currentId = storage.ensureAppUserId()
+        let isCurrentIdAnonymous = storage.isCurrentAppUserIdAnonymous
         let session = sessionGeneration
         let watcher = transactionWatcher
 
@@ -437,6 +439,15 @@ extension AppActor {
 
         // Overwrite local identity
         storage.setAppUserId(loginResult.appUserId)
+        // The server folds an anonymous user into the one logged in to (renamed in place or
+        // merged) and resolves the anonymous ID to that user from then on.
+        let foldedAnonymousId = isCurrentIdAnonymous && currentId != loginResult.appUserId ? currentId : nil
+        if let foldedAnonymousId {
+            // Its writes still queued go out as the new user's, before any the app makes from
+            // now on: replayed later under the anonymous ID, they would land after those.
+            customerAttributesManager.moveQueuedMutations(from: foldedAnonymousId, to: loginResult.appUserId)
+        }
+        paymentContext.foldedAnonymousAppUser = foldedAnonymousId.map { (anonymousId: $0, into: loginResult.appUserId) }
 
         // Rotate appAccountToken for new identity
         storage.clearAppAccountToken()
@@ -539,6 +550,7 @@ extension AppActor {
 
         storage.ensureAppAccountToken()
         storage.clearLegacyIdentityState()
+        paymentContext.foldedAnonymousAppUser = nil
         self.customerInfo = .empty
 
         Log.identity.debug("Logged out. New anonymous ID: \(String((storage.currentAppUserId ?? "nil").prefix(8)))…")
@@ -629,6 +641,7 @@ extension AppActor {
         _onPurchaseIntent = nil
         paymentContext.pendingProductCounts.removeAll()
         paymentContext.deferredPurchaseHandler = nil
+        paymentContext.foldedAnonymousAppUser = nil
 
         // ── Phase 3: Clear persisted + in-memory state ──
         if let storage = paymentStorage {

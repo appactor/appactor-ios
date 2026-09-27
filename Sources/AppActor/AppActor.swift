@@ -126,18 +126,18 @@ public final class AppActor: ObservableObject {
         }
 
         let lookupId = package.storeProductId ?? package.productId
-        if let manager = offeringsManager,
-           let product = try await manager.storeKitProduct(for: lookupId) {
-            return try await executePaymentPurchase(
-                product: product,
-                options: options,
-                offeringId: package.offeringId,
-                packageId: package.id,
-                placement: placement
-            )
+        let product: Product?
+        do {
+            if let manager = offeringsManager, let managed = try await manager.storeKitProduct(for: lookupId) {
+                product = managed
+            } else {
+                product = try await Product.products(for: [lookupId]).first { $0.id == lookupId }
+            }
+        } catch let error where !(error is AppActorError) && !(error is CancellationError) {
+            // StoreKit's own error, from loading the product.
+            throw AppActorError.fromPurchaseError(error)
         }
-        let products = try await Product.products(for: [lookupId])
-        guard let product = products.first(where: { $0.id == lookupId }) else {
+        guard let product else {
             throw AppActorError.validationError("StoreKit product '\(lookupId)' not found for package '\(package.id)'")
         }
         return try await executePaymentPurchase(
@@ -622,6 +622,9 @@ final class AppActorPaymentContext {
     var pendingProductCounts: [String: Int] = [:]
     /// Called when a previously deferred (`.pending`) purchase resolves via Transaction.updates.
     var deferredPurchaseHandler: ((_ productId: String, _ customerInfo: AppActorCustomerInfo) -> Void)?
+    /// The anonymous ID the last logIn folded into the ID it logged in to: the same customer on
+    /// the server, so a receipt posted under it is the current user's.
+    var foldedAnonymousAppUser: (anonymousId: String, into: String)?
     /// Bundled fallback offerings DTO for first-launch offline scenarios.
     var fallbackOfferingsDTO: AppActorOfferingsResponseDTO?
 

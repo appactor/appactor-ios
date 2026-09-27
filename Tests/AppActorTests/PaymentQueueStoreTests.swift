@@ -275,4 +275,46 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertTrue(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().isEmpty)
     }
 
+
+    // MARK: - I-S3-4: Unreadable file (before the first unlock)
+
+    func testUnreadableQueueFileIsNeitherOverwrittenNorLost() throws {
+        store.upsert(.fixture(key: "apple:on_disk"))
+        store.markPosted(key: "apple:posted")
+        let fileURL = tempDir.appendingPathComponent("payment_queue.json")
+        let before = try Data(contentsOf: fileURL)
+
+        // A new process before the first unlock: the class C file exists but can't be read.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        let locked = AppActorAtomicJSONQueueStore(directory: tempDir)
+        XCTAssertTrue(locked.snapshot().isEmpty)
+        locked.upsert(.fixture(key: "apple:while_locked"))
+        locked.markPosted(key: "apple:posted_while_locked")
+        locked.purgeExpiredLedgerEntries(olderThan: 90 * 24 * 60 * 60)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        XCTAssertEqual(try Data(contentsOf: fileURL), before, "Nothing may be written over a queue that couldn't be read")
+
+        // Unlocked: the same store reads the file, keeps the upsert made meanwhile, and saves both.
+        XCTAssertEqual(Set(locked.snapshot().map(\.key)), ["apple:on_disk", "apple:while_locked"])
+        XCTAssertTrue(locked.isPosted(key: "apple:posted"))
+        XCTAssertEqual(
+            Set(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().map(\.key)),
+            ["apple:on_disk", "apple:while_locked"]
+        )
+    }
+
+    // MARK: - I-E11b: Phase dropped since 0.0.6/0.0.7
+
+    func testQueueWithWaitingForIdentityPhaseFromOldReleaseLoadsAsNeedsPost() throws {
+        store.upsert(.fixture(key: "apple:parked"))
+        store.markPosted(key: "apple:posted")
+        let fileURL = tempDir.appendingPathComponent("payment_queue.json")
+        let written = try XCTUnwrap(String(data: Data(contentsOf: fileURL), encoding: .utf8))
+        XCTAssertTrue(written.contains("\"needsPost\""))
+        try Data(written.replacingOccurrences(of: "\"needsPost\"", with: "\"waitingForIdentity\"").utf8).write(to: fileURL)
+
+        let reloaded = AppActorAtomicJSONQueueStore(directory: tempDir)
+        XCTAssertEqual(reloaded.snapshot().map(\.phase), [.needsPost])
+        XCTAssertTrue(reloaded.isPosted(key: "apple:posted"), "The rest of the file must survive the old phase")
+    }
 }

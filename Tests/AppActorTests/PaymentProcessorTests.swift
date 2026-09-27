@@ -1834,4 +1834,12 @@ final class PaymentProcessorTests: XCTestCase {
         XCTAssertEqual(result?.phase, .needsPost, "Dead-lettered item must reset to needsPost on re-enqueue")
         XCTAssertEqual(result?.attemptCount, 0, "Attempt count must reset for fresh retry cycle")
     }
+
+    // MARK: - I-E12a: Placement length in UTF-16 units, as the server counts
+
+    func testPlacementOverTheServersUTF16LimitIsLeftOut() {
+        let placement = "offer_" + String(repeating: "🎉", count: 125) // 131 Characters, 256 UTF-16 units
+        XCTAssertNil(AppActorClientPurchaseContext.normalizePlacement(placement))
+        XCTAssertEqual(AppActorClientPurchaseContext.normalizePlacement(String(placement.dropLast())), String(placement.dropLast()))
+    }
 }

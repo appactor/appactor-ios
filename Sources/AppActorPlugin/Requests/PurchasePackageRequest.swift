@@ -11,7 +11,8 @@ struct PurchasePackageRequest: AppActorPluginRequest {
 
     var normalizedPlacement: String? {
         let normalized = placement?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let normalized, !normalized.isEmpty, normalized.count <= 255 else { return nil }
+        // The server counts UTF-16 code units, as JavaScript does.
+        guard let normalized, !normalized.isEmpty, normalized.utf16.count <= 255 else { return nil }
         return normalized
     }
 

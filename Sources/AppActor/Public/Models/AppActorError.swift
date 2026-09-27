@@ -159,6 +159,13 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         return [400, 409, 413, 422].contains(status)
     }
 
+    /// The server's 409 for a login that met another identity merge in progress, which it asks
+    /// the SDK to retry.
+    var isConcurrentIdentityMergeConflict: Bool {
+        kind == .server && httpStatus == 409
+            && message?.range(of: "Concurrent identity merge in progress", options: .caseInsensitive) != nil
+    }
+
     /// Whether this is a permanent client error (4xx excluding 429).
     /// These errors will never succeed on retry and should be treated as final.
     ///
@@ -277,6 +284,14 @@ public struct AppActorError: Error, Sendable, LocalizedError {
         kind: .purchaseAlreadyInProgress,
         code: "PURCHASE_IN_PROGRESS",
         message: "A purchase is already in progress"
+    )
+
+    /// A read that the SDK's own state changes (an identity switch, an entitlement change)
+    /// kept cancelling. Transient, as on Android: the next call runs for the new state.
+    static let stateChangedDuringOperation = clientError(
+        kind: .network,
+        code: "STATE_CHANGED",
+        message: "State changed while performing the operation. Please retry."
     )
 
     static func signatureError(_ kind: Kind, requestId: String? = nil) -> AppActorError {

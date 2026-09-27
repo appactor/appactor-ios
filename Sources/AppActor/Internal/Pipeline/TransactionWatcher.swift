@@ -140,10 +140,9 @@ actor AppActorTransactionWatcher {
     /// Begins an identity transition. Transactions arriving during transition are buffered
     /// with their current (pre-switch) appUserId to prevent wrong-user attribution.
     func beginIdentityTransition(appUserId: String? = nil) {
-        let transitionAppUserId = appUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        identityTransitionAppUserId = transitionAppUserId?.isEmpty == false
-            ? transitionAppUserId
-            : storage.ensureAppUserId()
+        // Verbatim, as configure() and logIn() store it: the receipt is posted under it.
+        identityTransitionAppUserId = appUserId.flatMap { AppActorPaymentValidation.isBlank($0) ? nil : $0 }
+            ?? storage.ensureAppUserId()
         isIdentityTransitioning = true
     }
 
@@ -322,7 +321,7 @@ actor AppActorTransactionWatcher {
             transactionReason: transactionReason
         )
         let effectiveContext = pendingMatch?.context ?? observedContext
-        let capturedAppUserId = pendingMatch?.appUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let capturedAppUserId = pendingMatch?.appUserId
         let enqueueSource = Self.queueSource(
             for: source,
             pendingPurchaseContextMatch: pendingMatch

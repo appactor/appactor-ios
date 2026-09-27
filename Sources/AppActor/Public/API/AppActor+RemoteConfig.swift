@@ -33,7 +33,7 @@ extension AppActor {
         // returned, and the fetch runs again for whoever is current (or throws after a reset).
         // The same runs again when a cache clear cancelled the fetch (identity switches and
         // entitlement changes do that), unless the caller itself was cancelled.
-        for _ in 0..<Self.remoteConfigFetchAttempts {
+        for _ in 0..<Self.stateChangeRetryAttempts {
             guard paymentLifecycle == .configured, let manager = remoteConfigManager else {
                 throw AppActorError.notConfigured
             }
@@ -62,12 +62,13 @@ extension AppActor {
             }
             return result
         }
-        throw CancellationError()
+        throw AppActorError.stateChangedDuringOperation
     }
 
-    /// One logIn can cancel a fetch up to four times (its clears, the switch, the entitlement
+    /// How often a read runs again when the SDK's own state change cancelled or outdated it. One
+    /// logIn can cancel a fetch up to four times (its clears, the switch, the entitlement
     /// change); the bound only stops a pathological loop.
-    private static let remoteConfigFetchAttempts = 5
+    static let stateChangeRetryAttempts = 5
 
     // MARK: - Typed Accessors (nonisolated — safe to call from any context)
 

@@ -110,6 +110,13 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
         case needsFinish
         /// Terminal item kept only for diagnostics after a permanent/decode-mismatch failure.
         case deadLettered
+
+        /// A phase this version doesn't have is posted again. 0.0.6 and 0.0.7 parked unposted
+        /// items in `waitingForIdentity`, and one of them made the whole queue file unreadable.
+        init(from decoder: Decoder) throws {
+            let rawValue = try decoder.singleValueContainer().decode(String.self)
+            self = Phase(rawValue: rawValue) ?? .needsPost
+        }
     }
 
     // MARK: - Source Enum

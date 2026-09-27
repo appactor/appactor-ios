@@ -13,6 +13,7 @@ actor AppActorOfferingsManager {
     private struct NetworkStagePayload {
         let dto: AppActorOfferingsResponseDTO?
         let cacheDate: Date?
+        let eTag: String?
         let verification: AppActorVerificationResult
     }
 
@@ -77,6 +78,10 @@ actor AppActorOfferingsManager {
     private var cachedOfferings: AppActorOfferings?
     private var cachedAt: Date?
     private var cachedLocales: [String] = []
+    /// ETag of the payload `cachedOfferings` were built from. A 304 confirms them only for that
+    /// ETag: a 200 whose enrichment failed leaves them on the previous payload while the disk
+    /// already holds the new one and sends its ETag.
+    private var cachedETag: String?
     private var lastRequestId: String?
     private var inFlightTask: Task<AppActorOfferings, Error>?
     private var networkStageTask: Task<NetworkStagePayload, Error>?
@@ -217,6 +222,7 @@ actor AppActorOfferingsManager {
         cachedOfferings = nil
         cachedAt = nil
         cachedLocales = []
+        cachedETag = nil
         await etagManager.clear(.offerings)
         await etagManager.clear(.offlineProductCatalog)
     }
@@ -275,19 +281,32 @@ actor AppActorOfferingsManager {
         do {
             let payload = try await fetchNetworkStageCoalesced(generation: gen)
             guard let dto = payload.dto, let cacheDate = payload.cacheDate else { return }
-            startEnrichmentTaskIfNeeded(dto: dto, cacheDate: cacheDate, generation: gen, verification: payload.verification)
+            startEnrichmentTaskIfNeeded(
+                dto: dto, cacheDate: cacheDate, eTag: payload.eTag, generation: gen, verification: payload.verification
+            )
         } catch is CancellationError {
             return
         } catch let error as AppActorError where error.isNetworkOrServerError {
             if let entry = await loadCachedPayload(), isLocaleCompatible(entry.value.preferredLocales) {
-                startEnrichmentTaskIfNeeded(dto: entry.value.dto, cacheDate: entry.cachedAt, generation: gen, verification: entry.verification)
+                startEnrichmentTaskIfNeeded(
+                    dto: entry.value.dto, cacheDate: entry.cachedAt, eTag: entry.eTag, generation: gen, verification: entry.verification
+                )
             } else if let fallback = fallbackDTO {
                 Log.offerings.debug("Bootstrap prefetch — using bundled fallback offerings")
-                startEnrichmentTaskIfNeeded(dto: fallback, cacheDate: dateProvider(), generation: gen)
+                // Stale at once, as in loadFromFallbackDTO: the next offerings() call goes to the backend.
+                startEnrichmentTaskIfNeeded(dto: fallback, cacheDate: .distantPast, eTag: nil, generation: gen)
             }
         } catch {
             Log.offerings.debug("Bootstrap offerings prefetch failed: \(error.localizedDescription)")
         }
+    }
+
+    /// The offerings in memory once the enrichment in flight (the bootstrap prefetch's) settles.
+    func settledOfferings() async -> AppActorOfferings? {
+        if let enrichmentTask {
+            _ = try? await enrichmentTask.value
+        }
+        return suitableInMemoryCache()
     }
 
     // MARK: - Single-Flight Coalescing
@@ -357,7 +376,9 @@ actor AppActorOfferingsManager {
         }
 
         if let dto = payload.dto, let cacheDate = payload.cacheDate {
-            return try await awaitEnrichment(dto: dto, cacheDate: cacheDate, generation: generation, verification: payload.verification)
+            return try await awaitEnrichment(
+                dto: dto, cacheDate: cacheDate, eTag: payload.eTag, generation: generation, verification: payload.verification
+            )
         }
 
         if let fallback = await fallbackOfferings(generation: generation) {
@@ -421,11 +442,10 @@ actor AppActorOfferingsManager {
             Log.offerings.info("  ⏱ offerings/api: \(apiMs) ms (200 fresh)")
             let verification = AppActorVerificationResult.from(signatureVerified: signatureVerified)
             if cacheGeneration == generation {
-                let payload = CachedPayload(dto: dto, preferredLocales: currentPreferredLocales())
-                await etagManager.storeFresh(payload, for: .offerings, eTag: eTag, verified: signatureVerified)
+                await storeFreshPayload(dto, eTag: eTag, verified: signatureVerified)
                 lastRequestId = requestId
             }
-            return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), verification: verification)
+            return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), eTag: eTag, verification: verification)
 
         case .notModified(let eTag, let requestId):
             Log.offerings.info("  ⏱ offerings/api: \(apiMs) ms (304 not modified)")
@@ -433,20 +453,22 @@ actor AppActorOfferingsManager {
                 lastRequestId = requestId
             }
 
-            if let cached = suitableInMemoryCache() {
+            if let cached = suitableInMemoryCache(), Self.sameETag(cachedETag, lastETag) {
                 if cacheGeneration == generation {
                     _ = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag)
                     cachedAt = dateProvider()
                 }
                 Log.offerings.debug("Offerings not modified (304), using in-memory cache")
                 Log.offerings.info("  ⏱ offerings/storekit: 0 ms (memory cache hit)")
-                return NetworkStagePayload(dto: nil, cacheDate: nil, verification: cached.verification)
+                return NetworkStagePayload(dto: nil, cacheDate: nil, eTag: nil, verification: cached.verification)
             }
 
             if cacheGeneration == generation,
                let result = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag),
                isLocaleCompatible(result.value.preferredLocales) {
-                return NetworkStagePayload(dto: result.value.dto, cacheDate: dateProvider(), verification: result.verification)
+                return NetworkStagePayload(
+                    dto: result.value.dto, cacheDate: dateProvider(), eTag: eTag ?? lastETag, verification: result.verification
+                )
             }
 
             Log.offerings.debug("Cache miss on 304, refreshing offerings")
@@ -463,21 +485,38 @@ actor AppActorOfferingsManager {
 
             let retryVerification = AppActorVerificationResult.from(signatureVerified: retryVerified)
             if cacheGeneration == generation {
-                let payload = CachedPayload(dto: dto, preferredLocales: currentPreferredLocales())
-                await etagManager.storeFresh(payload, for: .offerings, eTag: retryETag, verified: retryVerified)
+                await storeFreshPayload(dto, eTag: retryETag, verified: retryVerified)
                 lastRequestId = retryReqId
             }
-            return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), verification: retryVerification)
+            return NetworkStagePayload(dto: dto, cacheDate: dateProvider(), eTag: retryETag, verification: retryVerification)
         }
+    }
+
+    /// Persists a fresh 200: the payload, and the offline product catalog derived from it, which
+    /// offline entitlements read before the payload.
+    private func storeFreshPayload(_ dto: AppActorOfferingsResponseDTO, eTag: String?, verified: Bool) async {
+        let payload = CachedPayload(dto: dto, preferredLocales: currentPreferredLocales())
+        await etagManager.storeFresh(payload, for: .offerings, eTag: eTag, verified: verified)
+        await etagManager.storeFresh(dto.toOfflineProductCatalog(), for: .offlineProductCatalog, eTag: nil, verified: verified)
+    }
+
+    /// Whether two ETags name the same payload; a weak (`W/`) prefix doesn't count.
+    private static func sameETag(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs, let rhs else { return false }
+        func strong(_ eTag: String) -> Substring {
+            eTag.hasPrefix("W/") ? eTag.dropFirst(2) : Substring(eTag)
+        }
+        return strong(lhs) == strong(rhs)
     }
 
     private func awaitEnrichment(
         dto: AppActorOfferingsResponseDTO,
         cacheDate: Date,
+        eTag: String?,
         generation: UInt64,
         verification: AppActorVerificationResult = .notRequested
     ) async throws -> AppActorOfferings {
-        startEnrichmentTaskIfNeeded(dto: dto, cacheDate: cacheDate, generation: generation, verification: verification)
+        startEnrichmentTaskIfNeeded(dto: dto, cacheDate: cacheDate, eTag: eTag, generation: generation, verification: verification)
         guard let task = enrichmentTask else {
             throw AppActorError.serverError(
                 httpStatus: 500,
@@ -493,6 +532,7 @@ actor AppActorOfferingsManager {
     private func startEnrichmentTaskIfNeeded(
         dto: AppActorOfferingsResponseDTO,
         cacheDate: Date,
+        eTag: String?,
         generation: UInt64,
         verification: AppActorVerificationResult = .notRequested
     ) {
@@ -509,6 +549,7 @@ actor AppActorOfferingsManager {
                 await self.finishEnrichment(
                     result: .success(offerings),
                     cacheDate: cacheDate,
+                    eTag: eTag,
                     generation: generation
                 )
                 return offerings
@@ -516,6 +557,7 @@ actor AppActorOfferingsManager {
                 await self.finishEnrichment(
                     result: .failure(error),
                     cacheDate: cacheDate,
+                    eTag: eTag,
                     generation: generation
                 )
                 throw error
@@ -528,6 +570,7 @@ actor AppActorOfferingsManager {
     private func finishEnrichment(
         result: Result<AppActorOfferings, Error>,
         cacheDate: Date,
+        eTag: String?,
         generation: UInt64
     ) {
         if cacheGeneration == generation {
@@ -537,6 +580,7 @@ actor AppActorOfferingsManager {
         if case .success(let offerings) = result, cacheGeneration == generation {
             cachedOfferings = offerings
             cachedAt = cacheDate
+            cachedETag = eTag
             cachedLocales = Locale.preferredLanguages
             Log.offerings.info("🏷️ Offerings loaded: \(offerings.all.count) offering(s)")
         }
@@ -685,7 +729,10 @@ actor AppActorOfferingsManager {
               isLocaleCompatible(entry.value.preferredLocales) else {
             return nil
         }
-        return await enrichAndCache(dto: entry.value.dto, cacheDate: entry.cachedAt, context: "disk cache", generation: generation, verification: entry.verification)
+        return await enrichAndCache(
+            dto: entry.value.dto, cacheDate: entry.cachedAt, eTag: entry.eTag,
+            context: "disk cache", generation: generation, verification: entry.verification
+        )
     }
 
     /// Attempts to load offerings from the bundled fallback DTO and enrich with StoreKit products.
@@ -696,7 +743,7 @@ actor AppActorOfferingsManager {
     /// serving the bundled fallback for the full TTL window.
     private func loadFromFallbackDTO(generation: UInt64? = nil) async -> AppActorOfferings? {
         guard let dto = fallbackDTO else { return nil }
-        return await enrichAndCache(dto: dto, cacheDate: .distantPast, context: "bundled fallback", generation: generation)
+        return await enrichAndCache(dto: dto, cacheDate: .distantPast, eTag: nil, context: "bundled fallback", generation: generation)
     }
 
     // MARK: - Enrichment Helpers
@@ -707,6 +754,7 @@ actor AppActorOfferingsManager {
     private func enrichAndCache(
         dto: AppActorOfferingsResponseDTO,
         cacheDate: Date,
+        eTag: String?,
         context: String,
         generation: UInt64? = nil,
         verification: AppActorVerificationResult = .notRequested
@@ -722,6 +770,7 @@ actor AppActorOfferingsManager {
             if generation == nil || cacheGeneration == generation {
                 cachedOfferings = offerings
                 cachedAt = cacheDate
+                cachedETag = eTag
                 cachedLocales = Locale.preferredLanguages
             }
             Log.offerings.debug("\(context): \(offerings.all.count) offering(s)")

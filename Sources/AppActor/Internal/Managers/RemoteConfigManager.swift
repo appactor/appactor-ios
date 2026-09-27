@@ -516,8 +516,9 @@ actor AppActorRemoteConfigManager {
         )
     }
 
+    /// The ID as the SDK stores and posts it: not trimmed, or the context would name another user.
     private func normalizedUserId(_ appUserId: String?) -> String? {
-        normalizedOptional(appUserId)
+        appUserId.flatMap { AppActorPaymentValidation.isBlank($0) ? nil : $0 }
     }
 
     private func normalizedOptional(_ value: String?) -> String? {

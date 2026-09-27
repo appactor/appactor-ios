@@ -146,25 +146,7 @@ extension AppActor {
     /// Sets `customerInfo` only if the current user still matches the expected identity.
     /// Discards stale results from async calls that completed after a login/logout.
     func setCustomerInfoIfIdentityMatches(_ info: AppActorCustomerInfo, expectedAppUserId: String) async {
-        guard paymentStorage?.currentAppUserId == expectedAppUserId else {
-            Log.customer.debug("Discarding stale customer info — expected \(expectedAppUserId), current \(paymentStorage?.currentAppUserId ?? "nil")")
-            return
-        }
-
-        // Monotonic ordering guard: concurrent receipt POSTs (drainOnce posts up to
-        // maxConcurrentPosts in parallel) can complete out of order, each dispatching a
-        // detached @MainActor task that lands here. Without this guard the last task to run
-        // wins, so an older snapshot can overwrite a newer one and cause entitlement flicker.
-        // Reject an incoming snapshot that is strictly older than the currently published one
-        // for the same identity. Gated on matching appUserId so identity transitions
-        // (login/logout reset to `.empty`, which carries a nil appUserId and `.distantPast`)
-        // and the very first real snapshot always apply. See `isSnapshot(_:olderThan:)` for
-        // the ordering basis and its best-effort nature for receipt POSTs.
-        if customerInfo.appUserId == info.appUserId,
-           Self.isSnapshot(info, olderThan: customerInfo) {
-            Log.customer.debug("Discarding out-of-order customer info — incoming snapshot older than current published snapshot")
-            return
-        }
+        guard isPublishable(info, expectedAppUserId: expectedAppUserId) else { return }
 
         let previousActiveKeys = customerInfo.activeEntitlementKeys
         let activeEntitlementsChanged = previousActiveKeys != info.activeEntitlementKeys
@@ -178,10 +160,8 @@ extension AppActor {
                 await experimentManager.clearCache(appUserId: expectedAppUserId)
             }
 
-            guard paymentStorage?.currentAppUserId == expectedAppUserId else {
-                Log.customer.debug("Discarding stale customer info after cache invalidation — expected \(expectedAppUserId), current \(paymentStorage?.currentAppUserId ?? "nil")")
-                return
-            }
+            // Checked again: another snapshot, or an identity switch, can land during the clears.
+            guard isPublishable(info, expectedAppUserId: expectedAppUserId) else { return }
         }
 
         self.customerInfo = info
@@ -189,6 +169,31 @@ extension AppActor {
         if activeEntitlementsChanged {
             Log.customer.debug("Customer entitlements changed — invalidated remote config and experiment caches")
         }
+    }
+
+    /// Whether `info` may replace the published snapshot: the identity still matches, and it is
+    /// not older than the published one.
+    ///
+    /// Monotonic ordering guard: concurrent receipt POSTs (drainOnce posts up to
+    /// maxConcurrentPosts in parallel) can complete out of order, each dispatching a
+    /// detached @MainActor task that lands here. Without this guard the last task to run
+    /// wins, so an older snapshot can overwrite a newer one and cause entitlement flicker.
+    /// Reject an incoming snapshot that is strictly older than the currently published one
+    /// for the same identity. Gated on matching appUserId so identity transitions
+    /// (login/logout reset to `.empty`, which carries a nil appUserId and `.distantPast`)
+    /// and the very first real snapshot always apply. See `isSnapshot(_:olderThan:)` for
+    /// the ordering basis and its best-effort nature for receipt POSTs.
+    private func isPublishable(_ info: AppActorCustomerInfo, expectedAppUserId: String) -> Bool {
+        guard paymentStorage?.currentAppUserId == expectedAppUserId else {
+            Log.customer.debug("Discarding stale customer info — expected \(expectedAppUserId), current \(paymentStorage?.currentAppUserId ?? "nil")")
+            return false
+        }
+        if customerInfo.appUserId == info.appUserId,
+           Self.isSnapshot(info, olderThan: customerInfo) {
+            Log.customer.debug("Discarding out-of-order customer info — incoming snapshot older than current published snapshot")
+            return false
+        }
+        return true
     }
 
     /// Returns `true` when `incoming` represents a strictly older snapshot than `current`.

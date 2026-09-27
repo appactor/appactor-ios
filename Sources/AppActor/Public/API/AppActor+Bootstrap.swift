@@ -125,7 +125,15 @@ extension AppActor {
         // A login/logout between enqueue and response could cause stale data.
         guard receiptContext.appUserId == currentAppUserId else {
             Log.customer.debug("Skipping customer cache seed — receipt userId (\(receiptContext.appUserId)) != current userId (\(currentAppUserId))")
-            _ = try? await getCustomerInfo()
+            // Posted under the anonymous ID the last logIn folded into the current one: bought
+            // by the same customer, so a deferred purchase still resolves for them.
+            let isFoldedIntoCurrent = paymentContext.foldedAnonymousAppUser.map {
+                $0.anonymousId == receiptContext.appUserId && $0.into == currentAppUserId
+            } ?? false
+            if let refreshed = try? await getCustomerInfo(),
+               isFoldedIntoCurrent, paymentStorage?.currentAppUserId == currentAppUserId {
+                resolveDeferredPurchase(receiptContext, info: refreshed)
+            }
             return
         }
         await manager.seedCache(
@@ -135,7 +143,11 @@ extension AppActor {
             verified: info.verification == .verified
         )
         await setCustomerInfoIfIdentityMatches(info, expectedAppUserId: currentAppUserId)
+        resolveDeferredPurchase(receiptContext, info: info)
+    }
 
+    /// Tells the host when the receipt resolves a purchase that `purchase()` returned as `.pending`.
+    private func resolveDeferredPurchase(_ receiptContext: AppActorReceiptCustomerUpdateContext, info: AppActorCustomerInfo) {
         if paymentContext.consumeDeferredPurchaseResolution(
             productId: receiptContext.productId,
             receiptContext: receiptContext
@@ -277,6 +289,19 @@ extension AppActor {
         Log.sdk.warn("Startup cancelled before bootstrap completed — reverted to idle.")
     }
 
+    /// Publishes the offerings the bootstrap prefetch loaded as `cachedOfferings`, as Android
+    /// does, unless an offerings() call published some first. Not tracked by reset(), which
+    /// would wait on StoreKit: it only publishes, and nothing for a manager reset() dropped.
+    private func publishBootstrapOfferings(from manager: AppActorOfferingsManager) {
+        let prefetch = offeringsPrefetchTask
+        Task { [weak self] in
+            await prefetch?.value
+            guard let offerings = await manager.settledOfferings(),
+                  let self, self.offeringsManager === manager, self.paymentOfferings == nil else { return }
+            self.paymentOfferings = offerings
+        }
+    }
+
     /// The bootstrap sequence extracted into a standalone method for use inside
     /// the supervisor TaskGroup. Errors are logged, never thrown.
     private func runBootstrap(verboseBootstrap: Bool, session: UInt64) async {
@@ -304,6 +329,7 @@ extension AppActor {
         guard isSessionCurrent(session) else { return }
         if let manager = self.offeringsManager {
             self.offeringsPrefetchTask = Task { await manager.prefetchForBootstrap() }
+            publishBootstrapOfferings(from: manager)
         }
         logStep("offerings/api")
         guard !Task.isCancelled else { return }
@@ -318,7 +344,8 @@ extension AppActor {
         // 3+4. Drain pending receipts and refresh customer info in one step.
         // drainReceiptQueueAndRefreshCustomer() preserves the previous preload
         // behavior. The new syncPurchases() is reserved for explicit quiet SK2 sync.
-        // If the drain+refresh step fails, fall back to a standalone customerInfo refresh.
+        // The drain doesn't throw, so a failure is the customer refresh's own, which has already
+        // run its retries: not tried again here.
         do {
             let info = try await self.drainReceiptQueueAndRefreshCustomer()
             if verboseBootstrap {
@@ -328,18 +355,7 @@ extension AppActor {
         } catch is CancellationError {
             return
         } catch {
-            Log.sdk.warn("Bootstrap drainReceiptQueueAndRefreshCustomer failed: \(error.localizedDescription)")
-            do {
-                let fresh = try await self.getCustomerInfo()
-                if verboseBootstrap {
-                    let activeKeys = fresh.activeEntitlementKeys
-                    Log.sdk.verbose("Bootstrap customer refresh OK (fallback) — active entitlements: \(activeKeys.isEmpty ? "none" : activeKeys.joined(separator: ", "))")
-                }
-            } catch is CancellationError {
-                return
-            } catch {
-                Log.sdk.warn("Bootstrap customer refresh failed: \(error.localizedDescription)")
-            }
+            Log.sdk.warn("Bootstrap customer refresh failed: \(error.localizedDescription)")
         }
         logStep("drainReceiptQueueAndRefreshCustomer")
 

@@ -60,7 +60,9 @@ public struct AppActorPaymentConfiguration: Sendable {
         appUserId: String? = nil,
         options: Options = .init()
     ) {
-        self.apiKey = apiKey
+        // The server trims the key it authenticates and signs responses with, so a padded key
+        // would authenticate but fail every salt-signed response.
+        self.apiKey = apiKey.trimmingCharacters(in: AppActorPaymentValidation.serverTrimmedCharacters)
         self.baseURL = baseURL
         self.headerMode = headerMode
         self.appUserId = Self.normalizedAppUserId(appUserId)

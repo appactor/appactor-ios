@@ -40,29 +40,39 @@ extension AppActor {
     public func getExperimentAssignment(
         experimentKey: String
     ) async throws -> AppActorExperimentAssignment? {
-        guard paymentLifecycle == .configured else {
-            throw AppActorError.notConfigured
-        }
-        guard let manager = experimentManager else {
-            throw AppActorError.notConfigured
-        }
-        guard let appUserId = paymentStorage?.currentAppUserId else {
-            throw AppActorError.notConfigured
-        }
+        // As in getRemoteConfigs(): a cache clear (an identity switch or an entitlement change)
+        // cancels the fetch, and a logIn, logOut or reset() can land while it runs. The fetch then
+        // runs again for whoever is current, unless the caller itself was cancelled.
+        for _ in 0..<Self.stateChangeRetryAttempts {
+            guard paymentLifecycle == .configured, let manager = experimentManager,
+                  let appUserId = paymentStorage?.currentAppUserId else {
+                throw AppActorError.notConfigured
+            }
 
-        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let country = Self.experimentDeviceCountryCode
+            let session = sessionGeneration
+            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            let country = Self.experimentDeviceCountryCode
 
-        let assignment = try await manager.getAssignment(
-            experimentKey: experimentKey,
-            appUserId: appUserId,
-            appVersion: appVersion,
-            country: country
-        )
-        if let rid = await manager.lastRequestId {
-            paymentStorage?.setLastRequestId(rid)
+            let assignment: AppActorExperimentAssignment?
+            do {
+                assignment = try await manager.getAssignment(
+                    experimentKey: experimentKey,
+                    appUserId: appUserId,
+                    appVersion: appVersion,
+                    country: country
+                )
+            } catch is CancellationError where !Task.isCancelled {
+                continue
+            }
+            let requestId = await manager.lastRequestId
+            guard isSessionCurrent(session), paymentStorage?.currentAppUserId == appUserId else { continue }
+
+            if let requestId {
+                paymentStorage?.setLastRequestId(requestId)
+            }
+            return assignment
         }
-        return assignment
+        throw AppActorError.stateChangedDuringOperation
     }
 
     // MARK: - Helpers

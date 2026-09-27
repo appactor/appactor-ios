@@ -1118,4 +1118,57 @@ final class OfferingsManagerTests: XCTestCase {
         let entryV2 = await etagManager.cached(AppActorOfferingsResponseDTO.self, for: .offerings)
         XCTAssertEqual(entryV2?.eTag, "hash_v2_rotated", "SDK should store eTag from 304 response")
     }
+
+    // MARK: - I-E11c: A 304 confirms memory only for the ETag it was built from
+
+    func test304AfterFailedEnrichmentEnrichesTheNewPayloadInsteadOfServingTheOldOne() async throws {
+        let oldDTO = AppActorOfferingsResponseDTO(currentOffering: nil, offerings: [])
+        let newDTO = makeDTO(productIds: ["com.app.new"])
+        var sentETags: [String?] = []
+        client.getOfferingsHandler = { eTag in
+            sentETags.append(eTag)
+            switch sentETags.count {
+            case 1: return .fresh(oldDTO, eTag: "e0", requestId: nil, signatureVerified: false)
+            case 2: return .fresh(newDTO, eTag: "e1", requestId: nil, signatureVerified: false)
+            default: return .notModified(eTag: "e1", requestId: nil)
+            }
+        }
+        fetcher.fetchHandler = { _ in throw URLError(.notConnectedToInternet) }
+        let clock = MockDateProvider()
+        let manager = AppActorOfferingsManager(
+            client: client, productFetcher: fetcher, etagManager: etagManager, dateProvider: { clock.now }
+        )
+
+        _ = try await manager.getOfferings()
+        clock.advance(by: 10 * 60)
+        do {
+            _ = try await manager.getOfferings()
+            XCTFail("The new payload's enrichment fails")
+        } catch {}
+        clock.advance(by: 10 * 60)
+        do {
+            _ = try await manager.getOfferings()
+            XCTFail("The 304 confirms the new payload, whose enrichment still fails; the old offerings are not served")
+        } catch {}
+
+        XCTAssertEqual(sentETags, [nil, "e0", "e1"])
+        XCTAssertEqual(fetcher.fetchCalls.last, ["com.app.new"])
+    }
+
+    // MARK: - I-S4-6: A fresh 200 refreshes the offline product catalog
+
+    func testFreshResponseStoresTheOfflineProductCatalog() async throws {
+        let dto = AppActorOfferingsResponseDTO(
+            currentOffering: nil, offerings: [], productEntitlements: ["com.app.monthly": ["premium"]]
+        )
+        client.getOfferingsHandler = { _ in .fresh(dto, eTag: "e1", requestId: nil, signatureVerified: true) }
+        let manager = AppActorOfferingsManager(client: client, productFetcher: fetcher, etagManager: etagManager)
+
+        _ = try await manager.getOfferings()
+
+        let catalog = await etagManager.cached(AppActorOfflineProductCatalog.self, for: .offlineProductCatalog)
+        XCTAssertEqual(catalog?.value.productEntitlements, ["com.app.monthly": ["premium"]])
+        XCTAssertEqual(catalog?.verification, .verified)
+    }
+
 }

@@ -1,4 +1,5 @@
 import Foundation
+import StoreKit
 
 // MARK: - Payment Offerings Public API
 
@@ -25,7 +26,13 @@ extension AppActor {
         guard let manager = offeringsManager else {
             throw AppActorError.notConfigured
         }
-        let result = try await manager.getOfferings(fetchPolicy: fetchPolicy)
+        let result: AppActorOfferings
+        do {
+            result = try await manager.getOfferings(fetchPolicy: fetchPolicy)
+        } catch let error where !(error is AppActorError) && !(error is CancellationError) {
+            // StoreKit's own error, from loading the products.
+            throw AppActorError.fromProductLookupError(error)
+        }
         self.paymentOfferings = result
         if let rid = await manager.requestId {
             paymentStorage?.setLastRequestId(rid)
@@ -48,7 +55,8 @@ extension AppActor {
         try await offerings(fetchPolicy: fetchPolicy).offering(offeringKey)
     }
 
-    /// Returns the most recently cached offerings without making a network call.
+    /// Returns the most recently cached offerings without making a network call: the last
+    /// ``offerings(fetchPolicy:)`` result, or those `configure()` loaded before any call.
     /// Returns `nil` if offerings have not been fetched yet.
     public var cachedOfferings: AppActorOfferings? {
         paymentOfferings
@@ -62,7 +70,8 @@ extension AppActor {
     ///
     /// Can be called before or after `configure()`.
     ///
-    /// - Parameter fileURL: Local URL to a JSON file containing an offerings response DTO.
+    /// - Parameter fileURL: Local URL to a JSON file holding the offerings: a saved
+    ///   `GET /v1/payment/offerings` body, or its `data` object.
     public func setFallbackOfferings(from fileURL: URL) async throws {
         let data = try Data(contentsOf: fileURL)
         try await setFallbackOfferings(jsonData: data)
@@ -70,14 +79,56 @@ extension AppActor {
 
     /// Sets raw JSON data as fallback offerings for first-launch offline scenarios.
     ///
-    /// - Parameter jsonData: JSON data containing an offerings response DTO.
+    /// - Parameter jsonData: JSON holding the offerings: a saved `GET /v1/payment/offerings` body
+    ///   (`{"data": {…}}`, the shape Android takes too), or its `data` object.
+    /// - Throws: `AppActorError` with `.decoding` kind if the JSON holds no offerings.
     public func setFallbackOfferings(jsonData: Data) async throws {
-        let dto = try JSONDecoder().decode(AppActorOfferingsResponseDTO.self, from: jsonData)
+        let dto: AppActorOfferingsResponseDTO
+        do {
+            dto = try JSONDecoder().decode(FallbackOfferingsFile.self, from: jsonData).dto
+        } catch {
+            throw AppActorError.decodingError(error, requestId: nil)
+        }
         paymentContext.fallbackOfferingsDTO = dto
         // If manager already exists (configure already called), push immediately
         if let manager = offeringsManager {
             await manager.setFallbackOfferings(dto: dto)
         }
+    }
+}
+
+/// A fallback offerings file: the endpoint's body, or the `data` object inside it.
+struct FallbackOfferingsFile: Decodable {
+    let dto: AppActorOfferingsResponseDTO
+
+    private enum CodingKeys: String, CodingKey {
+        case data
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dto = container.contains(.data)
+            ? try container.decode(AppActorOfferingsResponseDTO.self, forKey: .data)
+            : try AppActorOfferingsResponseDTO(from: decoder)
+    }
+}
+
+extension AppActorError {
+    /// An error from loading products from StoreKit, whose `Product.products(for:)` throws
+    /// `StoreKitError` for system errors: a network failure stays transient.
+    static func fromProductLookupError(_ error: Error) -> AppActorError {
+        if case .networkError(let urlError)? = error as? StoreKitError {
+            return .networkError(urlError)
+        }
+        if let urlError = error as? URLError {
+            return .networkError(urlError)
+        }
+        return .clientError(
+            kind: .storeKitProductsMissing,
+            code: "STOREKIT_PRODUCTS_UNAVAILABLE",
+            message: "StoreKit could not load the products: \(error.localizedDescription)",
+            underlying: error
+        )
     }
 }
 

@@ -346,7 +346,7 @@ extension AppActorEntitlementInfo {
             productID: dto.productId,
             originalPurchaseDate: dto.purchaseDate.flatMap { AppActorCustomerDateParser.date(from: $0) },
             expirationDate: dto.expiresAt.flatMap { AppActorCustomerDateParser.date(from: $0) },
-            ownershipType: dto.ownershipType.flatMap { AppActorOwnershipType(rawValue: $0) } ?? .unknown,
+            ownershipType: dto.ownershipType.map(AppActorOwnershipType.init(serverValue:)) ?? .unknown,
             periodType: dto.periodType.flatMap { AppActorPeriodType(rawValue: $0) } ?? .unknown,
             willRenew: dto.unsubscribeDetectedAt == nil && (dto.isActive ?? false),
             subscriptionStatus: AppActorSubscriptionStatus(serverStatus: dto.status),
