@@ -147,10 +147,12 @@ enum ResponseSignatureVerifier {
 				return .signatureInvalid
 			}
 
-			// The status as well: the client sends `X-AppActor-Signature-Status: include`.
+			// The status and the API key as well: the client sends `X-AppActor-Signature-Status`
+			// and `X-AppActor-Signature-Api-Key`. Every project is signed with the same key, so
+			// without the API key another project's signed answer would pass as this app's.
 			let binding = requestBinding(method: method, target: requestPath, body: requestBody)
 			guard let payloadData = signedPayload(
-				header: "\(sentNonce)\n\(timestampStr)\n\(response.statusCode)\n\(binding)\n",
+				header: "\(sentNonce)\n\(timestampStr)\n\(response.statusCode)\n\(apiKey)\n\(binding)\n",
 				statusCode: response.statusCode,
 				body: body
 			) else {
