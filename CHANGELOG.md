@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed: nonce responses (customer info, login, purchases, restore and sync) are also verified against the API key the SDK sent. Every AppActor project is signed with the same key, so a proxy on the device could swap in its own project's API key and pass that project's signed answer (say, an entitlement it granted itself) off as the app's. The SDK now sends `X-AppActor-Signature-Api-Key: include`, which the AppActor API signs from API #606 on (live). (2026-09-27 re-audit, Y-1)
+
 ## 0.2.0
 
 The minimum is now iOS 16, and this release carries the fixes from the 2026-09-26 SDK audit (merges fda73b0, 5294be0, 9525295, bb13fe5, #16 and #17). Audit ids in parentheses. Nonce responses are verified with the request binding and the status signing the AppActor API added for them (API #599 and #604, both live).

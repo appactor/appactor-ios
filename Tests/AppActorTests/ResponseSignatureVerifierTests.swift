@@ -11,6 +11,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
     private var rootKey: Curve25519.Signing.PrivateKey!
     private let nonce = "test-nonce-12345"
     private let nonceTarget = "/v1/customers/user_a"
+    private let nonceApiKey = "pk_test_app"
     private var requestBinding: String { ResponseSignatureVerifier.requestBinding(method: "GET", target: nonceTarget, body: nil) }
     private var now: TimeInterval!
 
@@ -35,7 +36,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
     /// Signs a v1 payload with the test key and returns the base64 signature.
     private func signV1(body: Data, nonce: String, timestamp: String, status: Int = 200) -> String {
-        signV1(payload: "\(nonce)\n\(timestamp)\n\(status)\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))")
+        signV1(payload: "\(nonce)\n\(timestamp)\n\(status)\n\(nonceApiKey)\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))")
     }
 
     private func signV1(payload: String) -> String {
@@ -83,7 +84,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         rootSigningKey: Curve25519.Signing.PrivateKey? = nil
     ) -> Data {
         buildV2Blob(
-            payloadString: "\(nonce)\n\(timestamp)\n200\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))",
+            payloadString: "\(nonce)\n\(timestamp)\n200\n\(nonceApiKey)\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))",
             issuedAt: issuedAt, expiresAt: expiresAt,
             intermediateKey: intermediateKey, rootSigningKey: rootSigningKey
         )
@@ -110,7 +111,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .success)
@@ -135,11 +136,15 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         let otherRequest = ResponseSignatureVerifier.requestBinding(method: "GET", target: "/v1/customers/user_b", body: nil)
         let payloads = [
             // Signed for user_b's request, carrying this request's nonce.
-            "\(nonce)\n\(timestampStr)\n200\n\(otherRequest)\n\(bodyString)",
+            "\(nonce)\n\(timestampStr)\n200\n\(nonceApiKey)\n\(otherRequest)\n\(bodyString)",
+            // Signed for another project's API key (a proxy swapped the key): Y-1.
+            "\(nonce)\n\(timestampStr)\n200\npk_other_project\n\(requestBinding)\n\(bodyString)",
             // What a server that ignored the binding header would sign.
-            "\(nonce)\n\(timestampStr)\n200\n\(bodyString)",
+            "\(nonce)\n\(timestampStr)\n200\n\(nonceApiKey)\n\(bodyString)",
             // What a server that ignored the status header would sign.
-            "\(nonce)\n\(timestampStr)\n\(requestBinding)\n\(bodyString)"
+            "\(nonce)\n\(timestampStr)\n\(nonceApiKey)\n\(requestBinding)\n\(bodyString)",
+            // What a server that ignored the API key header would sign (the 0.2.0 payload).
+            "\(nonce)\n\(timestampStr)\n200\n\(requestBinding)\n\(bodyString)"
         ]
 
         for payload in payloads {
@@ -150,7 +155,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             ])
             let result = ResponseSignatureVerifier.verify(
                 response: response, body: body, sentNonce: nonce,
-                apiKey: "", requestPath: nonceTarget,
+                apiKey: nonceApiKey, requestPath: nonceTarget,
                 v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
             )
             XCTAssertEqual(result, .signatureInvalid)
@@ -170,7 +175,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .success)
@@ -198,7 +203,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         for (status, body) in forgedFrom304 {
             let result = ResponseSignatureVerifier.verify(
                 response: makeResponse(headers: headers, statusCode: status), body: body, sentNonce: nonce,
-                apiKey: "", requestPath: nonceTarget,
+                apiKey: nonceApiKey, requestPath: nonceTarget,
                 v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
             )
             XCTAssertEqual(result, .signatureInvalid, "\(status) with a \(body.count)-byte body")
@@ -217,7 +222,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         let results = [201, 200].map { status in
             ResponseSignatureVerifier.verify(
                 response: makeResponse(headers: headers, statusCode: status), body: body, sentNonce: nonce,
-                apiKey: "", requestPath: nonceTarget,
+                apiKey: nonceApiKey, requestPath: nonceTarget,
                 v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
             )
         }
@@ -239,7 +244,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         for tamperedBody in [Data("{\"ok\":false}".utf8), Data([0xEF, 0xBB, 0xBF]) + body] {
             let result = ResponseSignatureVerifier.verify(
                 response: response, body: tamperedBody, sentNonce: nonce,
-                apiKey: "", requestPath: nonceTarget,
+                apiKey: nonceApiKey, requestPath: nonceTarget,
                 v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
             )
             XCTAssertEqual(result, .signatureInvalid)
@@ -267,7 +272,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .success)
@@ -293,7 +298,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .intermediateKeyExpired)
@@ -321,7 +326,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .intermediateCertInvalid)
@@ -336,7 +341,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .unsigned)
@@ -353,7 +358,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureMissing)
@@ -372,7 +377,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .nonceMismatch)
@@ -393,7 +398,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .timestampOutOfRange)
@@ -422,7 +427,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -448,7 +453,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -474,7 +479,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .intermediateCertInvalid)
@@ -502,7 +507,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: tamperedBody, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -520,7 +525,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
@@ -540,7 +545,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
 
         let result = ResponseSignatureVerifier.verify(
             response: response, body: body, sentNonce: nonce,
-            apiKey: "", requestPath: nonceTarget,
+            apiKey: nonceApiKey, requestPath: nonceTarget,
             v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
         )
         XCTAssertEqual(result, .signatureInvalid)
