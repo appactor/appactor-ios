@@ -664,22 +664,21 @@ extension AppActor {
 
     private static var attConsentStatus: String? {
         #if canImport(AppTrackingTransparency) && !os(watchOS)
-        if #available(iOS 14.0, tvOS 14.0, macCatalyst 14.0, *) {
-            switch ATTrackingManager.trackingAuthorizationStatus {
-            case .notDetermined:
-                return "not_determined"
-            case .restricted:
-                return "restricted"
-            case .denied:
-                return "denied"
-            case .authorized:
-                return "authorized"
-            @unknown default:
-                return "unknown"
-            }
+        switch ATTrackingManager.trackingAuthorizationStatus {
+        case .notDetermined:
+            return "not_determined"
+        case .restricted:
+            return "restricted"
+        case .denied:
+            return "denied"
+        case .authorized:
+            return "authorized"
+        @unknown default:
+            return "unknown"
         }
-        #endif
+        #else
         return nil
+        #endif
     }
 
     private static func normalizedCountryCode(_ raw: String?) -> String? {
