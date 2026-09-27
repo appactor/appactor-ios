@@ -116,7 +116,7 @@ actor AppActorCustomerManager {
 
         // Coalesce only if same userId and not a force refresh.
         if !forceRefresh, let newest = runningFetches[inflightGeneration], newest.userId == appUserId {
-            return try await value(of: newest.task, resource: resource, forceRefresh: false)
+            return try await value(of: newest.task, appUserId: appUserId, forceRefresh: false)
         }
 
         let client = self.client
@@ -167,23 +167,21 @@ actor AppActorCustomerManager {
         let generation = inflightGeneration
         runningFetches[generation] = (userId: appUserId, task: task)
         defer { runningFetches[generation] = nil }
-        return try await value(of: task, resource: resource, forceRefresh: forceRefresh)
+        return try await value(of: task, appUserId: appUserId, forceRefresh: forceRefresh)
     }
 
     /// Awaits a fetch, answering a transient failure from the cache unless the caller forced a
     /// refresh. Per caller: one that joined a forced fetch still gets its own cache fallback.
     private func value(
         of task: Task<AppActorCustomerInfo, Error>,
-        resource: AppActorCacheResource,
+        appUserId: String,
         forceRefresh: Bool
     ) async throws -> AppActorCustomerInfo {
         do {
             return try await task.value
         } catch {
-            if !forceRefresh,
-               Self.shouldFallbackToCache(error),
-               let cached = await etagManager.cached(AppActorCustomerInfo.self, for: resource) {
-                return cached.value.withVerification(cached.verification)
+            if !forceRefresh, Self.shouldFallbackToCache(error), let cached = await cachedInfo(appUserId: appUserId) {
+                return cached
             }
             throw error
         }

@@ -456,7 +456,8 @@ actor AppActorOfferingsManager {
                 lastRequestId = requestId
             }
 
-            if let cached = suitableInMemoryCache(), Self.sameETag(cachedETag, lastETag) {
+            if let cached = suitableInMemoryCache(), let cachedETag, let lastETag,
+               AppActorPaymentClient.weakETagsMatch(cachedETag, lastETag) {
                 if cacheGeneration == generation {
                     _ = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag)
                     cachedAt = dateProvider()
@@ -507,15 +508,6 @@ actor AppActorOfferingsManager {
     /// from each payload the server serves or confirms, as on Android.
     private func storeOfflineCatalog(of dto: AppActorOfferingsResponseDTO, verified: Bool) async {
         await etagManager.storeFresh(dto.toOfflineProductCatalog(), for: .offlineProductCatalog, eTag: nil, verified: verified)
-    }
-
-    /// Whether two ETags name the same payload; a weak (`W/`) prefix doesn't count.
-    private static func sameETag(_ lhs: String?, _ rhs: String?) -> Bool {
-        guard let lhs, let rhs else { return false }
-        func strong(_ eTag: String) -> Substring {
-            eTag.hasPrefix("W/") ? eTag.dropFirst(2) : Substring(eTag)
-        }
-        return strong(lhs) == strong(rhs)
     }
 
     private func awaitEnrichment(
@@ -587,12 +579,16 @@ actor AppActorOfferingsManager {
         }
 
         if case .success(let offerings) = result, cacheGeneration == generation {
-            cachedOfferings = offerings
-            cachedAt = cacheDate
-            cachedETag = eTag
-            cachedLocales = Locale.preferredLanguages
+            storeInMemory(offerings, cacheDate: cacheDate, eTag: eTag)
             Log.offerings.info("🏷️ Offerings loaded: \(offerings.all.count) offering(s)")
         }
+    }
+
+    private func storeInMemory(_ offerings: AppActorOfferings, cacheDate: Date, eTag: String?) {
+        cachedOfferings = offerings
+        cachedAt = cacheDate
+        cachedETag = eTag
+        cachedLocales = Locale.preferredLanguages
     }
 
     // MARK: - Enrichment
@@ -772,10 +768,7 @@ actor AppActorOfferingsManager {
             let offerings = try await enrich(dto: dto, verification: verification)
             await storeOfflineCatalog(of: dto, verified: verification == .verified)
             if generation == nil || cacheGeneration == generation {
-                cachedOfferings = offerings
-                cachedAt = cacheDate
-                cachedETag = eTag
-                cachedLocales = Locale.preferredLanguages
+                storeInMemory(offerings, cacheDate: cacheDate, eTag: eTag)
             }
             Log.offerings.debug("\(context): \(offerings.all.count) offering(s)")
             return offerings

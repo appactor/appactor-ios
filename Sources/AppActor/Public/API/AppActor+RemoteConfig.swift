@@ -28,47 +28,54 @@ extension AppActor {
     /// - Throws: `AppActorError` if payment is not configured or network fails.
     @discardableResult
     public func getRemoteConfigs() async throws -> AppActorRemoteConfigs {
-        // A logIn, logOut or reset() can land while the fetch is in flight. The result is then
-        // the previous user's, entitlement-targeted values included: it is neither published nor
-        // returned, and the fetch runs again for whoever is current (or throws after a reset).
-        // The same runs again when a cache clear cancelled the fetch (identity switches and
-        // entitlement changes do that), unless the caller itself was cancelled.
-        for _ in 0..<Self.stateChangeRetryAttempts {
-            guard paymentLifecycle == .configured, let manager = remoteConfigManager else {
-                throw AppActorError.notConfigured
-            }
+        try await guardedRead { appUserId in
+            guard let manager = self.remoteConfigManager else { throw AppActorError.notConfigured }
+            let configs = try await manager.getRemoteConfigs(
+                appUserId: appUserId,
+                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                country: Self.deviceCountryCode
+            )
+            return (configs, await manager.requestId)
+        } publish: { configs in
+            self.paymentRemoteConfigs = configs
+        }
+    }
 
+    /// Runs `read` for the current user and returns what it read, once the session and the user
+    /// are still the ones it ran for; `publish` runs then too, with no suspension in between.
+    ///
+    /// A logIn, logOut or reset() can land while the read is in flight. Its result is then the
+    /// previous user's, entitlement-targeted values included: it is neither published nor
+    /// returned, and the read runs again for whoever is current (or throws after a reset). It
+    /// also runs again when a cache clear cancelled it (identity switches and entitlement changes
+    /// do that), unless the caller itself was cancelled. Android's `executeGuardedRead`.
+    func guardedRead<Value>(
+        _ read: (_ appUserId: String?) async throws -> (Value, requestId: String?),
+        publish: (Value) -> Void = { _ in }
+    ) async throws -> Value {
+        // One logIn can cancel a read up to four times (its clears, the switch, the entitlement
+        // change); the bound only stops a pathological loop.
+        for _ in 0..<5 {
+            guard paymentLifecycle == .configured else { throw AppActorError.notConfigured }
             let session = sessionGeneration
             let appUserId = paymentStorage?.currentAppUserId
-            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-            let country = Self.deviceCountryCode
-
-            let result: AppActorRemoteConfigs
+            let value: Value
+            let requestId: String?
             do {
-                result = try await manager.getRemoteConfigs(
-                    appUserId: appUserId,
-                    appVersion: appVersion,
-                    country: country
-                )
+                (value, requestId) = try await read(appUserId)
             } catch is CancellationError where !Task.isCancelled {
                 continue
             }
-            let requestId = await manager.requestId
             guard isSessionCurrent(session), paymentStorage?.currentAppUserId == appUserId else { continue }
 
-            self.paymentRemoteConfigs = result
+            publish(value)
             if let requestId {
                 paymentStorage?.setLastRequestId(requestId)
             }
-            return result
+            return value
         }
         throw AppActorError.stateChangedDuringOperation
     }
-
-    /// How often a read runs again when the SDK's own state change cancelled or outdated it. One
-    /// logIn can cancel a fetch up to four times (its clears, the switch, the entitlement
-    /// change); the bound only stops a pathological loop.
-    static let stateChangeRetryAttempts = 5
 
     // MARK: - Typed Accessors (nonisolated — safe to call from any context)
 

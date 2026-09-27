@@ -147,8 +147,7 @@ struct AppActorPendingPurchaseContextBuffer: Sendable {
         pruneExpired(now: recordedAt)
         contextsByProductId[productId, default: []].append(StoredEntry(
             recordedAt: recordedAt,
-            // Verbatim, as configure() and logIn() store it: the receipt is posted under it.
-            appUserId: appUserId.flatMap { AppActorPaymentValidation.isBlank($0) ? nil : $0 },
+            appUserId: AppActorPaymentValidation.nonBlankAppUserId(appUserId),
             appAccountToken: appAccountToken,
             context: context
         ))

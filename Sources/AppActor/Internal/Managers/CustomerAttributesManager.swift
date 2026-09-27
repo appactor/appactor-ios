@@ -565,30 +565,32 @@ extension AppActorCustomerAttributesManager {
             updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         }
 
-        /// Queues sets and unsets over what is queued; the later one for a key wins.
         mutating func queue(attributes: [String: AppActorAttributeValue], unsetKeys: [String]) {
-            for (key, value) in attributes {
-                self.attributes[key] = value
-                unsetAttributeKeys.removeAll { $0 == key }
-            }
-            for key in unsetKeys {
-                self.attributes.removeValue(forKey: key)
-                if !unsetAttributeKeys.contains(key) {
-                    unsetAttributeKeys.append(key)
-                }
-            }
+            Self.queue(attributes, unsets: unsetKeys, into: &self.attributes, unsetKeys: &unsetAttributeKeys)
+        }
+
+        mutating func queue(integrationIdentifiers: [String: String], unsetKeys: [String] = []) {
+            Self.queue(
+                integrationIdentifiers, unsets: unsetKeys,
+                into: &self.integrationIdentifiers, unsetKeys: &unsetIntegrationIdentifierKeys
+            )
         }
 
         /// Queues sets and unsets over what is queued; the later one for a key wins.
-        mutating func queue(integrationIdentifiers: [String: String], unsetKeys: [String] = []) {
-            for (key, value) in integrationIdentifiers {
-                self.integrationIdentifiers[key] = value
-                unsetIntegrationIdentifierKeys.removeAll { $0 == key }
+        private static func queue<Value>(
+            _ sets: [String: Value],
+            unsets: [String],
+            into values: inout [String: Value],
+            unsetKeys: inout [String]
+        ) {
+            for (key, value) in sets {
+                values[key] = value
+                unsetKeys.removeAll { $0 == key }
             }
-            for key in unsetKeys {
-                self.integrationIdentifiers.removeValue(forKey: key)
-                if !unsetIntegrationIdentifierKeys.contains(key) {
-                    unsetIntegrationIdentifierKeys.append(key)
+            for key in unsets {
+                values.removeValue(forKey: key)
+                if !unsetKeys.contains(key) {
+                    unsetKeys.append(key)
                 }
             }
         }

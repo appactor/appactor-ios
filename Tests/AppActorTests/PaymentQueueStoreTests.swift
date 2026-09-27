@@ -278,7 +278,6 @@ final class PaymentQueueStoreTests: XCTestCase {
         XCTAssertTrue(AppActorAtomicJSONQueueStore(directory: tempDir).snapshot().isEmpty)
     }
 
-
     // MARK: - I-S3-4: Unreadable file (before the first unlock)
 
     func testUnreadableQueueFileIsNeitherOverwrittenNorLost() throws {

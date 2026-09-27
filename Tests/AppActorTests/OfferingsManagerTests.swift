@@ -1170,5 +1170,4 @@ final class OfferingsManagerTests: XCTestCase {
         XCTAssertEqual(catalog?.value.productEntitlements, ["com.app.monthly": ["premium"]])
         XCTAssertEqual(catalog?.verification, .verified)
     }
-
 }

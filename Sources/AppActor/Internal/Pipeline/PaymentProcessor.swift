@@ -239,7 +239,7 @@ actor AppActorPaymentProcessor {
     /// again on foreground, since a launch before the first unlock can't read the queue.
     func reassignUnpostedItemsWithRejectedAppUserId(to appUserId: String) {
         for var item in store.snapshot() where (item.phase == .needsPost || item.phase == .posting)
-            && !AppActorPaymentValidation.isValidAppUserId(item.appUserId) {
+            && !item.hasPostableAppUserId {
             item.appUserId = appUserId
             store.update(item)
         }

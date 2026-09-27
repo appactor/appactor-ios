@@ -174,7 +174,6 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
 
         for (key, item) in map {
             guard claimed.count < limit else { break }
-            guard item.hasPostableAppUserId else { continue }
 
             let shouldClaim: Bool
             switch item.phase {
@@ -190,7 +189,7 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
                 shouldClaim = false
             }
 
-            if shouldClaim {
+            if shouldClaim, item.hasPostableAppUserId {
                 var updated = item
                 updated.phase = .posting
                 updated.claimedAt = now

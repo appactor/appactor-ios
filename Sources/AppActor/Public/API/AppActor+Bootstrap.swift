@@ -128,25 +128,21 @@ extension AppActor {
             // Posted under the anonymous ID the last logIn folded into the current one: bought by
             // the same customer, so a deferred purchase still resolves for them. Forced, so it
             // doesn't join a customer fetch already in flight that may predate the purchase.
-            let fold = paymentStorage?.foldedAnonymousAppUser
-            guard paymentLifecycle == .configured, receiptContext.isDeferredPurchaseResolution,
-                  fold?.anonymousId == receiptContext.appUserId, fold?.into == currentAppUserId else {
-                _ = try? await getCustomerInfo()
-                return
+            if paymentLifecycle == .configured, receiptContext.isDeferredPurchaseResolution,
+               let fold = paymentStorage?.foldedAnonymousAppUser,
+               fold.anonymousId == receiptContext.appUserId, fold.into == currentAppUserId {
+                do {
+                    let refreshed = try await manager.getCustomerInfo(appUserId: currentAppUserId, forceRefresh: true)
+                    await setCustomerInfoIfIdentityMatches(refreshed, expectedAppUserId: currentAppUserId)
+                    if paymentStorage?.currentAppUserId == currentAppUserId {
+                        resolveDeferredPurchase(receiptContext, info: refreshed)
+                    }
+                    return
+                } catch is CancellationError {
+                    return // a logOut or reset() is deleting this user's cache
+                } catch {}
             }
-            let refreshed: AppActorCustomerInfo
-            do {
-                refreshed = try await manager.getCustomerInfo(appUserId: currentAppUserId, forceRefresh: true)
-            } catch is CancellationError {
-                return // a logOut or reset() is deleting this user's cache
-            } catch {
-                _ = try? await getCustomerInfo()
-                return
-            }
-            await setCustomerInfoIfIdentityMatches(refreshed, expectedAppUserId: currentAppUserId)
-            if paymentStorage?.currentAppUserId == currentAppUserId {
-                resolveDeferredPurchase(receiptContext, info: refreshed)
-            }
+            _ = try? await getCustomerInfo()
             return
         }
         await manager.seedCache(
@@ -305,11 +301,10 @@ extension AppActor {
     /// Publishes the offerings the bootstrap prefetch loaded as `cachedOfferings`, as Android
     /// does, unless an offerings() call published some first. Not tracked by reset(), which
     /// would wait on StoreKit: it only publishes, and nothing for a session that ended.
-    private func publishBootstrapOfferings(from manager: AppActorOfferingsManager) {
-        let prefetch = offeringsPrefetchTask
+    private func publishBootstrapOfferings(after prefetch: Task<Void, Never>, from manager: AppActorOfferingsManager) {
         let session = sessionGeneration
         Task { [weak self] in
-            await prefetch?.value
+            await prefetch.value
             guard let offerings = await manager.settledOfferings(),
                   let self, self.isSessionCurrent(session), self.offeringsManager === manager,
                   self.paymentOfferings == nil else { return }
@@ -343,8 +338,9 @@ extension AppActor {
         // getOfferings() will coalesce with this in-flight request if called early.
         guard isSessionCurrent(session) else { return }
         if let manager = self.offeringsManager {
-            self.offeringsPrefetchTask = Task { await manager.prefetchForBootstrap() }
-            publishBootstrapOfferings(from: manager)
+            let prefetch = Task { await manager.prefetchForBootstrap() }
+            self.offeringsPrefetchTask = prefetch
+            publishBootstrapOfferings(after: prefetch, from: manager)
         }
         logStep("offerings/api")
         guard !Task.isCancelled else { return }

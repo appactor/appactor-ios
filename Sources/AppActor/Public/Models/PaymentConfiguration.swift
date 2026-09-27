@@ -65,7 +65,7 @@ public struct AppActorPaymentConfiguration: Sendable {
         self.apiKey = apiKey.trimmingCharacters(in: AppActorPaymentValidation.serverTrimmedCharacters)
         self.baseURL = baseURL
         self.headerMode = headerMode
-        self.appUserId = Self.normalizedAppUserId(appUserId)
+        self.appUserId = AppActorPaymentValidation.nonBlankAppUserId(appUserId)
         self.options = options
     }
 
@@ -81,7 +81,7 @@ public struct AppActorPaymentConfiguration: Sendable {
         }
         // A placeholder such as "null" means nobody is signed in; configure resolves it to an
         // anonymous ID.
-        if let appUserId = Self.normalizedAppUserId(appUserId),
+        if let appUserId = AppActorPaymentValidation.nonBlankAppUserId(appUserId),
            !AppActorPaymentValidation.isPlaceholderAppUserId(appUserId) {
             do {
                 try AppActorPaymentValidation.validateAppUserId(appUserId)
@@ -92,13 +92,6 @@ public struct AppActorPaymentConfiguration: Sendable {
             }
         }
         return nil
-    }
-
-    private static func normalizedAppUserId(_ appUserId: String?) -> String? {
-        guard let appUserId, !AppActorPaymentValidation.isBlank(appUserId) else {
-            return nil
-        }
-        return appUserId
     }
 
     /// Optional settings for the payment module.

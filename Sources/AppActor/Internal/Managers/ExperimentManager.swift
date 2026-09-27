@@ -135,7 +135,7 @@ actor AppActorExperimentManager {
     /// Clears all cached assignments (both in-memory and disk).
     func clearCache(appUserId: String?) async {
         lastRequestId = nil
-        guard let appUserId = normalizedUserId(appUserId) else {
+        guard let appUserId = AppActorPaymentValidation.nonBlankAppUserId(appUserId) else {
             for (_, task) in inFlightTasks {
                 task.cancel()
             }
@@ -385,15 +385,10 @@ actor AppActorExperimentManager {
 
     private func normalizedContext(appUserId: String, appVersion: String?, country: String?) -> CacheContext {
         CacheContext(
-            appUserId: normalizedUserId(appUserId) ?? appUserId,
+            appUserId: appUserId,
             appVersion: normalizedOptional(appVersion),
             country: normalizedOptional(country)?.uppercased()
         )
-    }
-
-    /// The ID as the SDK stores and posts it: not trimmed, or the context would name another user.
-    private func normalizedUserId(_ appUserId: String?) -> String? {
-        appUserId.flatMap { AppActorPaymentValidation.isBlank($0) ? nil : $0 }
     }
 
     private func normalizedOptional(_ value: String?) -> String? {
