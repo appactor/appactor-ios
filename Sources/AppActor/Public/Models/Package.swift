@@ -61,7 +61,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
     /// The product's price as a `Decimal`. `nil` in local mode.
     public let price: Decimal?
 
-    /// ISO 4217 currency code (e.g. `"USD"`). `nil` in local mode or on iOS 15.
+    /// ISO 4217 currency code (e.g. `"USD"`). `nil` in local mode.
     public let currencyCode: String?
 
     /// The product type string from the server (e.g. `"subscription"`, `"consumable"`).

@@ -6,11 +6,7 @@ struct PresentOfferCodeRequest: AppActorPluginRequest {
 
     @MainActor
     func execute() async throws -> AppActorPluginResult {
-        if #available(iOS 16.0, *) {
-            try await AppActor.shared.presentOfferCodeRedeemSheet()
-            return .successVoid
-        } else {
-            throw AppActorError.notAvailable("presentOfferCodeRedeemSheet requires iOS 16+")
-        }
+        try await AppActor.shared.presentOfferCodeRedeemSheet()
+        return .successVoid
     }
 }

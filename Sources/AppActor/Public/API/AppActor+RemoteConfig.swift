@@ -79,11 +79,7 @@ extension AppActor {
 
     /// ISO 3166-1 alpha-2 country code from the device locale.
     private static var deviceCountryCode: String? {
-        if #available(iOS 16, macOS 13, tvOS 16, watchOS 9, *) {
-            return Locale.current.region?.identifier
-        } else {
-            return Locale.current.regionCode
-        }
+        Locale.current.region?.identifier
     }
 }
 

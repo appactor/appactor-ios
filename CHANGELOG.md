@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
-Fixes from the 2026-09-26 SDK audit (merges fda73b0, 5294be0, 9525295, bb13fe5, #16 and #17). Audit ids in parentheses. The version is set when the release is cut. Nonce responses are verified with the request binding and the status signing the AppActor API added for them (API #599 and #604, both live).
+The minimum is now iOS 16, and this release carries the fixes from the 2026-09-26 SDK audit (merges fda73b0, 5294be0, 9525295, bb13fe5, #16 and #17). Audit ids in parentheses. Nonce responses are verified with the request binding and the status signing the AppActor API added for them (API #599 and #604, both live).
 
 Behaviour changes apps can see:
 
+- Changed: the minimum is iOS 16 (macOS 13 for SwiftPM builds on a Mac), and the iOS 15 code paths are gone. An app that still supports iOS 15 stays on 0.1.x. CocoaPods `~> 0.1` pins don't move, but SwiftPM's `from: "0.1.x"` resolves 0.2.0, so pin `.upToNextMinor(from: "0.1.13")` there.
 - Changed: placeholder appUserIds (`"null"`, `"guest"`, `"0"`, ...) given to `configure()` mean signed out: it keeps the stored anonymous id or starts a new one, never the last signed-in user's. Ids longer than 255 UTF-16 units or containing `/` or a control character make `configure()` fail (a blank one still means none), and `logIn()` rejects all of these and blank ids. A stored id the backend rejects is replaced with a new anonymous id, and receipts an older version queued under it move to the current user. (S1-1)
 - Changed: the app user id is used verbatim everywhere; the pending-purchase and identity-transition buffers, remote config and experiments no longer trim it. The API key is trimmed the way the backend trims it. (E6b, S2-5)
 - Changed: `configure()` waits for the first unlock after a reboot when the stored identity can't be read yet, instead of starting a new anonymous user; attribute writes throw `notAvailable` until then. (D1)

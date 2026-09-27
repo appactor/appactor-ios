@@ -75,15 +75,8 @@ enum AppActorASATransactionSupport {
         jwsPayload: [String: Any]?,
         receiptFileName: String? = Bundle.main.appStoreReceiptURL?.lastPathComponent
     ) -> AppActorTransactionEnvironment {
-        let storeKitEnvironmentRaw: String?
-        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, visionOS 1.0, *) {
-            storeKitEnvironmentRaw = transaction.environment.rawValue
-        } else {
-            storeKitEnvironmentRaw = nil
-        }
-
-        return resolveEnvironment(
-            storeKitEnvironmentRaw: storeKitEnvironmentRaw,
+        resolveEnvironment(
+            storeKitEnvironmentRaw: transaction.environment.rawValue,
             jwsPayload: jwsPayload,
             receiptFileName: receiptFileName
         )

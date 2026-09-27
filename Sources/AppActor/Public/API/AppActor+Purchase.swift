@@ -369,7 +369,6 @@ extension AppActorError {
     }
 
     /// Maps any purchase-time error (StoreKit or generic) to a specific `AppActorError`.
-    @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
     static func fromPurchaseError(_ error: Error) -> AppActorError {
         // iOS 16.4+ purchase-specific errors
         if #available(iOS 16.4, macOS 14.4, tvOS 16.4, watchOS 9.4, *) {

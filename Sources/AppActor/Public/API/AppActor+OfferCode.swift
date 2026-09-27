@@ -14,11 +14,10 @@ extension AppActor {
     /// An explicit `customerInfo(forceRefresh: true)` is triggered after the sheet
     /// dismisses to ensure the caller receives updated entitlements.
     ///
-    /// - Important: Only available on iOS 16.0+. Throws ``AppActorError/notAvailable(_:)``
-    ///   on unsupported platforms (macOS, tvOS, watchOS).
+    /// - Important: Throws ``AppActorError/notAvailable(_:)`` on platforms without the
+    ///   sheet (macOS, tvOS, watchOS).
     /// - Throws: ``AppActorError`` if the SDK is not configured or the platform does
     ///   not support offer code sheets, or a StoreKit error if the sheet fails.
-    @available(iOS 16.0, *)
     public func presentOfferCodeRedeemSheet() async throws {
         guard paymentLifecycle == .configured else {
             throw AppActorError.notConfigured
