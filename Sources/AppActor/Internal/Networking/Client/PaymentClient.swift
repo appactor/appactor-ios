@@ -43,6 +43,7 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
     private static let signatureTargetHeader = "X-AppActor-Signature-Target"
     private static let signatureTargetPathQuery = "path-query"
     private static let signatureBindingHeader = "X-AppActor-Signature-Binding"
+    private static let signatureStatusHeader = "X-AppActor-Signature-Status"
     private static let remoteConfigRequiresUserContextHeader = "X-AppActor-Remote-Config-Requires-User-Context"
 
     init(
@@ -689,8 +690,10 @@ final class AppActorPaymentClient: AppActorPaymentClientProtocol, Sendable {
         let nonce = ResponseSignatureVerifier.generateNonce()
         request.setValue(nonce, forHTTPHeaderField: "X-AppActor-Nonce")
         // Asks the server to sign method, path + query and body next to the nonce, so a
-        // response to a rewritten request can't pass as the answer to this one.
+        // response to a rewritten request can't pass as the answer to this one, and the response
+        // status, so a signed answer can't pass under another one.
         request.setValue("request", forHTTPHeaderField: Self.signatureBindingHeader)
+        request.setValue("include", forHTTPHeaderField: Self.signatureStatusHeader)
         return nonce
     }
 

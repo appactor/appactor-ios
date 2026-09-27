@@ -200,6 +200,7 @@ final class PaymentClientSignatureTests: XCTestCase {
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "X-AppActor-Signature-Target"), "path-query")
         XCTAssertNil(requests[0].value(forHTTPHeaderField: "X-AppActor-Nonce"))
         XCTAssertNil(requests[0].value(forHTTPHeaderField: "X-AppActor-Signature-Binding"))
+        XCTAssertNil(requests[0].value(forHTTPHeaderField: "X-AppActor-Signature-Status"))
         let components = URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)
         XCTAssertEqual(components?.path, "/v1/remote-config")
         XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "app_user_id" })?.value, "user_123")
@@ -402,6 +403,7 @@ final class PaymentClientSignatureTests: XCTestCase {
         )
         let request = try XCTUnwrap(PaymentClientURLProtocol.lock.withLock { PaymentClientURLProtocol.requests.first })
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-AppActor-Signature-Binding"), "request")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-AppActor-Signature-Status"), "include")
         let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: "X-AppActor-Nonce"))
 
         // What the server reads back from the request line: path + '?' + raw query.
@@ -417,7 +419,7 @@ final class PaymentClientSignatureTests: XCTestCase {
         let timestamp = String(Int(Date().timeIntervalSince1970))
         func response(signedFor target: String) throws -> HTTPURLResponse {
             let binding = ResponseSignatureVerifier.requestBinding(method: "POST", target: target, body: nil)
-            let payload = "\(nonce)\n\(timestamp)\n\(binding)\n\(String(decoding: body, as: UTF8.self))"
+            let payload = "\(nonce)\n\(timestamp)\n200\n\(binding)\n\(String(decoding: body, as: UTF8.self))"
             let signature = try key.signature(for: Data(payload.utf8)).base64EncodedString()
             return HTTPURLResponse(
                 url: request.url!,
