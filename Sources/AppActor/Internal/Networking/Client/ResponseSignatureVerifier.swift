@@ -147,9 +147,12 @@ enum ResponseSignatureVerifier {
 				return .signatureInvalid
 			}
 
+			// The status as well: the client sends `X-AppActor-Signature-Status: include`.
 			let binding = requestBinding(method: method, target: requestPath, body: requestBody)
 			guard let payloadData = signedPayload(
-				header: "\(sentNonce)\n\(timestampStr)\n\(binding)\n", statusCode: response.statusCode, body: body
+				header: "\(sentNonce)\n\(timestampStr)\n\(response.statusCode)\n\(binding)\n",
+				statusCode: response.statusCode,
+				body: body
 			) else {
 				return .signatureInvalid
 			}
@@ -191,8 +194,9 @@ enum ResponseSignatureVerifier {
 	}
 
 	/// The signed bytes: `header`, then the body exactly as received (the server signs the UTF-8
-	/// of its JSON). The status isn't signed, so a 304 must have no body and any other status
-	/// one, as the server sends them: a signed 304 can't pass as a 200. `nil` otherwise.
+	/// of its JSON). A salt signature doesn't cover the status (salt responses are shared through
+	/// the CDN with SDKs that don't sign it), so a 304 must have no body and any other status one,
+	/// as the server sends them: a signed 304 can't pass as a 200. `nil` otherwise.
 	private static func signedPayload(header: String, statusCode: Int, body: Data) -> Data? {
 		guard (statusCode == 304) == body.isEmpty else { return nil }
 		return Data(header.utf8) + body

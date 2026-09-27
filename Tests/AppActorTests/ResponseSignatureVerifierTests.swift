@@ -34,8 +34,8 @@ final class ResponseSignatureVerifierTests: XCTestCase {
     }
 
     /// Signs a v1 payload with the test key and returns the base64 signature.
-    private func signV1(body: Data, nonce: String, timestamp: String) -> String {
-        signV1(payload: "\(nonce)\n\(timestamp)\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))")
+    private func signV1(body: Data, nonce: String, timestamp: String, status: Int = 200) -> String {
+        signV1(payload: "\(nonce)\n\(timestamp)\n\(status)\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))")
     }
 
     private func signV1(payload: String) -> String {
@@ -83,7 +83,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         rootSigningKey: Curve25519.Signing.PrivateKey? = nil
     ) -> Data {
         buildV2Blob(
-            payloadString: "\(nonce)\n\(timestamp)\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))",
+            payloadString: "\(nonce)\n\(timestamp)\n200\n\(requestBinding)\n\(String(decoding: body, as: UTF8.self))",
             issuedAt: issuedAt, expiresAt: expiresAt,
             intermediateKey: intermediateKey, rootSigningKey: rootSigningKey
         )
@@ -135,9 +135,11 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         let otherRequest = ResponseSignatureVerifier.requestBinding(method: "GET", target: "/v1/customers/user_b", body: nil)
         let payloads = [
             // Signed for user_b's request, carrying this request's nonce.
-            "\(nonce)\n\(timestampStr)\n\(otherRequest)\n\(bodyString)",
+            "\(nonce)\n\(timestampStr)\n200\n\(otherRequest)\n\(bodyString)",
             // What a server that ignored the binding header would sign.
-            "\(nonce)\n\(timestampStr)\n\(bodyString)"
+            "\(nonce)\n\(timestampStr)\n200\n\(bodyString)",
+            // What a server that ignored the status header would sign.
+            "\(nonce)\n\(timestampStr)\n\(requestBinding)\n\(bodyString)"
         ]
 
         for payload in payloads {
@@ -158,7 +160,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
     func testNonceBased304EmptyBodyValidSignature() {
         let body = Data()
         let timestampStr = String(Int(now))
-        let sig = signV1(body: body, nonce: nonce, timestamp: timestampStr)
+        let sig = signV1(body: body, nonce: nonce, timestamp: timestampStr, status: 304)
 
         let response = makeResponse(headers: [
             "X-AppActor-Request-Nonce": nonce,
@@ -189,7 +191,7 @@ final class ResponseSignatureVerifierTests: XCTestCase {
         let timestampStr = String(Int(now))
         let headers = [
             "X-AppActor-Request-Nonce": nonce,
-            "X-AppActor-Signature": signV1(body: Data(), nonce: nonce, timestamp: timestampStr),
+            "X-AppActor-Signature": signV1(body: Data(), nonce: nonce, timestamp: timestampStr, status: 304),
             "X-AppActor-Signature-Timestamp": timestampStr
         ]
 
@@ -201,6 +203,25 @@ final class ResponseSignatureVerifierTests: XCTestCase {
             )
             XCTAssertEqual(result, .signatureInvalid, "\(status) with a \(body.count)-byte body")
         }
+    }
+
+    func testNonceSignatureCoversTheStatus() {
+        let body = Data("{\"ok\":true}".utf8)
+        let timestampStr = String(Int(now))
+        let headers = [
+            "X-AppActor-Request-Nonce": nonce,
+            "X-AppActor-Signature": signV1(body: body, nonce: nonce, timestamp: timestampStr, status: 201),
+            "X-AppActor-Signature-Timestamp": timestampStr
+        ]
+
+        let results = [201, 200].map { status in
+            ResponseSignatureVerifier.verify(
+                response: makeResponse(headers: headers, statusCode: status), body: body, sentNonce: nonce,
+                apiKey: "", requestPath: nonceTarget,
+                v1Key: v1Key.publicKey, rootKey: rootKey.publicKey, now: now
+            )
+        }
+        XCTAssertEqual(results, [.success, .signatureInvalid])
     }
 
     func testV1TamperedBody() {
