@@ -71,7 +71,8 @@ protocol AppActorPaymentQueueStoreProtocol: AnyObject, Sendable {
 /// File-backed payment queue store with atomic JSON writes.
 ///
 /// Uses `Library/Application Support/appactor/payment_queue.json`.
-/// Maintains an in-memory cache; all mutations write through to disk atomically.
+/// Maintains an in-memory cache; all mutations write through to disk atomically, except while
+/// the file exists but can't be read yet (see `isFileUnreadable`).
 /// Dead-lettered items older than 30 days are purged on first load.
 ///
 /// Marked `@unchecked Sendable` because it is owned exclusively by the
