@@ -15,6 +15,7 @@ protocol AppActorPaymentQueueStoreProtocol: AnyObject, Sendable {
     /// - `.needsPost` items whose `nextRetryAt <= now` (claims read back from disk load as `.needsPost`)
     /// - Stale `.posting` items (claimedAt > 2 min ago)
     ///
+    /// Never an item without a postable app user ID (see `hasPostableAppUserId`).
     /// `.needsFinish` items are handled separately by the drain loop.
     /// Sets `phase = .posting` and `claimedAt = now`, persists, then returns.
     func claimReady(limit: Int, now: Date) -> [AppActorPaymentQueueItem]
@@ -173,9 +174,7 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
 
         for (key, item) in map {
             guard claimed.count < limit else { break }
-            // Posted under an ID the server rejects, it would be refused and finished: it waits for
-            // `reassignUnpostedItemsWithRejectedAppUserId` (at launch and on foreground).
-            guard AppActorPaymentValidation.isValidAppUserId(item.appUserId) else { continue }
+            guard item.hasPostableAppUserId else { continue }
 
             let shouldClaim: Bool
             switch item.phase {

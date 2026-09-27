@@ -36,6 +36,13 @@ struct AppActorPaymentQueueItem: Codable, Sendable {
     /// migrate to the current identity to avoid stale-user queue gates after relaunch.
     var appUserId: String
 
+    /// Whether the server accepts the item's app user ID. It doesn't for one an older SDK stored:
+    /// such an item waits for `reassignUnpostedItemsWithRejectedAppUserId` instead of being
+    /// posted, refused and finished with the purchase never recorded.
+    var hasPostableAppUserId: Bool {
+        AppActorPaymentValidation.isValidAppUserId(appUserId)
+    }
+
     /// The product identifier.
     let productId: String
 

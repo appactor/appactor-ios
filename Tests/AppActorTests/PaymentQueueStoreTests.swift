@@ -243,8 +243,11 @@ final class PaymentQueueStoreTests: XCTestCase {
     }
 
     func test_givenClaimFromAnEarlierProcess_whenTheLaunchDrainRuns_thenPosted() async {
-        store.upsert(.fixture(key: "apple:claimed", appUserId: "guest"))
-        _ = store.claimReady(limit: 10, now: Date())
+        var claimed = AppActorPaymentQueueItem.fixture(key: "apple:claimed", appUserId: "guest")
+        claimed.phase = .posting
+        claimed.claimedAt = Date()
+        store.upsert(claimed)
+        XCTAssertEqual(store.snapshot().first?.phase, .posting)
 
         let client = MockPaymentClient()
         let processor = AppActorPaymentProcessor(store: AppActorAtomicJSONQueueStore(directory: tempDir), client: client)
