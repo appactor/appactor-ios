@@ -288,6 +288,9 @@ actor AppActorOfferingsManager {
             return
         } catch let error as AppActorError where error.isNetworkOrServerError {
             if let entry = await loadCachedPayload(), isLocaleCompatible(entry.value.preferredLocales) {
+                if cacheGeneration == gen {
+                    await storeOfflineCatalog(of: entry.value.dto, verified: entry.verification == .verified)
+                }
                 startEnrichmentTaskIfNeeded(
                     dto: entry.value.dto, cacheDate: entry.cachedAt, eTag: entry.eTag, generation: gen, verification: entry.verification
                 )
@@ -466,6 +469,7 @@ actor AppActorOfferingsManager {
             if cacheGeneration == generation,
                let result = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag),
                isLocaleCompatible(result.value.preferredLocales) {
+                await storeOfflineCatalog(of: result.value.dto, verified: result.verification == .verified)
                 return NetworkStagePayload(
                     dto: result.value.dto, cacheDate: dateProvider(), eTag: eTag ?? lastETag, verification: result.verification
                 )
@@ -492,11 +496,16 @@ actor AppActorOfferingsManager {
         }
     }
 
-    /// Persists a fresh 200: the payload, and the offline product catalog derived from it, which
-    /// offline entitlements read before the payload.
+    /// Persists a fresh 200: the payload, and the offline product catalog derived from it.
     private func storeFreshPayload(_ dto: AppActorOfferingsResponseDTO, eTag: String?, verified: Bool) async {
         let payload = CachedPayload(dto: dto, preferredLocales: currentPreferredLocales())
         await etagManager.storeFresh(payload, for: .offerings, eTag: eTag, verified: verified)
+        await storeOfflineCatalog(of: dto, verified: verified)
+    }
+
+    /// The product→entitlement mapping offline entitlements read before the payload: rewritten
+    /// from each payload the server serves or confirms, as on Android.
+    private func storeOfflineCatalog(of dto: AppActorOfferingsResponseDTO, verified: Bool) async {
         await etagManager.storeFresh(dto.toOfflineProductCatalog(), for: .offlineProductCatalog, eTag: nil, verified: verified)
     }
 
@@ -761,12 +770,7 @@ actor AppActorOfferingsManager {
     ) async -> AppActorOfferings? {
         do {
             let offerings = try await enrich(dto: dto, verification: verification)
-            await etagManager.storeFresh(
-                dto.toOfflineProductCatalog(),
-                for: .offlineProductCatalog,
-                eTag: nil,
-                verified: verification == .verified
-            )
+            await storeOfflineCatalog(of: dto, verified: verification == .verified)
             if generation == nil || cacheGeneration == generation {
                 cachedOfferings = offerings
                 cachedAt = cacheDate

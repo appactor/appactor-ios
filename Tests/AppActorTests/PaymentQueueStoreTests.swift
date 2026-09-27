@@ -304,6 +304,22 @@ final class PaymentQueueStoreTests: XCTestCase {
         )
     }
 
+    func testUpsertMadeWhileUnreadableTakesTheNewOwnerOfAClaimADeadProcessLeft() throws {
+        try XCTSkipIf(getuid() == 0, "root reads a file with no permissions")
+        store.upsert(.fixture(key: "apple:bg", appUserId: "user_a", source: .transactionUpdates))
+        XCTAssertEqual(store.claimReady(limit: 10, now: Date()).count, 1)
+        let fileURL = tempDir.appendingPathComponent("payment_queue.json")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        let locked = AppActorAtomicJSONQueueStore(directory: tempDir)
+        locked.upsert(.fixture(key: "apple:bg", appUserId: "user_b", source: .transactionUpdates))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+
+        let item = try XCTUnwrap(locked.snapshot().first)
+        XCTAssertEqual(item.phase, .needsPost)
+        XCTAssertEqual(item.appUserId, "user_b", "As a normal launch would: the claim is reset before the merge")
+    }
+
     // MARK: - I-E11b: Phase dropped since 0.0.6/0.0.7
 
     func testQueueWithWaitingForIdentityPhaseFromOldReleaseLoadsAsNeedsPost() throws {

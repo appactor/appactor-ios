@@ -406,10 +406,6 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         }
         if purgedCount > 0 {
             Log.storage.info("Purged \(purgedCount) dead-lettered payment queue item(s) older than 30 days")
-        }
-        stagedUpserts.forEach { Self.merge($0, into: &map) }
-        if purgedCount > 0 || !stagedUpserts.isEmpty {
-            stagedUpserts = []
             writeToDisk(map)
         }
 
@@ -420,6 +416,14 @@ final class AppActorAtomicJSONQueueStore: AppActorPaymentQueueStoreProtocol, @un
         for (key, item) in map where item.phase == .posting {
             map[key]?.phase = .needsPost
             map[key]?.claimedAt = nil
+        }
+
+        // After that reset, as for any upsert: a merge takes the incoming owner only when the
+        // item isn't mid-POST.
+        if !stagedUpserts.isEmpty {
+            stagedUpserts.forEach { Self.merge($0, into: &map) }
+            stagedUpserts = []
+            writeToDisk(map)
         }
 
         items = map

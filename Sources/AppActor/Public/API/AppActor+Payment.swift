@@ -445,13 +445,13 @@ extension AppActor {
         storage.setAppUserId(loginResult.appUserId)
         // The server folds an anonymous user into the one logged in to (renamed in place or
         // merged) and resolves the anonymous ID to that user from then on.
-        let foldedAnonymousId = isCurrentIdAnonymous && currentId != loginResult.appUserId ? currentId : nil
-        if let foldedAnonymousId {
+        // Kept through later logIns (logOut and reset() clear it): the alias stays on the server.
+        if isCurrentIdAnonymous && currentId != loginResult.appUserId {
             // Its writes still queued go out as the new user's, before any the app makes from
             // now on: replayed later under the anonymous ID, they would land after those.
-            customerAttributesManager.moveQueuedMutations(from: foldedAnonymousId, to: loginResult.appUserId)
+            customerAttributesManager.moveQueuedMutations(from: currentId, to: loginResult.appUserId)
+            storage.setFoldedAnonymousAppUser((anonymousId: currentId, into: loginResult.appUserId))
         }
-        storage.setFoldedAnonymousAppUser(foldedAnonymousId.map { (anonymousId: $0, into: loginResult.appUserId) })
 
         // Rotate appAccountToken for new identity
         storage.clearAppAccountToken()

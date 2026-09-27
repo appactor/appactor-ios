@@ -112,8 +112,8 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
 
     /// Moves `appUserId`'s queue state to `newAppUserId`, which the server has folded it into:
     /// its queued writes go under what that user has queued (they are newer) and before any made
-    /// from now on, and its attribution becomes the one the helpers build on, as on the server,
-    /// unless that user has one of its own.
+    /// from now on, and its attribution becomes the one the helpers build on. On the server the
+    /// newer attribution wins the merge, and on this device the anonymous one is the newer.
     func moveQueuedMutations(from appUserId: String, to newAppUserId: String) {
         lock.withLock {
             guard appUserId != newAppUserId else { return }
@@ -131,15 +131,13 @@ final class AppActorCustomerAttributesManager: @unchecked Sendable {
                 state.buckets[newAppUserId] = bucket
                 state.buckets.removeValue(forKey: appUserId)
             }
-            let snapshot = customAttributionSnapshots.removeValue(forKey: appUserId)
-                ?? state.customAttributionSnapshots[appUserId]
-            state.customAttributionSnapshots.removeValue(forKey: appUserId)
-            if let snapshot, moved?.attribution != nil || state.customAttributionSnapshots[newAppUserId] == nil {
+            if let snapshot = customAttributionSnapshots.removeValue(forKey: appUserId)
+                ?? state.customAttributionSnapshots[appUserId] {
                 customAttributionSnapshots[newAppUserId] = snapshot
                 state.customAttributionSnapshots[newAppUserId] = snapshot
             }
-            if let delivered = state.deliveredAttributions.removeValue(forKey: appUserId),
-               state.deliveredAttributions[newAppUserId] == nil {
+            state.customAttributionSnapshots.removeValue(forKey: appUserId)
+            if let delivered = state.deliveredAttributions.removeValue(forKey: appUserId) {
                 state.deliveredAttributions[newAppUserId] = delivered
             }
             trimQueuedUsers(&state, preserving: newAppUserId)

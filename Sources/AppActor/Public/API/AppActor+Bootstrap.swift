@@ -129,12 +129,12 @@ extension AppActor {
             // the same customer, so a deferred purchase still resolves for them. Forced, so it
             // doesn't join a customer fetch already in flight that may predate the purchase.
             let fold = paymentStorage?.foldedAnonymousAppUser
-            guard receiptContext.isDeferredPurchaseResolution,
-                  fold?.anonymousId == receiptContext.appUserId, fold?.into == currentAppUserId else {
+            guard paymentLifecycle == .configured, receiptContext.isDeferredPurchaseResolution,
+                  fold?.anonymousId == receiptContext.appUserId, fold?.into == currentAppUserId,
+                  let refreshed = try? await manager.getCustomerInfo(appUserId: currentAppUserId, forceRefresh: true) else {
                 _ = try? await getCustomerInfo()
                 return
             }
-            guard let refreshed = try? await manager.getCustomerInfo(appUserId: currentAppUserId, forceRefresh: true) else { return }
             await setCustomerInfoIfIdentityMatches(refreshed, expectedAppUserId: currentAppUserId)
             if paymentStorage?.currentAppUserId == currentAppUserId {
                 resolveDeferredPurchase(receiptContext, info: refreshed)
@@ -296,13 +296,15 @@ extension AppActor {
 
     /// Publishes the offerings the bootstrap prefetch loaded as `cachedOfferings`, as Android
     /// does, unless an offerings() call published some first. Not tracked by reset(), which
-    /// would wait on StoreKit: it only publishes, and nothing for a manager reset() dropped.
+    /// would wait on StoreKit: it only publishes, and nothing for a session that ended.
     private func publishBootstrapOfferings(from manager: AppActorOfferingsManager) {
         let prefetch = offeringsPrefetchTask
+        let session = sessionGeneration
         Task { [weak self] in
             await prefetch?.value
             guard let offerings = await manager.settledOfferings(),
-                  let self, self.offeringsManager === manager, self.paymentOfferings == nil else { return }
+                  let self, self.isSessionCurrent(session), self.offeringsManager === manager,
+                  self.paymentOfferings == nil else { return }
             self.paymentOfferings = offerings
         }
     }
