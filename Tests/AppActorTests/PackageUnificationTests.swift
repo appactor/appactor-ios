@@ -105,6 +105,65 @@ final class PackageUnificationTests: XCTestCase {
         XCTAssertEqual(decoded.offeringId, "off_default")
     }
 
+    func testPackageCodableRoundtripPreservesLookupKey() throws {
+        let original = makePackage(
+            id: "pkg_uuid_1",
+            lookupKey: "pro_monthly",
+            packageType: .monthly
+        )
+
+        let data = try encoder.encode(original)
+        let raw = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(raw["lookupKey"] as? String, "pro_monthly")
+
+        let decoded = try decoder.decode(AppActorPackage.self, from: data)
+        XCTAssertEqual(decoded.lookupKey, "pro_monthly")
+    }
+
+    func testPackageDecodeHandlesLookupKeyNullAbsentAndBlankWithoutFallback() throws {
+        let cases: [(name: String, json: String, expected: String?)] = [
+            (
+                "valid",
+                #"{"id":"pkg_1","lookupKey":"pro_yearly","packageType":"annual","productId":"com.app.annual","localizedPriceString":"$49.99"}"#,
+                "pro_yearly"
+            ),
+            (
+                "padded",
+                #"{"id":"pkg_1","lookupKey":"  pro_yearly \n\t ","packageType":"annual","productId":"com.app.annual","localizedPriceString":"$49.99"}"#,
+                "pro_yearly"
+            ),
+            (
+                "null",
+                #"{"id":"pkg_1","lookupKey":null,"packageType":"annual","productId":"com.app.annual","localizedPriceString":"$49.99"}"#,
+                nil
+            ),
+            (
+                "absent",
+                #"{"id":"pkg_1","packageType":"annual","productId":"com.app.annual","localizedPriceString":"$49.99"}"#,
+                nil
+            ),
+            (
+                "empty",
+                #"{"id":"pkg_1","lookupKey":"","packageType":"annual","productId":"com.app.annual","localizedPriceString":"$49.99"}"#,
+                nil
+            ),
+            (
+                "whitespace",
+                #"{"id":"pkg_1","lookupKey":"   \t\n ","packageType":"annual","productId":"com.app.annual","localizedPriceString":"$49.99"}"#,
+                nil
+            ),
+        ]
+
+        for testCase in cases {
+            let decoded = try decoder.decode(AppActorPackage.self, from: Data(testCase.json.utf8))
+            XCTAssertEqual(decoded.lookupKey, testCase.expected, "Case: \(testCase.name)")
+            if testCase.expected == nil {
+                XCTAssertNotEqual(decoded.lookupKey, decoded.id, "lookupKey must never fall back to id")
+                XCTAssertNotEqual(decoded.lookupKey, decoded.productId, "lookupKey must never fall back to productId")
+            }
+        }
+    }
+
     func testPackageHashableByIdOnly() {
         let lhs = makePackage(id: "same_id", productId: "com.app.monthly")
         let rhs = makePackage(id: "same_id", store: .playStore, productId: "com.app.annual")
@@ -117,6 +176,7 @@ final class PackageUnificationTests: XCTestCase {
 
     private func makePackage(
         id: String = "default_monthly",
+        lookupKey: String? = nil,
         packageType: AppActorPackageType = .monthly,
         store: AppActorStore = .appStore,
         productId: String = "com.app.monthly",
@@ -132,6 +192,7 @@ final class PackageUnificationTests: XCTestCase {
     ) -> AppActorPackage {
         AppActorPackage(
             id: id,
+            lookupKey: lookupKey,
             packageType: packageType,
             customTypeIdentifier: packageType == .custom ? "custom" : nil,
             store: store,

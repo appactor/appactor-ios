@@ -230,7 +230,11 @@ final class OfferingsManagerTests: XCTestCase {
         let dto = makeDTO(productIds: ["com.app.monthly"])
         let started = expectation(description: "StoreKit fetch started from disk cache")
 
-        await etagManager.storeFresh(dto, for: .offerings, eTag: "disk_hash")
+        let payload = AppActorOfferingsManager.CachedPayload(
+            dto: dto,
+            preferredLocales: Locale.preferredLanguages
+        )
+        await etagManager.storeFresh(payload, for: .offerings, eTag: "disk_hash")
 
         client.getOfferingsHandler = { _ in
             throw AppActorError.networkError(URLError(.notConnectedToInternet))
@@ -1015,7 +1019,11 @@ final class OfferingsManagerTests: XCTestCase {
         // Clear in-memory cache to force network path
         await manager.clearCache()
         // Re-save disk cache so the manager can load eTag from it
-        await etagManager.storeFresh(dto, for: .offerings, eTag: "hash_v1")
+        let cachedPayload = AppActorOfferingsManager.CachedPayload(
+            dto: dto,
+            preferredLocales: Locale.preferredLanguages
+        )
+        await etagManager.storeFresh(cachedPayload, for: .offerings, eTag: "hash_v1")
 
         // Second call -- 304
         let second = try await manager.getOfferings()
@@ -1109,7 +1117,11 @@ final class OfferingsManagerTests: XCTestCase {
         // Advance past TTL and clear in-memory to force network
         clock.advance(by: 10 * 60)
         await manager.clearCache()
-        await etagManager.storeFresh(dto, for: .offerings, eTag: "hash_v1")
+        let cachedPayload = AppActorOfferingsManager.CachedPayload(
+            dto: dto,
+            preferredLocales: Locale.preferredLanguages
+        )
+        await etagManager.storeFresh(cachedPayload, for: .offerings, eTag: "hash_v1")
 
         // Second call -- 304 with rotated eTag
         _ = try await manager.getOfferings()
@@ -1169,5 +1181,428 @@ final class OfferingsManagerTests: XCTestCase {
         let catalog = await etagManager.cached(AppActorOfflineProductCatalog.self, for: .offlineProductCatalog)
         XCTAssertEqual(catalog?.value.productEntitlements, ["com.app.monthly": ["premium"]])
         XCTAssertEqual(catalog?.verification, .verified)
+    }
+
+    // MARK: - Package lookupKey Propagation, Disk Cache Round-Trip & Legacy Cache Upgrade
+
+    func testBuildOfferingsPropagatesPackageLookupKeyAndEnforcesStrictLookup() throws {
+        let apiJSON = """
+        {
+            "currentOffering": {
+                "id": "off_main",
+                "lookupKey": "default",
+                "displayName": "Default",
+                "isCurrent": true,
+                "metadata": null,
+                "packages": []
+            },
+            "offerings": [
+                {
+                    "id": "off_main",
+                    "lookupKey": "default",
+                    "displayName": "Default",
+                    "isCurrent": true,
+                    "metadata": null,
+                    "packages": [
+                        {
+                            "id": "pkg_1",
+                            "packageType": "monthly",
+                            "lookupKey": "pro_monthly",
+                            "displayName": "Monthly",
+                            "position": 0,
+                            "isActive": true,
+                            "products": [
+                                {"store": "app_store", "productId": "com.app.monthly", "storeProductId": "com.app.monthly", "productType": "subscription"}
+                            ]
+                        },
+                        {
+                            "id": "pkg_2",
+                            "packageType": "annual",
+                            "lookupKey": "  pro_annual  ",
+                            "displayName": "Annual",
+                            "position": 1,
+                            "isActive": true,
+                            "products": [
+                                {"store": "app_store", "productId": "com.app.annual", "storeProductId": "com.app.annual", "productType": "subscription"}
+                            ]
+                        },
+                        {
+                            "id": "pkg_3",
+                            "packageType": "lifetime",
+                            "lookupKey": null,
+                            "displayName": "Lifetime",
+                            "position": 2,
+                            "isActive": true,
+                            "products": [
+                                {"store": "app_store", "productId": "com.app.lifetime", "storeProductId": "com.app.lifetime", "productType": "non_consumable"}
+                            ]
+                        },
+                        {
+                            "id": "pkg_4",
+                            "packageType": "weekly",
+                            "lookupKey": "   ",
+                            "displayName": "Weekly",
+                            "position": 3,
+                            "isActive": true,
+                            "products": [
+                                {"store": "app_store", "productId": "com.app.weekly", "storeProductId": "com.app.weekly", "productType": "subscription"}
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let dto = try JSONDecoder().decode(AppActorOfferingsResponseDTO.self, from: apiJSON)
+        let offerings = AppActorOfferingsManager.buildOfferings(
+            from: dto,
+            products: [
+                "com.app.monthly": .init(displayPrice: "$9.99", price: 9.99, currencyCode: "USD", displayName: "Monthly", description: "Monthly"),
+                "com.app.annual": .init(displayPrice: "$79.99", price: 79.99, currencyCode: "USD", displayName: "Annual", description: "Annual"),
+                "com.app.lifetime": .init(displayPrice: "$199.99", price: 199.99, currencyCode: "USD", displayName: "Lifetime", description: "Lifetime"),
+                "com.app.weekly": .init(displayPrice: "$2.99", price: 2.99, currencyCode: "USD", displayName: "Weekly", description: "Weekly"),
+            ],
+            verification: .verified
+        )
+
+        let current = try XCTUnwrap(offerings.current)
+        XCTAssertEqual(current.packages.count, 4)
+        XCTAssertEqual(current.packages[0].lookupKey, "pro_monthly")
+        XCTAssertEqual(current.packages[1].lookupKey, "pro_annual")
+        XCTAssertNil(current.packages[2].lookupKey)
+        XCTAssertNil(current.packages[3].lookupKey)
+
+        // Exact lookup succeeds
+        XCTAssertEqual(current.package(lookupKey: "pro_monthly")?.id, "pkg_1")
+        XCTAssertEqual(current.package(lookupKey: "pro_annual")?.id, "pkg_2")
+
+        // Missing, blank, id, packageType, productId, or wrong-case lookups return nil without fallback
+        XCTAssertNil(current.package(lookupKey: "monthly"))
+        XCTAssertNil(current.package(lookupKey: "lifetime"))
+        XCTAssertNil(current.package(lookupKey: "weekly"))
+        XCTAssertNil(current.package(lookupKey: "pkg_1"))
+        XCTAssertNil(current.package(lookupKey: "com.app.monthly"))
+        XCTAssertNil(current.package(lookupKey: "PRO_MONTHLY"))
+        XCTAssertNil(current.package(lookupKey: ""))
+        XCTAssertNil(current.package(lookupKey: "   "))
+        XCTAssertNil(current.package(lookupKey: "nonexistent"))
+    }
+
+    func testDiskCacheRoundTripPreservesPackageLookupKeyAndSchemaVersion() async throws {
+        let monthly = AppActorPackageDTO(
+            id: "pkg_monthly",
+            packageType: "monthly",
+            lookupKey: "pro_monthly",
+            displayName: "Monthly",
+            position: 0,
+            isActive: true,
+            metadata: nil,
+            products: [
+                AppActorProductRefDTO(id: nil, storeProductId: "com.app.monthly", productType: "auto_renewable", displayName: nil)
+            ]
+        )
+        let keylessAnnual = AppActorPackageDTO(
+            id: "pkg_annual",
+            packageType: "annual",
+            lookupKey: nil,
+            displayName: "Annual",
+            position: 1,
+            isActive: true,
+            metadata: nil,
+            products: [
+                AppActorProductRefDTO(id: nil, storeProductId: "com.app.annual", productType: "auto_renewable", displayName: nil)
+            ]
+        )
+        let offering = AppActorOfferingDTO(
+            id: "off_main",
+            lookupKey: "default",
+            displayName: "Default",
+            isCurrent: true,
+            metadata: nil,
+            packages: [monthly, keylessAnnual]
+        )
+        let dto = AppActorOfferingsResponseDTO(
+            currentOffering: offering,
+            offerings: [offering],
+            productEntitlements: ["com.app.monthly": ["premium"]]
+        )
+        let payload = AppActorOfferingsManager.CachedPayload(
+            dto: dto,
+            preferredLocales: Locale.preferredLanguages
+        )
+
+        await etagManager.storeFresh(payload, for: .offerings, eTag: "etag_v2", verified: true)
+
+        // Reload via a fresh disk store pointing at the same directory (simulating cold launch)
+        let coldStartETagManager = AppActorETagManager(
+            diskStore: AppActorCacheDiskStore(directory: cacheDir)
+        )
+        let loaded = await coldStartETagManager.cached(
+            AppActorOfferingsManager.CachedPayload.self,
+            for: .offerings,
+            clearOnDecodeFailure: true
+        )
+
+        let entry = try XCTUnwrap(loaded)
+        XCTAssertEqual(entry.value.schemaVersion, AppActorOfferingsManager.CachedPayload.currentSchemaVersion)
+        XCTAssertEqual(entry.eTag, "etag_v2")
+        XCTAssertEqual(entry.value.dto.offerings[0].packages[0].lookupKey, "pro_monthly")
+        XCTAssertNil(entry.value.dto.offerings[0].packages[1].lookupKey)
+
+        let enriched = AppActorOfferingsManager.buildOfferings(
+            from: entry.value.dto,
+            products: [
+                "com.app.monthly": .init(displayPrice: "$9.99", price: 9.99, currencyCode: "USD", displayName: "Monthly", description: "Monthly"),
+                "com.app.annual": .init(displayPrice: "$79.99", price: 79.99, currencyCode: "USD", displayName: "Annual", description: "Annual"),
+            ],
+            verification: entry.verification
+        )
+        XCTAssertEqual(enriched.current?.package(lookupKey: "pro_monthly")?.id, "pkg_monthly")
+        XCTAssertNil(enriched.current?.package(lookupKey: "annual"))
+    }
+
+    func testLegacyPreBumpKeylessDiskCacheIsDiscardedAndNeverServed() async throws {
+        // Realistic pre-bump (v0.2.1) offerings cache payload:
+        // flat CachedPayload with preferredLocales, NO schemaVersion, and NO lookupKey on packages.
+        let localesJSON = try String(
+            data: JSONEncoder().encode(Locale.preferredLanguages),
+            encoding: .utf8
+        )!
+        let legacyPayloadJSON = """
+        {
+            "currentOffering": {
+                "id": "off_legacy",
+                "lookupKey": "default",
+                "displayName": "Legacy Default",
+                "isCurrent": true,
+                "metadata": null,
+                "packages": [
+                    {
+                        "id": "pkg_legacy_monthly",
+                        "packageType": "monthly",
+                        "displayName": "Monthly",
+                        "position": 0,
+                        "isActive": true,
+                        "metadata": null,
+                        "products": [
+                            {"store": "app_store", "productId": "com.app.monthly", "storeProductId": "com.app.monthly", "productType": "auto_renewable"}
+                        ]
+                    }
+                ]
+            },
+            "offerings": [
+                {
+                    "id": "off_legacy",
+                    "lookupKey": "default",
+                    "displayName": "Legacy Default",
+                    "isCurrent": true,
+                    "metadata": null,
+                    "packages": [
+                        {
+                            "id": "pkg_legacy_monthly",
+                            "packageType": "monthly",
+                            "displayName": "Monthly",
+                            "position": 0,
+                            "isActive": true,
+                            "metadata": null,
+                            "products": [
+                                {"store": "app_store", "productId": "com.app.monthly", "storeProductId": "com.app.monthly", "productType": "auto_renewable"}
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "productEntitlements": {"com.app.monthly": ["premium"]},
+            "preferredLocales": \(localesJSON)
+        }
+        """
+
+        let offeringsCacheFile = cacheDir.appendingPathComponent("\(AppActorCacheResource.offerings.cacheKey).json")
+
+        func writeLegacyOfferingsFile() throws {
+            let entry = AppActorCacheEntry(
+                data: Data(legacyPayloadJSON.utf8),
+                eTag: "W/\"legacy-keyless-etag\"",
+                cachedAt: Date(),
+                responseVerified: true,
+                verificationResult: .verified
+            )
+            let enc = JSONEncoder()
+            enc.dateEncodingStrategy = .secondsSince1970
+            try enc.encode(entry).write(to: offeringsCacheFile, options: .atomic)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: offeringsCacheFile.path))
+        }
+
+        // 1. Direct cold-start disk load rejects and removes legacy cache
+        try writeLegacyOfferingsFile()
+        let manager1 = AppActorOfferingsManager(client: client, productFetcher: fetcher, etagManager: etagManager)
+        let loaded = await manager1.loadFromDiskCache()
+        XCTAssertNil(loaded, "Legacy pre-bump keyless cache must never be loaded")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: offeringsCacheFile.path),
+            "Legacy pre-bump cache file must be cleared from disk on rejection"
+        )
+
+        // 2. cacheOnly rejects legacy cache with OFFERINGS_CACHE_MISS
+        try writeLegacyOfferingsFile()
+        let manager2 = AppActorOfferingsManager(client: client, productFetcher: fetcher, etagManager: etagManager)
+        do {
+            _ = try await manager2.getOfferings(fetchPolicy: .cacheOnly)
+            XCTFail("Expected OFFERINGS_CACHE_MISS for legacy keyless cache")
+        } catch let error as AppActorError {
+            XCTAssertEqual(error.code, "OFFERINGS_CACHE_MISS")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: offeringsCacheFile.path))
+
+        // 3. Offline launch with legacy cache does NOT serve old keyless offerings
+        try writeLegacyOfferingsFile()
+        client.getOfferingsHandler = { _ in
+            throw AppActorError.networkError(URLError(.notConnectedToInternet))
+        }
+        let manager3 = AppActorOfferingsManager(client: client, productFetcher: fetcher, etagManager: etagManager)
+        do {
+            _ = try await manager3.getOfferings(fetchPolicy: .freshIfStale)
+            XCTFail("Offline launch must not fall back to legacy keyless disk cache")
+        } catch let error as AppActorError {
+            XCTAssertTrue(error.isNetworkOrServerError)
+        }
+        let cachedAfterOffline = await manager3.cached
+        XCTAssertNil(cachedAfterOffline)
+        XCTAssertEqual(fetcher.fetchCalls.count, 0, "StoreKit enrichment must never run for rejected legacy cache")
+
+        // 4. Offline bootstrap prefetch does NOT serve legacy cache
+        try writeLegacyOfferingsFile()
+        let manager4 = AppActorOfferingsManager(client: client, productFetcher: fetcher, etagManager: etagManager)
+        await manager4.prefetchForBootstrap()
+        let settled = await manager4.settledOfferings()
+        XCTAssertNil(settled, "Offline bootstrap prefetch must not warm rejected legacy keyless cache")
+
+        // 5. Online launch ignores legacy ETag (sends nil), fetches fresh 200, writes v2 cache
+        try writeLegacyOfferingsFile()
+        var receivedETags: [String?] = []
+        let freshDTO = AppActorOfferingsResponseDTO(
+            currentOffering: nil,
+            offerings: [],
+            productEntitlements: ["com.app.monthly": ["premium"]]
+        )
+        client.getOfferingsHandler = { eTag in
+            receivedETags.append(eTag)
+            return .fresh(freshDTO, eTag: "W/\"fresh-v2-etag\"", requestId: "req_upgrade", signatureVerified: true)
+        }
+        let manager5 = AppActorOfferingsManager(client: client, productFetcher: fetcher, etagManager: etagManager)
+        _ = try await manager5.getOfferings(fetchPolicy: .freshIfStale)
+        XCTAssertEqual(receivedETags, [nil], "Upgraded SDK must NOT send the legacy keyless cache's ETag")
+
+        let upgradedEntry = await etagManager.cached(AppActorOfferingsManager.CachedPayload.self, for: .offerings)
+        XCTAssertEqual(upgradedEntry?.value.schemaVersion, AppActorOfferingsManager.CachedPayload.currentSchemaVersion)
+        XCTAssertEqual(upgradedEntry?.eTag, "W/\"fresh-v2-etag\"")
+    }
+
+    func testLegacyWrappedAndMismatchedSchemaVersionDiskCachesAreRejected() async throws {
+        let localesJSON = try String(
+            data: JSONEncoder().encode(Locale.preferredLanguages),
+            encoding: .utf8
+        )!
+        let invalidPayloads: [(name: String, json: String)] = [
+            (
+                "legacy_wrapped_dto",
+                #"{"dto":{"currentOffering":null,"offerings":[]},"preferredLocales":\#(localesJSON)}"#
+            ),
+            (
+                "explicit_v1",
+                #"{"schemaVersion":1,"currentOffering":null,"offerings":[],"preferredLocales":\#(localesJSON)}"#
+            ),
+            (
+                "future_v999",
+                #"{"schemaVersion":999,"currentOffering":null,"offerings":[],"preferredLocales":\#(localesJSON)}"#
+            ),
+        ]
+
+        let offeringsCacheFile = cacheDir.appendingPathComponent("\(AppActorCacheResource.offerings.cacheKey).json")
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .secondsSince1970
+
+        for item in invalidPayloads {
+            let entry = AppActorCacheEntry(
+                data: Data(item.json.utf8),
+                eTag: "W/\"etag-\(item.name)\"",
+                cachedAt: Date(),
+                responseVerified: true,
+                verificationResult: .verified
+            )
+            try enc.encode(entry).write(to: offeringsCacheFile, options: .atomic)
+
+            let manager = AppActorOfferingsManager(client: client, productFetcher: fetcher, etagManager: etagManager)
+            let loaded = await manager.loadFromDiskCache()
+            XCTAssertNil(loaded, "Expected \(item.name) to be rejected")
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: offeringsCacheFile.path),
+                "Expected \(item.name) file to be removed after rejection"
+            )
+        }
+    }
+
+    func testOfflineFallbackOfferingsNeverFallsBackToAnotherPackageOnMissingLookupKey() throws {
+        let fallbackJSON = """
+        {
+            "data": {
+                "currentOffering": {
+                    "id": "off_fallback",
+                    "lookupKey": "default",
+                    "displayName": "Fallback",
+                    "isCurrent": true,
+                    "metadata": null,
+                    "packages": []
+                },
+                "offerings": [
+                    {
+                        "id": "off_fallback",
+                        "lookupKey": "default",
+                        "displayName": "Fallback",
+                        "isCurrent": true,
+                        "metadata": null,
+                        "packages": [
+                            {
+                                "id": "pkg_fallback_monthly",
+                                "packageType": "monthly",
+                                "displayName": "Monthly",
+                                "position": 0,
+                                "isActive": true,
+                                "products": [
+                                    {"store": "app_store", "productId": "com.app.monthly", "storeProductId": "com.app.monthly", "productType": "subscription"}
+                                ]
+                            },
+                            {
+                                "id": "pkg_fallback_annual",
+                                "packageType": "annual",
+                                "lookupKey": "pro_annual",
+                                "displayName": "Annual",
+                                "position": 1,
+                                "isActive": true,
+                                "products": [
+                                    {"store": "app_store", "productId": "com.app.annual", "storeProductId": "com.app.annual", "productType": "subscription"}
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        """.data(using: .utf8)!
+
+        let fallback = try JSONDecoder().decode(FallbackOfferingsFile.self, from: fallbackJSON)
+        let offerings = AppActorOfferingsManager.buildOfferings(
+            from: fallback.dto,
+            products: [
+                "com.app.monthly": .init(displayPrice: "$9.99", price: 9.99, currencyCode: "USD", displayName: "Monthly", description: "Monthly"),
+                "com.app.annual": .init(displayPrice: "$79.99", price: 79.99, currencyCode: "USD", displayName: "Annual", description: "Annual"),
+            ]
+        )
+
+        let offering = try XCTUnwrap(offerings.current)
+        XCTAssertEqual(offering.package(lookupKey: "pro_annual")?.id, "pkg_fallback_annual")
+        XCTAssertNil(offering.package(lookupKey: "pro_monthly"), "Missing lookupKey must return nil and never fall back to annual or monthly")
+        XCTAssertNil(offering.package(lookupKey: "monthly"), "Keyless package must not match by packageType")
     }
 }

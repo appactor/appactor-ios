@@ -78,6 +78,7 @@ final class OfferingsUnificationTests: XCTestCase {
         // public Codable conformance and must survive a round-trip.
         let package = AppActorPackage(
             id: "pkg_monthly",
+            lookupKey: "plan_monthly",
             packageType: .monthly,
             customTypeIdentifier: nil,
             store: .appStore,
@@ -122,6 +123,7 @@ final class OfferingsUnificationTests: XCTestCase {
         let decoded = try decoder.decode(AppActorOffering.self, from: data)
         XCTAssertEqual(decoded.packages.count, 1, "packages must survive the Codable round-trip")
         XCTAssertEqual(decoded.packages.first?.id, "pkg_monthly", "package id must survive round-trip")
+        XCTAssertEqual(decoded.packages.first?.lookupKey, "plan_monthly", "package lookupKey must survive round-trip")
         XCTAssertEqual(decoded.packages.first?.packageType, .monthly, "package type must survive round-trip")
         XCTAssertEqual(decoded.packages.first?.localizedPriceString, "$9.99", "package price string must survive round-trip")
     }
@@ -261,6 +263,108 @@ final class OfferingsUnificationTests: XCTestCase {
         XCTAssertEqual(offerings.offering("plan_a_key")?.id, "plan_a", "offering(_:) must return correct match")
         XCTAssertEqual(offerings.offering("plan_b_key")?.id, "plan_b", "offering(_:) must return correct match")
         XCTAssertNil(offerings.offering("nonexistent"), "offering(_:) must return nil for unknown key")
+    }
+
+    // MARK: - Test 7: AppActorOffering.package(lookupKey:) Strict Exact Match
+
+    func testOfferingPackageLookupByLookupKeyIsStrictWithNoFallback() {
+        let monthly = AppActorPackage(
+            id: "pkg_uuid_monthly",
+            lookupKey: "plan_monthly",
+            packageType: .monthly,
+            customTypeIdentifier: nil,
+            store: .appStore,
+            productId: "com.app.monthly",
+            storeProductId: "com.app.monthly",
+            localizedPriceString: "$9.99",
+            offeringId: "off_main",
+            displayName: "Monthly",
+            metadata: nil,
+            position: 0,
+            price: Decimal(9.99),
+            currencyCode: "USD",
+            productType: "subscription",
+            productName: "Monthly",
+            productDescription: "Monthly"
+        )
+        let annual = AppActorPackage(
+            id: "pkg_uuid_annual",
+            lookupKey: "plan_annual",
+            packageType: .annual,
+            customTypeIdentifier: nil,
+            store: .appStore,
+            productId: "com.app.annual",
+            storeProductId: "com.app.annual",
+            localizedPriceString: "$79.99",
+            offeringId: "off_main",
+            displayName: "Annual",
+            metadata: nil,
+            position: 1,
+            price: Decimal(79.99),
+            currencyCode: "USD",
+            productType: "subscription",
+            productName: "Annual",
+            productDescription: "Annual"
+        )
+        let keylessLifetime = AppActorPackage(
+            id: "pkg_uuid_lifetime",
+            lookupKey: nil,
+            packageType: .lifetime,
+            customTypeIdentifier: nil,
+            store: .appStore,
+            productId: "com.app.lifetime",
+            storeProductId: "com.app.lifetime",
+            localizedPriceString: "$199.99",
+            offeringId: "off_main",
+            displayName: "Lifetime",
+            metadata: nil,
+            position: 2,
+            price: Decimal(199.99),
+            currencyCode: "USD",
+            productType: "non_consumable",
+            productName: "Lifetime",
+            productDescription: "Lifetime"
+        )
+
+        let offering = AppActorOffering(
+            id: "off_main",
+            displayName: "Main",
+            isCurrent: true,
+            lookupKey: "default",
+            metadata: nil,
+            packages: [monthly, annual, keylessLifetime]
+        )
+
+        // Exact matches succeed
+        XCTAssertEqual(offering.package(lookupKey: "plan_monthly")?.id, "pkg_uuid_monthly")
+        XCTAssertEqual(offering.package(lookupKey: "plan_annual")?.id, "pkg_uuid_annual")
+
+        // Never falls back to id, packageType, productId, case-insensitive, padded, blank, or first package
+        XCTAssertNil(offering.package(lookupKey: "pkg_uuid_monthly"))
+        XCTAssertNil(offering.package(lookupKey: "pkg_uuid_lifetime"))
+        XCTAssertNil(offering.package(lookupKey: "monthly"))
+        XCTAssertNil(offering.package(lookupKey: "annual"))
+        XCTAssertNil(offering.package(lookupKey: "lifetime"))
+        XCTAssertNil(offering.package(lookupKey: "com.app.monthly"))
+        XCTAssertNil(offering.package(lookupKey: "com.app.lifetime"))
+        XCTAssertNil(offering.package(lookupKey: "PLAN_MONTHLY"))
+        XCTAssertNil(offering.package(lookupKey: " plan_monthly "))
+        XCTAssertNil(offering.package(lookupKey: ""))
+        XCTAssertNil(offering.package(lookupKey: "   \t\n "))
+        XCTAssertNil(offering.package(lookupKey: "unknown_key"))
+
+        // An offering with only keyless packages never returns a fallback package
+        let keylessOnlyOffering = AppActorOffering(
+            id: "off_keyless",
+            displayName: "Keyless",
+            isCurrent: false,
+            lookupKey: "keyless",
+            metadata: nil,
+            packages: [keylessLifetime]
+        )
+        XCTAssertNil(keylessOnlyOffering.package(lookupKey: "lifetime"))
+        XCTAssertNil(keylessOnlyOffering.package(lookupKey: "pkg_uuid_lifetime"))
+        XCTAssertNil(keylessOnlyOffering.package(lookupKey: ""))
     }
 
     // MARK: - Test 8: AppActorPurchaseResult Unified Success Case
