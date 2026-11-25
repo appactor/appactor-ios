@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- Added: `AppActorPackage.lookupKey` carries the developer-defined package lookup key end-to-end from `GET /v1/payment/offerings` (`AppActorPackageDTO.lookupKey`) into `AppActorPackage` (trimmed, with blank values normalized to `nil`) and across `Codable` persistence. (8-13)
+- Added: `AppActorOffering.package(lookupKey:)` resolves a package by exact, case-sensitive `lookupKey` only (returns `nil` for blank keys or mismatches; never falls back to `id`, `packageType`, or `productId`). (8-13)
+- Changed: offerings disk cache payloads now carry `schemaVersion = 2`; pre-0.2.2 keyless cache entries are discarded on decode failure (both on cold load and on `304 Not Modified`) so upgraded installs fetch fresh offerings with `lookupKey` populated, while offline product-entitlement fallback continues reading `productEntitlements` directly. (8-13)
+- Added: `AppActorPlugin` serializes `AppActorPackage.lookupKey` as `"lookup_key"` in `get_offerings` and `get_cached_offerings` responses (omitted when `nil`), covered by `PluginOfferingsParityTests`. (8-13)
+
 ## 0.2.1
 
 - Fixed: nonce responses (customer info, login, purchases, restore and sync) are also verified against the API key the SDK sent. Every AppActor project is signed with the same key, so a proxy on the device could swap in its own project's API key and pass that project's signed answer (say, an entitlement it granted itself) off as the app's. The SDK now sends `X-AppActor-Signature-Api-Key: include`, which the AppActor API signs from API #606 on (live). (2026-09-27 re-audit, Y-1)

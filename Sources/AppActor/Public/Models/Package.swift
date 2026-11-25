@@ -13,6 +13,12 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
     /// For local or direct-purchase flows it remains the caller-provided identifier.
     public let id: String
 
+    /// Developer-defined lookup key for this package within its offering (matching
+    /// `<Package key="...">` in XML screens), or `nil` when not assigned.
+    ///
+    /// Never falls back to ``id``, ``packageType``, or ``productId``.
+    public let lookupKey: String?
+
     /// The role of this package (e.g. `.monthly`, `.annual`).
     public let packageType: AppActorPackageType
 
@@ -80,6 +86,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case lookupKey
         case packageType
         case customTypeIdentifier
         case store
@@ -102,11 +109,26 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         case subscriptionGroupId
     }
 
+    // MARK: - Normalization
+
+    /// Normalizes a raw `lookupKey` by trimming surrounding whitespace/newlines and converting
+    /// empty/blank values to `nil`.
+    static func normalizeLookupKey(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
     // MARK: - Codable
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedId = try container.decode(String.self, forKey: .id)
+        lookupKey = Self.normalizeLookupKey(
+            try container.decodeIfPresent(String.self, forKey: .lookupKey)
+        )
         packageType = try container.decode(AppActorPackageType.self, forKey: .packageType)
         customTypeIdentifier = try container.decodeIfPresent(String.self, forKey: .customTypeIdentifier)
         store = (try? container.decodeIfPresent(AppActorStore.self, forKey: .store)) ?? .appStore
@@ -140,6 +162,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(lookupKey, forKey: .lookupKey)
         try container.encode(packageType, forKey: .packageType)
         try container.encodeIfPresent(customTypeIdentifier, forKey: .customTypeIdentifier)
         try container.encode(store, forKey: .store)
@@ -175,6 +198,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
 
     init(
         id: String,
+        lookupKey: String? = nil,
         packageType: AppActorPackageType,
         customTypeIdentifier: String?,
         store: AppActorStore = .appStore,
@@ -196,6 +220,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         subscriptionGroupId: String? = nil
     ) {
         self.id = id
+        self.lookupKey = Self.normalizeLookupKey(lookupKey)
         self.packageType = packageType
         self.customTypeIdentifier = customTypeIdentifier
         self.store = store
@@ -219,6 +244,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
 
     init(
         id: String,
+        lookupKey: String? = nil,
         packageType: AppActorPackageType,
         customTypeIdentifier: String?,
         productId: String,
@@ -243,6 +269,7 @@ public struct AppActorPackage: Sendable, Identifiable, Hashable, Codable {
         _ = storeProduct
         self.init(
             id: id,
+            lookupKey: lookupKey,
             packageType: packageType,
             customTypeIdentifier: customTypeIdentifier,
             store: .appStore,

@@ -381,6 +381,136 @@ final class OfferingsDTOTests: XCTestCase {
         XCTAssertEqual(ids.count, 2)
     }
 
+    // MARK: - Package lookupKey
+
+    func testDecodePackageLookupKeyVariants() throws {
+        let json = """
+        {
+            "currentOffering": null,
+            "offerings": [
+                {
+                    "id": "default",
+                    "lookupKey": "default",
+                    "displayName": "Default",
+                    "isCurrent": true,
+                    "metadata": null,
+                    "packages": [
+                        {
+                            "id": "pkg_valid",
+                            "packageType": "monthly",
+                            "lookupKey": "pro_monthly",
+                            "displayName": "Monthly",
+                            "position": 0,
+                            "isActive": true,
+                            "products": []
+                        },
+                        {
+                            "id": "pkg_trimmed",
+                            "packageType": "annual",
+                            "lookupKey": "  pro_annual \\n\\t ",
+                            "displayName": "Annual",
+                            "position": 1,
+                            "isActive": true,
+                            "products": []
+                        },
+                        {
+                            "id": "pkg_null",
+                            "packageType": "weekly",
+                            "lookupKey": null,
+                            "displayName": "Weekly",
+                            "position": 2,
+                            "isActive": true,
+                            "products": []
+                        },
+                        {
+                            "id": "pkg_absent",
+                            "packageType": "lifetime",
+                            "displayName": "Lifetime",
+                            "position": 3,
+                            "isActive": true,
+                            "products": []
+                        },
+                        {
+                            "id": "pkg_empty",
+                            "packageType": "two_month",
+                            "lookupKey": "",
+                            "displayName": "Two Month",
+                            "position": 4,
+                            "isActive": true,
+                            "products": []
+                        },
+                        {
+                            "id": "pkg_whitespace",
+                            "packageType": "three_month",
+                            "lookupKey": "   \\t\\n  ",
+                            "displayName": "Three Month",
+                            "position": 5,
+                            "isActive": true,
+                            "products": []
+                        }
+                    ]
+                }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let dto = try JSONDecoder().decode(AppActorOfferingsResponseDTO.self, from: json)
+        let packages = dto.offerings[0].packages
+        XCTAssertEqual(packages.count, 6)
+        XCTAssertEqual(packages[0].lookupKey, "pro_monthly")
+        XCTAssertEqual(packages[1].lookupKey, "pro_annual")
+        XCTAssertNil(packages[2].lookupKey)
+        XCTAssertNil(packages[3].lookupKey)
+        XCTAssertNil(packages[4].lookupKey)
+        XCTAssertNil(packages[5].lookupKey)
+    }
+
+    func testCodableRoundtripPreservesPackageLookupKey() throws {
+        let original = AppActorOfferingsResponseDTO(
+            currentOffering: nil,
+            offerings: [
+                AppActorOfferingDTO(
+                    id: "main",
+                    lookupKey: "main_key",
+                    displayName: "Main",
+                    isCurrent: true,
+                    metadata: nil,
+                    packages: [
+                        AppActorPackageDTO(
+                            id: "pkg_1",
+                            packageType: "monthly",
+                            lookupKey: "  pro_monthly  ",
+                            displayName: "Monthly",
+                            position: 0,
+                            isActive: true,
+                            metadata: nil,
+                            products: [
+                                AppActorProductRefDTO(id: nil, storeProductId: "com.app.monthly", productType: "auto_renewable", displayName: nil)
+                            ]
+                        ),
+                        AppActorPackageDTO(
+                            id: "pkg_2",
+                            packageType: "annual",
+                            lookupKey: "   ",
+                            displayName: "Annual",
+                            position: 1,
+                            isActive: true,
+                            metadata: nil,
+                            products: [
+                                AppActorProductRefDTO(id: nil, storeProductId: "com.app.annual", productType: "auto_renewable", displayName: nil)
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AppActorOfferingsResponseDTO.self, from: data)
+        XCTAssertEqual(decoded.offerings[0].packages[0].lookupKey, "pro_monthly")
+        XCTAssertNil(decoded.offerings[0].packages[1].lookupKey)
+    }
+
     // MARK: - I-E10a: Fallback offerings file shapes
 
     func testFallbackOfferingsFileAcceptsTheEndpointBodyAndItsDataObject() throws {

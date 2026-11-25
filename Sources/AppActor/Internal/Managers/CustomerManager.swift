@@ -230,8 +230,8 @@ actor AppActorCustomerManager {
         let mapping: [String: [String]]
         if let offlineCatalog = await etagManager.cached(AppActorOfflineProductCatalog.self, for: .offlineProductCatalog) {
             mapping = offlineCatalog.value.productEntitlements
-        } else if let entry = await etagManager.cached(AppActorOfferingsManager.CachedPayload.self, for: .offerings) {
-            mapping = entry.value.dto.productEntitlements ?? [:]
+        } else if let entry = await etagManager.cached(AppActorOfferingsResponseDTO.self, for: .offerings) {
+            mapping = entry.value.productEntitlements ?? [:]
         } else {
             return []
         }

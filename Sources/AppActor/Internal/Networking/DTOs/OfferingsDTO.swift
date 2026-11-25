@@ -25,6 +25,7 @@ struct AppActorOfferingDTO: Codable, Sendable {
 struct AppActorPackageDTO: Codable, Sendable {
     let id: String?
     let packageType: String
+    let lookupKey: String?
     let displayName: String?
     let position: Int
     let isActive: Bool
@@ -35,6 +36,7 @@ struct AppActorPackageDTO: Codable, Sendable {
     init(
         id: String?,
         packageType: String,
+        lookupKey: String? = nil,
         displayName: String?,
         position: Int,
         isActive: Bool,
@@ -44,6 +46,7 @@ struct AppActorPackageDTO: Codable, Sendable {
     ) {
         self.id = id
         self.packageType = packageType
+        self.lookupKey = AppActorPackage.normalizeLookupKey(lookupKey)
         self.displayName = displayName
         self.position = position
         self.isActive = isActive
@@ -56,6 +59,9 @@ struct AppActorPackageDTO: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(String.self, forKey: .id)
         packageType = try container.decode(String.self, forKey: .packageType)
+        lookupKey = AppActorPackage.normalizeLookupKey(
+            try container.decodeIfPresent(String.self, forKey: .lookupKey)
+        )
         displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
         position = try container.decode(Int.self, forKey: .position)
         isActive = try container.decode(Bool.self, forKey: .isActive)

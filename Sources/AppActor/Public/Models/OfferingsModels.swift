@@ -59,6 +59,19 @@ public struct AppActorOffering: Sendable, Identifiable, Hashable, Codable {
         packages.first { $0.packageType == type }
     }
 
+    /// Returns the package whose ``AppActorPackage/lookupKey`` strictly matches `lookupKey`,
+    /// or `nil` if `lookupKey` is empty/blank or no package matches.
+    ///
+    /// Performs a case-sensitive exact match against ``AppActorPackage/lookupKey`` only —
+    /// never falls back to ``AppActorPackage/id``, ``AppActorPackage/packageType``,
+    /// ``AppActorPackage/productId``, or another package in the offering.
+    public func package(lookupKey: String) -> AppActorPackage? {
+        guard !lookupKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return packages.first { $0.lookupKey == lookupKey }
+    }
+
     public static func == (lhs: AppActorOffering, rhs: AppActorOffering) -> Bool {
         lhs.id == rhs.id
     }

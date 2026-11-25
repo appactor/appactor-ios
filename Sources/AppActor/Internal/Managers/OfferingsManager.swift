@@ -19,46 +19,55 @@ actor AppActorOfferingsManager {
 
     /// Stored in the shared ETag cache so offerings can remain locale-safe across app launches.
     struct CachedPayload: Codable, Sendable {
+        /// Cache schema version. Bumped from unversioned v1 to v2 so upgraded apps never
+        /// serve legacy keyless offerings caches after per-package `lookupKey` was added.
+        static let currentSchemaVersion = 2
+
+        let schemaVersion: Int
         let dto: AppActorOfferingsResponseDTO
         let preferredLocales: [String]
 
         private enum CodingKeys: String, CodingKey {
-            case dto
+            case schemaVersion
             case preferredLocales
             case currentOffering
             case offerings
             case productEntitlements
         }
 
-        init(dto: AppActorOfferingsResponseDTO, preferredLocales: [String]) {
+        init(
+            dto: AppActorOfferingsResponseDTO,
+            preferredLocales: [String],
+            schemaVersion: Int = Self.currentSchemaVersion
+        ) {
+            self.schemaVersion = schemaVersion
             self.dto = dto
             self.preferredLocales = preferredLocales
         }
 
         init(from decoder: Decoder) throws {
-            struct Wrapped: Decodable {
-                let dto: AppActorOfferingsResponseDTO
-                let preferredLocales: [String]?
-            }
-
-            if let wrapped = try? Wrapped(from: decoder) {
-                self.dto = wrapped.dto
-                self.preferredLocales = wrapped.preferredLocales ?? Locale.preferredLanguages
-                return
-            }
-
             let container = try decoder.container(keyedBy: CodingKeys.self)
+            let version = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
+            guard let version, version == Self.currentSchemaVersion else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .schemaVersion,
+                    in: container,
+                    debugDescription: "Incompatible offerings cache schemaVersion: \(version.map(String.init) ?? "missing") (expected \(Self.currentSchemaVersion))"
+                )
+            }
+
+            self.schemaVersion = version
             self.dto = AppActorOfferingsResponseDTO(
                 currentOffering: try container.decodeIfPresent(AppActorOfferingDTO.self, forKey: .currentOffering),
                 offerings: try container.decode([AppActorOfferingDTO].self, forKey: .offerings),
                 productEntitlements: try container.decodeIfPresent([String: [String]].self, forKey: .productEntitlements)
             )
-            self.preferredLocales = try container.decodeIfPresent([String].self, forKey: .preferredLocales)
-                ?? Locale.preferredLanguages
+            self.preferredLocales = try container.decode([String].self, forKey: .preferredLocales)
         }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(schemaVersion, forKey: .schemaVersion)
             try container.encodeIfPresent(dto.currentOffering, forKey: .currentOffering)
             try container.encode(dto.offerings, forKey: .offerings)
             try container.encodeIfPresent(dto.productEntitlements, forKey: .productEntitlements)
@@ -459,7 +468,12 @@ actor AppActorOfferingsManager {
             if let cached = suitableInMemoryCache(), let cachedETag, let lastETag,
                AppActorETagManager.weakETagsMatch(cachedETag, lastETag) {
                 if cacheGeneration == generation {
-                    _ = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag)
+                    _ = await etagManager.handleNotModified(
+                        CachedPayload.self,
+                        for: .offerings,
+                        rotatedETag: eTag,
+                        clearOnDecodeFailure: true
+                    )
                     cachedAt = dateProvider()
                 }
                 Log.offerings.debug("Offerings not modified (304), using in-memory cache")
@@ -468,7 +482,12 @@ actor AppActorOfferingsManager {
             }
 
             if cacheGeneration == generation,
-               let result = await etagManager.handleNotModified(CachedPayload.self, for: .offerings, rotatedETag: eTag),
+               let result = await etagManager.handleNotModified(
+                   CachedPayload.self,
+                   for: .offerings,
+                   rotatedETag: eTag,
+                   clearOnDecodeFailure: true
+               ),
                isLocaleCompatible(result.value.preferredLocales) {
                 await storeOfflineCatalog(of: result.value.dto, verified: result.verification == .verified)
                 return NetworkStagePayload(
@@ -593,6 +612,45 @@ actor AppActorOfferingsManager {
 
     // MARK: - Enrichment
 
+    /// StoreKit product metadata needed to enrich `AppActorPackageDTO` into `AppActorPackage`.
+    /// Extracted as a value type so DTO → model enrichment can be unit-tested without
+    /// fabricating StoreKit `Product` instances.
+    struct EnrichedProductInfo: Sendable {
+        let displayPrice: String
+        let price: Decimal
+        let currencyCode: String
+        let displayName: String
+        let description: String
+        let subscriptionGroupId: String?
+
+        init(
+            displayPrice: String,
+            price: Decimal,
+            currencyCode: String,
+            displayName: String,
+            description: String,
+            subscriptionGroupId: String? = nil
+        ) {
+            self.displayPrice = displayPrice
+            self.price = price
+            self.currencyCode = currencyCode
+            self.displayName = displayName
+            self.description = description
+            self.subscriptionGroupId = subscriptionGroupId
+        }
+
+        init(product: Product) {
+            self.init(
+                displayPrice: product.displayPrice,
+                price: product.price,
+                currencyCode: product.priceFormatStyle.currencyCode,
+                displayName: product.displayName,
+                description: product.description,
+                subscriptionGroupId: product.subscription?.subscriptionGroupID
+            )
+        }
+    }
+
     /// Extracts App Store product IDs, bulk-fetches from StoreKit, builds public models.
     /// Drops packages/offerings that have zero products after enrichment.
     private func enrich(dto: AppActorOfferingsResponseDTO, verification: AppActorVerificationResult = .notRequested) async throws -> AppActorOfferings {
@@ -616,6 +674,16 @@ actor AppActorOfferingsManager {
             throw AppActorError.storeKitProductsMissing(requestedIds: allIds)
         }
 
+        let productInfos = productMap.mapValues(EnrichedProductInfo.init(product:))
+        return Self.buildOfferings(from: dto, products: productInfos, verification: verification)
+    }
+
+    /// Pure DTO + StoreKit metadata projection into public `AppActorOfferings`.
+    static func buildOfferings(
+        from dto: AppActorOfferingsResponseDTO,
+        products productMap: [String: EnrichedProductInfo],
+        verification: AppActorVerificationResult = .notRequested
+    ) -> AppActorOfferings {
         // Build offerings, filtering out missing products
         var allOfferings: [String: AppActorOffering] = [:]
         var currentOffering: AppActorOffering?
@@ -643,10 +711,9 @@ actor AppActorOfferingsManager {
                 let customIdentifier: String? = (pkgType == .custom) ? packageDTO.packageType : nil
                 let packageId = packageDTO.id ?? "\(offeringDTO.id)_\(packageDTO.packageType)"
 
-                let subscriptionGroupId = skProduct.subscription?.subscriptionGroupID
-
                 enrichedPackages.append(AppActorPackage(
                     id: packageId,
+                    lookupKey: packageDTO.lookupKey,
                     packageType: pkgType,
                     customTypeIdentifier: customIdentifier,
                     store: productRef.store,
@@ -661,11 +728,11 @@ actor AppActorOfferingsManager {
                     tokenAmount: packageDTO.tokenAmount,
                     position: packageDTO.position,
                     price: skProduct.price,
-                    currencyCode: skProduct.priceFormatStyle.currencyCode,
+                    currencyCode: skProduct.currencyCode,
                     productType: productRef.productType,
                     productName: productRef.displayName ?? skProduct.displayName,
                     productDescription: skProduct.description,
-                    subscriptionGroupId: subscriptionGroupId
+                    subscriptionGroupId: skProduct.subscriptionGroupId
                 ))
             }
 
@@ -709,7 +776,7 @@ actor AppActorOfferingsManager {
     // MARK: - Cold Start (Disk Cache)
 
     private func loadCachedPayload() async -> (value: CachedPayload, eTag: String?, cachedAt: Date, verification: AppActorVerificationResult)? {
-        await etagManager.cached(CachedPayload.self, for: .offerings)
+        await etagManager.cached(CachedPayload.self, for: .offerings, clearOnDecodeFailure: true)
     }
 
     private func currentLocaleCompatibleETag() async -> String? {

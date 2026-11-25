@@ -87,13 +87,19 @@ actor AppActorETagManager {
     func handleNotModified<T: Decodable>(
         _ type: T.Type,
         for resource: AppActorCacheResource,
-        rotatedETag: String? = nil
+        rotatedETag: String? = nil,
+        clearOnDecodeFailure: Bool = false
     ) async -> (value: T, verification: AppActorVerificationResult)? {
         guard let entry = await diskStore.updateTimestampAndLoad(for: resource, rotatedETag: rotatedETag) else {
             return nil
         }
         if responseVerificationEnabled && entry.resolvedVerification == .failed { return nil }
-        guard let value = try? decoder.decode(T.self, from: entry.data) else { return nil }
+        guard let value = try? decoder.decode(T.self, from: entry.data) else {
+            if clearOnDecodeFailure {
+                await diskStore.clear(resource)
+            }
+            return nil
+        }
         return (value: value, verification: entry.resolvedVerification)
     }
 
@@ -102,10 +108,19 @@ actor AppActorETagManager {
     /// Loads the cached value if available.
     ///
     /// When response verification is enabled, entries with failed verification are ignored.
-    func cached<T: Decodable>(_ type: T.Type, for resource: AppActorCacheResource) async -> (value: T, eTag: String?, cachedAt: Date, verification: AppActorVerificationResult)? {
+    func cached<T: Decodable>(
+        _ type: T.Type,
+        for resource: AppActorCacheResource,
+        clearOnDecodeFailure: Bool = false
+    ) async -> (value: T, eTag: String?, cachedAt: Date, verification: AppActorVerificationResult)? {
         guard let entry = await diskStore.load(resource) else { return nil }
         if responseVerificationEnabled && entry.resolvedVerification == .failed { return nil }
-        guard let value = try? decoder.decode(T.self, from: entry.data) else { return nil }
+        guard let value = try? decoder.decode(T.self, from: entry.data) else {
+            if clearOnDecodeFailure {
+                await diskStore.clear(resource)
+            }
+            return nil
+        }
         return (value: value, eTag: entry.eTag, cachedAt: entry.cachedAt, verification: entry.resolvedVerification)
     }
 
